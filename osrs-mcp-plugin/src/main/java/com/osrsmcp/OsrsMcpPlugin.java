@@ -3,6 +3,7 @@ package com.osrsmcp;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import org.slf4j.Logger;
@@ -23,13 +24,16 @@ public class OsrsMcpPlugin extends Plugin
 	@Inject
 	private ClientThread clientThread;
 
+	@Inject
+	private ItemManager itemManager;
+
 	private ApiServer apiServer;
 
 	@Override
 	protected void startUp() throws Exception
 	{
 		log.info("OSRS MCP started!");
-		apiServer = new ApiServer(client, clientThread);
+		apiServer = new ApiServer(client, clientThread, itemManager);
 		apiServer.start();
 	}
 

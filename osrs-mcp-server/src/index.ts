@@ -4,8 +4,10 @@ import { z } from "zod";
 import axios from "axios";
 import { mouse, Point, keyboard, Key } from "@nut-tree-fork/nut-js";
 
-// Optional: configure nut-js for smoother, slower movements so it looks human
-mouse.config.mouseSpeed = 1000;
+const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
+mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
+  ? configuredMouseSpeed
+  : 300;
 
 const server = new McpServer({
   name: "osrs-mcp-server",
@@ -38,7 +40,7 @@ server.tool("get_inventory", "Get the items currently in the player's inventory"
   }
 });
 
-server.tool("get_npcs", "Get a list of nearby NPCs and their screen coordinates", {}, async () => {
+server.tool("get_npcs", "Get a list of nearby NPCs with canvas coordinates and absolute desktop screen coordinates", {}, async () => {
   try {
     const res = await axios.get(`${RUNELITE_API}/npcs`);
     return {
@@ -49,7 +51,7 @@ server.tool("get_npcs", "Get a list of nearby NPCs and their screen coordinates"
   }
 });
 
-server.tool("get_dialogue", "Check for open NPC dialogues, player dialogues, or dialogue options", {}, async () => {
+server.tool("get_dialogue", "Check for open NPC dialogues, player dialogues, or dialogue options with absolute desktop screen coordinates when clickable", {}, async () => {
   try {
     const res = await axios.get(`${RUNELITE_API}/dialogue`);
     return {
@@ -60,7 +62,7 @@ server.tool("get_dialogue", "Check for open NPC dialogues, player dialogues, or 
   }
 });
 
-server.tool("get_game_objects", "Get a list of interactable game objects (trees, doors, rocks) and their screen coordinates", {}, async () => {
+server.tool("get_game_objects", "Get a list of interactable game objects (trees, doors, rocks) with names and absolute desktop screen coordinates", {}, async () => {
   try {
     const res = await axios.get(`${RUNELITE_API}/objects`);
     return {
@@ -71,7 +73,7 @@ server.tool("get_game_objects", "Get a list of interactable game objects (trees,
   }
 });
 
-server.tool("get_ground_items", "Get a list of items dropped on the ground and their screen coordinates", {}, async () => {
+server.tool("get_ground_items", "Get a list of items dropped on the ground with names and absolute desktop screen coordinates", {}, async () => {
   try {
     const res = await axios.get(`${RUNELITE_API}/grounditems`);
     return {
@@ -119,10 +121,10 @@ server.tool("get_skills", "Get the player's level, boosted level, and XP for all
 
 server.tool(
   "move_mouse_and_click",
-  "Moves the hardware mouse to a specific screen X/Y coordinate and clicks. Used for interacting with objects, NPCs, or clicking dialogue continue buttons.",
+  "Moves the hardware mouse to an absolute desktop screen X/Y coordinate and clicks. Use screenX/screenY from RuneLite API results, not canvasX/canvasY.",
   {
-    x: z.number().describe("The X coordinate on the screen"),
-    y: z.number().describe("The Y coordinate on the screen"),
+    x: z.number().describe("The absolute desktop screen X coordinate, usually a screenX value from the RuneLite API"),
+    y: z.number().describe("The absolute desktop screen Y coordinate, usually a screenY value from the RuneLite API"),
     rightClick: z.boolean().optional().describe("Whether to right click instead of left click")
   },
   async ({ x, y, rightClick }) => {

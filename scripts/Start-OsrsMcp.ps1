@@ -44,6 +44,15 @@ function Test-Api {
   }
 }
 
+function Test-CurrentApiSchema {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8080/api/" -TimeoutSec 3
+    return $response.Content -like "*absolute screen coordinates*"
+  } catch {
+    return $false
+  }
+}
+
 function Set-RuneLiteMemory {
   if (-not (Test-Path -LiteralPath $RuneLiteConfig)) {
     return
@@ -164,7 +173,15 @@ function Stop-StaleMcpServers {
 function Start-RuneLiteWithPlugin {
   $apiOk = Test-Api
   if ($apiOk) {
-    Write-Step "RuneLite plugin API is already available at http://localhost:8080/api/."
+    if (Test-CurrentApiSchema) {
+      Write-Step "RuneLite plugin API is already available at http://localhost:8080/api/."
+    } else {
+      Write-Host ""
+      Write-Host "RuneLite plugin API is responding, but it looks like an older plugin build."
+      Write-Host "I will NOT close it automatically. To load this new build, close RuneLite yourself,"
+      Write-Host "then run Start-OSRS-MCP.bat again, or run Restart-OSRS-MCP.bat when you are ready."
+      Write-Host ""
+    }
     return
   }
 

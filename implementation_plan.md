@@ -7,7 +7,7 @@ This document outlines the architecture and steps to build a Model Context Proto
 > [!TIP]
 > **The "Hybrid Computer Use" Approach (Ban-Safe)**
 > We will use a hybrid approach to allow the AI to play the game without triggering ban-detection:
-> 1. **Perfect State (No Vision Needed):** We build a Standard RuneLite plugin. Its only job is to read the exact game state from memory (inventory, nearby NPCs, objects, **and UI dialogues**) and calculate their exact 2D X/Y screen coordinates on your monitor.
+> 1. **Perfect State (No Vision Needed):** We build a Standard RuneLite plugin. Its only job is to read the exact game state from memory (inventory, nearby NPCs, objects, **and UI dialogues**) and calculate both RuneLite canvas coordinates (`canvasX/canvasY`) and absolute desktop screen coordinates (`screenX/screenY`) for clickable targets.
 > 2. **External Actions:** The Node.js MCP server receives these exact coordinates over the local API.
 > 3. **OS-Level Controls:** Using inspiration from projects like `Windows-MCP`, the Node.js server takes control of your actual computer mouse and keyboard at the OS level to click and type smoothly.
 
@@ -19,7 +19,7 @@ RuneScape's entire user interface—including the chatbox, NPC dialogues, the us
 
 **Here is the loop for talking to an NPC:**
 1. **Reading the Dialogue:** The RuneLite Plugin checks for open Widgets. It detects an NPC dialogue and reads the exact text: *"RuneScape Guide: Welcome to RuneScape! Before you can get started, you need to create a name."*
-2. **Identifying Options:** The plugin also finds the "Click here to continue" button or any dialogue choices (e.g., "1. Yes", "2. No") and calculates their exact X/Y screen coordinates.
+2. **Identifying Options:** The plugin also finds the "Click here to continue" button or any dialogue choices (e.g., "1. Yes", "2. No") and calculates exact absolute desktop `screenX/screenY` coordinates for nut-js to click.
 3. **Sending to AI:** The plugin sends this text and coordinate data back to the AI via the MCP Server.
 4. **AI Decision:** The AI reads the text, understands it's in a conversation, and decides to click "Continue". It tells the MCP Server: `click(x, y)`.
 5. **Typing Text:** When the AI reaches the Name Creation screen, the plugin tells the AI: *"Widget 'Enter name:' is active."* The AI then uses an OS-level keyboard command `type_text("MyCoolBot123")` and presses Enter.
@@ -45,7 +45,7 @@ Configures the standard RuneLite API dependencies.
 #### [NEW] `h:/runelite-mcp/osrs-mcp-plugin/src/main/java/com/osrsmcp/OsrsMcpPlugin.java`
 The main plugin class. It will start a local HTTP server on port `8080`.
 #### [NEW] `h:/runelite-mcp/osrs-mcp-plugin/src/main/java/com/osrsmcp/ApiServer.java`
-Serves endpoints that project 3D game coordinates to 2D screen coordinates using `Perspective.localToCanvas`, and extracts Widget text:
+Serves endpoints that project 3D game coordinates to RuneLite canvas coordinates using `Perspective.localToCanvas`, adds the canvas location on screen to produce absolute desktop `screenX/screenY`, and extracts Widget text:
 - `GET /api/state`: Returns player stats and state.
 - `GET /api/inventory`: Returns items and their screen X/Y.
 - `GET /api/entities`: Returns nearby NPCs/Objects and their screen X/Y.

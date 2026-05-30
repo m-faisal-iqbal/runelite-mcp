@@ -24,9 +24,12 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.game.ItemManager;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.awt.IllegalComponentStateException;
+import java.awt.Rectangle;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -44,11 +47,13 @@ public class ApiServer {
     private HttpServer server;
     private final Client client;
     private final ClientThread clientThread;
+    private final ItemManager itemManager;
     private final Gson gson = new Gson();
 
-    public ApiServer(Client client, ClientThread clientThread) {
+    public ApiServer(Client client, ClientThread clientThread, ItemManager itemManager) {
         this.client = client;
         this.clientThread = clientThread;
+        this.itemManager = itemManager;
     }
 
     public void start() {
@@ -150,29 +155,93 @@ public class ApiServer {
 
         JsonArray endpoints = new JsonArray();
         endpoints.add(endpoint("/api/state", "Current login status, player name, hitpoints, run energy, and world location."));
-        endpoints.add(endpoint("/api/inventory", "Inventory item IDs, quantities, and slots."));
-        endpoints.add(endpoint("/api/npcs", "Nearby NPC IDs, names, world coordinates, and projected screen coordinates."));
-        endpoints.add(endpoint("/api/dialogue", "Open NPC/player dialogue text, dialogue options, and clickable screen coordinates when available."));
-        endpoints.add(endpoint("/api/objects", "Scene game object IDs, world coordinates, and projected screen coordinates."));
-        endpoints.add(endpoint("/api/grounditems", "Visible ground item IDs, quantities, world coordinates, and projected screen coordinates."));
-        endpoints.add(endpoint("/api/bank", "Bank item IDs, quantities, and slots when the bank container is available."));
-        endpoints.add(endpoint("/api/equipment", "Equipped item IDs, quantities, and slots."));
+        endpoints.add(endpoint("/api/inventory", "Inventory item IDs, names, quantities, and slots."));
+        endpoints.add(endpoint("/api/npcs", "Nearby NPC IDs, names, world coordinates, canvas coordinates, and absolute screen coordinates."));
+        endpoints.add(endpoint("/api/dialogue", "Open NPC/player dialogue text, dialogue options, canvas coordinates, and absolute screen coordinates when available."));
+        endpoints.add(endpoint("/api/objects", "Scene game object IDs, names, world coordinates, canvas coordinates, and absolute screen coordinates."));
+        endpoints.add(endpoint("/api/grounditems", "Visible ground item IDs, names, quantities, world coordinates, canvas coordinates, and absolute screen coordinates."));
+        endpoints.add(endpoint("/api/bank", "Bank item IDs, names, quantities, and slots when the bank container is available."));
+        endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
         response.add("endpoints", endpoints);
 
         return gson.toJson(response);
     }
 
-    private void addWidgetCenter(JsonObject response, Widget widget, String xProperty, String yProperty) {
+    private java.awt.Point getCanvasScreenLocation() {
+        try {
+            if (client.getCanvas() == null || !client.getCanvas().isShowing()) {
+                return null;
+            }
+            return client.getCanvas().getLocationOnScreen();
+        } catch (IllegalComponentStateException e) {
+            return null;
+        }
+    }
+
+    private void addCanvasAndScreenCoordinates(JsonObject response, int canvasX, int canvasY) {
+        response.addProperty("canvasX", canvasX);
+        response.addProperty("canvasY", canvasY);
+
+        java.awt.Point canvasOrigin = getCanvasScreenLocation();
+        if (canvasOrigin != null) {
+            response.addProperty("screenX", canvasOrigin.x + canvasX);
+            response.addProperty("screenY", canvasOrigin.y + canvasY);
+        }
+    }
+
+    private void addPrefixedCanvasAndScreenCoordinates(JsonObject response, String prefix, int canvasX, int canvasY) {
+        response.addProperty(prefix + "CanvasX", canvasX);
+        response.addProperty(prefix + "CanvasY", canvasY);
+
+        java.awt.Point canvasOrigin = getCanvasScreenLocation();
+        if (canvasOrigin != null) {
+            response.addProperty(prefix + "ScreenX", canvasOrigin.x + canvasX);
+            response.addProperty(prefix + "ScreenY", canvasOrigin.y + canvasY);
+        }
+    }
+
+    private void addWidgetCenter(JsonObject response, Widget widget, String prefix) {
         if (widget == null || widget.isHidden()) {
             return;
         }
 
-        java.awt.Rectangle bounds = widget.getBounds();
+        Rectangle bounds = widget.getBounds();
         if (bounds != null) {
-            response.addProperty(xProperty, bounds.getCenterX());
-            response.addProperty(yProperty, bounds.getCenterY());
+            addPrefixedCanvasAndScreenCoordinates(response, prefix, (int) bounds.getCenterX(), (int) bounds.getCenterY());
         }
+    }
+
+    private String getItemName(int itemId) {
+        if (itemId <= 0) {
+            return "";
+        }
+
+        String name = itemManager.getItemComposition(itemId).getName();
+        return name != null ? name : "";
+    }
+
+    private String getObjectName(int objectId) {
+        if (objectId <= 0) {
+            return "";
+        }
+
+        String name = client.getObjectDefinition(objectId).getName();
+        return name != null ? name : "";
+    }
+
+    private String getNpcName(NPC npc) {
+        String name = npc.getName();
+        if (name != null && !name.isEmpty()) {
+            return name;
+        }
+
+        if (npc.getId() <= 0) {
+            return "";
+        }
+
+        String definitionName = client.getNpcDefinition(npc.getId()).getName();
+        return definitionName != null ? definitionName : "";
     }
 
     class ApiIndexHandler implements HttpHandler {
@@ -234,6 +303,7 @@ public class ApiServer {
                     if (item.getId() != -1 && item.getId() != 0) {
                         JsonObject itemObj = new JsonObject();
                         itemObj.addProperty("id", item.getId());
+                        itemObj.addProperty("name", getItemName(item.getId()));
                         itemObj.addProperty("quantity", item.getQuantity());
                         itemObj.addProperty("slot", i);
                         response.add(itemObj);
@@ -258,7 +328,7 @@ public class ApiServer {
             for (NPC npc : npcs) {
                 JsonObject npcObj = new JsonObject();
                 npcObj.addProperty("id", npc.getId());
-                npcObj.addProperty("name", npc.getName());
+                npcObj.addProperty("name", getNpcName(npc));
                 
                 WorldPoint wp = npc.getWorldLocation();
                 npcObj.addProperty("worldX", wp.getX());
@@ -269,8 +339,7 @@ public class ApiServer {
                 if (lp != null) {
                     Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
                     if (screenPoint != null) {
-                        npcObj.addProperty("screenX", screenPoint.getX());
-                        npcObj.addProperty("screenY", screenPoint.getY());
+                        addCanvasAndScreenCoordinates(npcObj, screenPoint.getX(), screenPoint.getY());
                     }
                 }
                 response.add(npcObj);
@@ -294,7 +363,7 @@ public class ApiServer {
                 response.addProperty("type", "NPC_DIALOGUE");
                 response.addProperty("npcName", npcDialogueName != null ? npcDialogueName.getText() : "");
                 response.addProperty("text", npcDialogueText.getText());
-                addWidgetCenter(response, npcDialogueText, "continueScreenX", "continueScreenY");
+                addWidgetCenter(response, npcDialogueText, "continue");
                 return gson.toJson(response);
             }
 
@@ -304,7 +373,7 @@ public class ApiServer {
             if (playerDialogueText != null && !playerDialogueText.isHidden()) {
                 response.addProperty("type", "PLAYER_DIALOGUE");
                 response.addProperty("text", playerDialogueText.getText());
-                addWidgetCenter(response, playerDialogueText, "continueScreenX", "continueScreenY");
+                addWidgetCenter(response, playerDialogueText, "continue");
                 return gson.toJson(response);
             }
 
@@ -320,10 +389,9 @@ public class ApiServer {
                         if (child.getText() != null && !child.getText().isEmpty() && !child.getText().equals("Please wait...")) {
                             JsonObject opt = new JsonObject();
                             opt.addProperty("text", child.getText());
-                            java.awt.Rectangle bounds = child.getBounds();
+                            Rectangle bounds = child.getBounds();
                             if (bounds != null) {
-                                opt.addProperty("screenX", bounds.getCenterX());
-                                opt.addProperty("screenY", bounds.getCenterY());
+                                addCanvasAndScreenCoordinates(opt, (int) bounds.getCenterX(), (int) bounds.getCenterY());
                             }
                             options.add(opt);
                         }
@@ -359,6 +427,7 @@ public class ApiServer {
                                 if (obj != null && obj.getId() != -1) {
                                     JsonObject jsonObj = new JsonObject();
                                     jsonObj.addProperty("id", obj.getId());
+                                    jsonObj.addProperty("name", getObjectName(obj.getId()));
                                     
                                     WorldPoint wp = obj.getWorldLocation();
                                     jsonObj.addProperty("worldX", wp.getX());
@@ -368,8 +437,7 @@ public class ApiServer {
                                     if (lp != null) {
                                         Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
                                         if (screenPoint != null) {
-                                            jsonObj.addProperty("screenX", screenPoint.getX());
-                                            jsonObj.addProperty("screenY", screenPoint.getY());
+                                            addCanvasAndScreenCoordinates(jsonObj, screenPoint.getX(), screenPoint.getY());
                                         }
                                     }
                                     response.add(jsonObj);
@@ -401,6 +469,7 @@ public class ApiServer {
                         for (TileItem item : tile.getGroundItems()) {
                             JsonObject jsonObj = new JsonObject();
                             jsonObj.addProperty("id", item.getId());
+                            jsonObj.addProperty("name", getItemName(item.getId()));
                             jsonObj.addProperty("quantity", item.getQuantity());
 
                             WorldPoint wp = tile.getWorldLocation();
@@ -411,8 +480,7 @@ public class ApiServer {
                             if (lp != null) {
                                 Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
                                 if (screenPoint != null) {
-                                    jsonObj.addProperty("screenX", screenPoint.getX());
-                                    jsonObj.addProperty("screenY", screenPoint.getY());
+                                    addCanvasAndScreenCoordinates(jsonObj, screenPoint.getX(), screenPoint.getY());
                                 }
                             }
                             response.add(jsonObj);
@@ -438,6 +506,7 @@ public class ApiServer {
                     if (item.getId() != -1 && item.getId() != 0) {
                         JsonObject itemObj = new JsonObject();
                         itemObj.addProperty("id", item.getId());
+                        itemObj.addProperty("name", getItemName(item.getId()));
                         itemObj.addProperty("quantity", item.getQuantity());
                         itemObj.addProperty("slot", i);
                         response.add(itemObj);
@@ -462,6 +531,7 @@ public class ApiServer {
                     if (item.getId() != -1 && item.getId() != 0) {
                         JsonObject itemObj = new JsonObject();
                         itemObj.addProperty("id", item.getId());
+                        itemObj.addProperty("name", getItemName(item.getId()));
                         itemObj.addProperty("quantity", item.getQuantity());
                         itemObj.addProperty("slot", i);
                         response.add(itemObj);
