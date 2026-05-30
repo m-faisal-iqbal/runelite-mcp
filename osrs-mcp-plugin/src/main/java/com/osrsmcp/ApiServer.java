@@ -6,7 +6,6 @@ import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
@@ -34,10 +33,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-@Slf4j
 public class ApiServer {
     private static final long CLIENT_THREAD_TIMEOUT_SECONDS = 2;
+    private static final Logger log = LoggerFactory.getLogger(ApiServer.class);
 
     private HttpServer server;
     private final Client client;
@@ -128,6 +129,18 @@ public class ApiServer {
     @FunctionalInterface
     private interface JsonResponseSupplier {
         String get() throws Exception;
+    }
+
+    private void addWidgetCenter(JsonObject response, Widget widget, String xProperty, String yProperty) {
+        if (widget == null || widget.isHidden()) {
+            return;
+        }
+
+        java.awt.Rectangle bounds = widget.getBounds();
+        if (bounds != null) {
+            response.addProperty(xProperty, bounds.getCenterX());
+            response.addProperty(yProperty, bounds.getCenterY());
+        }
     }
 
     class StateHandler implements HttpHandler {
@@ -224,37 +237,22 @@ public class ApiServer {
             // Check NPC Dialogue
             Widget npcDialogueText = client.getWidget(WidgetInfo.DIALOG_NPC_TEXT);
             Widget npcDialogueName = client.getWidget(WidgetInfo.DIALOG_NPC_NAME);
-            Widget npcDialogueContinue = client.getWidget(WidgetInfo.DIALOG_NPC_CONTINUE);
 
             if (npcDialogueText != null && !npcDialogueText.isHidden()) {
                 response.addProperty("type", "NPC_DIALOGUE");
                 response.addProperty("npcName", npcDialogueName != null ? npcDialogueName.getText() : "");
                 response.addProperty("text", npcDialogueText.getText());
-                
-                if (npcDialogueContinue != null && !npcDialogueContinue.isHidden()) {
-                    java.awt.Rectangle bounds = npcDialogueContinue.getBounds();
-                    if (bounds != null) {
-                        response.addProperty("continueScreenX", bounds.getCenterX());
-                        response.addProperty("continueScreenY", bounds.getCenterY());
-                    }
-                }
+                addWidgetCenter(response, npcDialogueText, "continueScreenX", "continueScreenY");
                 return gson.toJson(response);
             }
 
             // Check Player Dialogue
             Widget playerDialogueText = client.getWidget(WidgetInfo.DIALOG_PLAYER_TEXT);
-            Widget playerDialogueContinue = client.getWidget(WidgetInfo.DIALOG_PLAYER_CONTINUE);
 
             if (playerDialogueText != null && !playerDialogueText.isHidden()) {
                 response.addProperty("type", "PLAYER_DIALOGUE");
                 response.addProperty("text", playerDialogueText.getText());
-                if (playerDialogueContinue != null && !playerDialogueContinue.isHidden()) {
-                    java.awt.Rectangle bounds = playerDialogueContinue.getBounds();
-                    if (bounds != null) {
-                        response.addProperty("continueScreenX", bounds.getCenterX());
-                        response.addProperty("continueScreenY", bounds.getCenterY());
-                    }
-                }
+                addWidgetCenter(response, playerDialogueText, "continueScreenX", "continueScreenY");
                 return gson.toJson(response);
             }
 

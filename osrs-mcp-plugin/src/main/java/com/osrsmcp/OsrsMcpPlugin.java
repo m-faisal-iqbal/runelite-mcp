@@ -1,15 +1,13 @@
 package com.osrsmcp;
 
-import com.google.inject.Provides;
 import javax.inject.Inject;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
-import net.runelite.client.config.ConfigManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-@Slf4j
 @PluginDescriptor(
 	name = "OSRS MCP",
 	description = "Exposes local HTTP API for AI Agents (MCP)",
@@ -17,6 +15,8 @@ import net.runelite.client.plugins.PluginDescriptor;
 )
 public class OsrsMcpPlugin extends Plugin
 {
+	private static final Logger log = LoggerFactory.getLogger(OsrsMcpPlugin.class);
+
 	@Inject
 	private Client client;
 
