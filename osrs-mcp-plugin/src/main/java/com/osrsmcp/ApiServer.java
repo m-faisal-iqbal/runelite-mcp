@@ -12,6 +12,7 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
 import net.runelite.api.GameObject;
+import net.runelite.api.GameState;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.Perspective;
@@ -53,6 +54,9 @@ public class ApiServer {
     public void start() {
         try {
             server = HttpServer.create(new InetSocketAddress(8080), 0);
+            server.createContext("/", new ApiIndexHandler());
+            server.createContext("/api", new ApiIndexHandler());
+            server.createContext("/api/", new ApiIndexHandler());
             server.createContext("/api/state", new StateHandler());
             server.createContext("/api/inventory", new InventoryHandler());
             server.createContext("/api/npcs", new NpcHandler());
@@ -131,6 +135,34 @@ public class ApiServer {
         String get() throws Exception;
     }
 
+    private JsonObject endpoint(String path, String description) {
+        JsonObject endpoint = new JsonObject();
+        endpoint.addProperty("path", path);
+        endpoint.addProperty("description", description);
+        return endpoint;
+    }
+
+    private String getApiIndexJson() {
+        JsonObject response = new JsonObject();
+        response.addProperty("name", "OSRS MCP RuneLite API");
+        response.addProperty("description", "Local read-only RuneLite game-state API for the OSRS MCP server. Runtime data is read safely on the RuneLite client thread.");
+        response.addProperty("baseUrl", "http://localhost:8080/api");
+
+        JsonArray endpoints = new JsonArray();
+        endpoints.add(endpoint("/api/state", "Current login status, player name, hitpoints, run energy, and world location."));
+        endpoints.add(endpoint("/api/inventory", "Inventory item IDs, quantities, and slots."));
+        endpoints.add(endpoint("/api/npcs", "Nearby NPC IDs, names, world coordinates, and projected screen coordinates."));
+        endpoints.add(endpoint("/api/dialogue", "Open NPC/player dialogue text, dialogue options, and clickable screen coordinates when available."));
+        endpoints.add(endpoint("/api/objects", "Scene game object IDs, world coordinates, and projected screen coordinates."));
+        endpoints.add(endpoint("/api/grounditems", "Visible ground item IDs, quantities, world coordinates, and projected screen coordinates."));
+        endpoints.add(endpoint("/api/bank", "Bank item IDs, quantities, and slots when the bank container is available."));
+        endpoints.add(endpoint("/api/equipment", "Equipped item IDs, quantities, and slots."));
+        endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
+        response.add("endpoints", endpoints);
+
+        return gson.toJson(response);
+    }
+
     private void addWidgetCenter(JsonObject response, Widget widget, String xProperty, String yProperty) {
         if (widget == null || widget.isHidden()) {
             return;
@@ -140,6 +172,22 @@ public class ApiServer {
         if (bounds != null) {
             response.addProperty(xProperty, bounds.getCenterX());
             response.addProperty(yProperty, bounds.getCenterY());
+        }
+    }
+
+    class ApiIndexHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            String path = t.getRequestURI().getPath();
+            if (!"/".equals(path) && !"/api".equals(path) && !"/api/".equals(path)) {
+                JsonObject response = new JsonObject();
+                response.addProperty("error", "NOT_FOUND");
+                response.addProperty("message", "Unknown endpoint. Open /api/ for the endpoint list.");
+                sendResponse(t, 404, gson.toJson(response));
+                return;
+            }
+
+            sendResponse(t, 200, getApiIndexJson());
         }
     }
 
@@ -202,6 +250,10 @@ public class ApiServer {
         public void handle(HttpExchange t) throws IOException {
             handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
+            if (client.getGameState() != GameState.LOGGED_IN) {
+                return gson.toJson(response);
+            }
+
             List<NPC> npcs = client.getNpcs();
             for (NPC npc : npcs) {
                 JsonObject npcObj = new JsonObject();
@@ -292,6 +344,10 @@ public class ApiServer {
         public void handle(HttpExchange t) throws IOException {
             handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
+            if (client.getGameState() != GameState.LOGGED_IN) {
+                return gson.toJson(response);
+            }
+
             Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
             for (int x = 0; x < tiles.length; x++) {
                 for (int y = 0; y < tiles[x].length; y++) {
@@ -333,6 +389,10 @@ public class ApiServer {
         public void handle(HttpExchange t) throws IOException {
             handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
+            if (client.getGameState() != GameState.LOGGED_IN) {
+                return gson.toJson(response);
+            }
+
             Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
             for (int x = 0; x < tiles.length; x++) {
                 for (int y = 0; y < tiles[x].length; y++) {
