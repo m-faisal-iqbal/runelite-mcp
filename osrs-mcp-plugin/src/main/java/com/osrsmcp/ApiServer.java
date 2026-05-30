@@ -1,0 +1,366 @@
+package com.osrsmcp;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.api.InventoryID;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.NPC;
+import net.runelite.api.GameObject;
+import net.runelite.api.Tile;
+import net.runelite.api.TileItem;
+import net.runelite.api.Perspective;
+import net.runelite.api.Player;
+import net.runelite.api.Point;
+import net.runelite.api.Skill;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetInfo;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.util.List;
+
+@Slf4j
+public class ApiServer {
+    private HttpServer server;
+    private final Client client;
+    private final Gson gson = new Gson();
+
+    public ApiServer(Client client) {
+        this.client = client;
+    }
+
+    public void start() {
+        try {
+            server = HttpServer.create(new InetSocketAddress(8080), 0);
+            server.createContext("/api/state", new StateHandler());
+            server.createContext("/api/inventory", new InventoryHandler());
+            server.createContext("/api/npcs", new NpcHandler());
+            server.createContext("/api/dialogue", new DialogueHandler());
+            server.createContext("/api/objects", new ObjectHandler());
+            server.createContext("/api/grounditems", new GroundItemHandler());
+            server.createContext("/api/bank", new BankHandler());
+            server.createContext("/api/equipment", new EquipmentHandler());
+            server.createContext("/api/skills", new SkillsHandler());
+            server.setExecutor(null); // creates a default executor
+            server.start();
+            log.info("API Server started on port 8080");
+        } catch (IOException e) {
+            log.error("Failed to start API server", e);
+        }
+    }
+
+    public void stop() {
+        if (server != null) {
+            server.stop(0);
+            log.info("API Server stopped");
+        }
+    }
+
+    private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(statusCode, response.getBytes().length);
+        OutputStream os = exchange.getResponseBody();
+        os.write(response.getBytes());
+        os.close();
+    }
+
+    class StateHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonObject response = new JsonObject();
+            if (client.getGameState() != net.runelite.api.GameState.LOGGED_IN) {
+                response.addProperty("status", "NOT_LOGGED_IN");
+                sendResponse(t, 200, gson.toJson(response));
+                return;
+            }
+
+            Player player = client.getLocalPlayer();
+            if (player != null) {
+                response.addProperty("status", "LOGGED_IN");
+                response.addProperty("name", player.getName());
+                response.addProperty("health", client.getBoostedSkillLevel(net.runelite.api.Skill.HITPOINTS));
+                response.addProperty("runEnergy", client.getEnergy());
+                
+                WorldPoint wp = player.getWorldLocation();
+                JsonObject location = new JsonObject();
+                location.addProperty("x", wp.getX());
+                location.addProperty("y", wp.getY());
+                location.addProperty("plane", wp.getPlane());
+                response.add("location", location);
+            }
+
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class InventoryHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonArray response = new JsonArray();
+            ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+            if (inventory != null) {
+                Item[] items = inventory.getItems();
+                for (int i = 0; i < items.length; i++) {
+                    Item item = items[i];
+                    if (item.getId() != -1 && item.getId() != 0) {
+                        JsonObject itemObj = new JsonObject();
+                        itemObj.addProperty("id", item.getId());
+                        itemObj.addProperty("quantity", item.getQuantity());
+                        itemObj.addProperty("slot", i);
+                        response.add(itemObj);
+                    }
+                }
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class NpcHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonArray response = new JsonArray();
+            List<NPC> npcs = client.getNpcs();
+            for (NPC npc : npcs) {
+                JsonObject npcObj = new JsonObject();
+                npcObj.addProperty("id", npc.getId());
+                npcObj.addProperty("name", npc.getName());
+                
+                WorldPoint wp = npc.getWorldLocation();
+                npcObj.addProperty("worldX", wp.getX());
+                npcObj.addProperty("worldY", wp.getY());
+
+                // Calculate screen coordinates
+                LocalPoint lp = npc.getLocalLocation();
+                if (lp != null) {
+                    Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
+                    if (screenPoint != null) {
+                        npcObj.addProperty("screenX", screenPoint.getX());
+                        npcObj.addProperty("screenY", screenPoint.getY());
+                    }
+                }
+                response.add(npcObj);
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class DialogueHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonObject response = new JsonObject();
+            
+            // Check NPC Dialogue
+            Widget npcDialogueText = client.getWidget(WidgetInfo.DIALOG_NPC_TEXT);
+            Widget npcDialogueName = client.getWidget(WidgetInfo.DIALOG_NPC_NAME);
+            Widget npcDialogueContinue = client.getWidget(WidgetInfo.DIALOG_NPC_CONTINUE);
+
+            if (npcDialogueText != null && !npcDialogueText.isHidden()) {
+                response.addProperty("type", "NPC_DIALOGUE");
+                response.addProperty("npcName", npcDialogueName != null ? npcDialogueName.getText() : "");
+                response.addProperty("text", npcDialogueText.getText());
+                
+                if (npcDialogueContinue != null && !npcDialogueContinue.isHidden()) {
+                    java.awt.Rectangle bounds = npcDialogueContinue.getBounds();
+                    if (bounds != null) {
+                        response.addProperty("continueScreenX", bounds.getCenterX());
+                        response.addProperty("continueScreenY", bounds.getCenterY());
+                    }
+                }
+                sendResponse(t, 200, gson.toJson(response));
+                return;
+            }
+
+            // Check Player Dialogue
+            Widget playerDialogueText = client.getWidget(WidgetInfo.DIALOG_PLAYER_TEXT);
+            Widget playerDialogueContinue = client.getWidget(WidgetInfo.DIALOG_PLAYER_CONTINUE);
+
+            if (playerDialogueText != null && !playerDialogueText.isHidden()) {
+                response.addProperty("type", "PLAYER_DIALOGUE");
+                response.addProperty("text", playerDialogueText.getText());
+                if (playerDialogueContinue != null && !playerDialogueContinue.isHidden()) {
+                    java.awt.Rectangle bounds = playerDialogueContinue.getBounds();
+                    if (bounds != null) {
+                        response.addProperty("continueScreenX", bounds.getCenterX());
+                        response.addProperty("continueScreenY", bounds.getCenterY());
+                    }
+                }
+                sendResponse(t, 200, gson.toJson(response));
+                return;
+            }
+
+            // Check Dialogue Options
+            Widget dialogueOptions = client.getWidget(WidgetInfo.DIALOG_OPTION_OPTIONS);
+            if (dialogueOptions != null && !dialogueOptions.isHidden()) {
+                response.addProperty("type", "DIALOGUE_OPTIONS");
+                JsonArray options = new JsonArray();
+                Widget[] children = dialogueOptions.getDynamicChildren();
+                if (children != null) {
+                    for (int i = 0; i < children.length; i++) {
+                        Widget child = children[i];
+                        if (child.getText() != null && !child.getText().isEmpty() && !child.getText().equals("Please wait...")) {
+                            JsonObject opt = new JsonObject();
+                            opt.addProperty("text", child.getText());
+                            java.awt.Rectangle bounds = child.getBounds();
+                            if (bounds != null) {
+                                opt.addProperty("screenX", bounds.getCenterX());
+                                opt.addProperty("screenY", bounds.getCenterY());
+                            }
+                            options.add(opt);
+                        }
+                    }
+                }
+                response.add("options", options);
+                sendResponse(t, 200, gson.toJson(response));
+                return;
+            }
+            
+            response.addProperty("type", "NONE");
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class ObjectHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonArray response = new JsonArray();
+            Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
+            for (int x = 0; x < tiles.length; x++) {
+                for (int y = 0; y < tiles[x].length; y++) {
+                    Tile tile = tiles[x][y];
+                    if (tile != null) {
+                        GameObject[] gameObjects = tile.getGameObjects();
+                        if (gameObjects != null) {
+                            for (GameObject obj : gameObjects) {
+                                if (obj != null && obj.getId() != -1) {
+                                    JsonObject jsonObj = new JsonObject();
+                                    jsonObj.addProperty("id", obj.getId());
+                                    
+                                    WorldPoint wp = obj.getWorldLocation();
+                                    jsonObj.addProperty("worldX", wp.getX());
+                                    jsonObj.addProperty("worldY", wp.getY());
+
+                                    LocalPoint lp = obj.getLocalLocation();
+                                    if (lp != null) {
+                                        Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
+                                        if (screenPoint != null) {
+                                            jsonObj.addProperty("screenX", screenPoint.getX());
+                                            jsonObj.addProperty("screenY", screenPoint.getY());
+                                        }
+                                    }
+                                    response.add(jsonObj);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class GroundItemHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonArray response = new JsonArray();
+            Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
+            for (int x = 0; x < tiles.length; x++) {
+                for (int y = 0; y < tiles[x].length; y++) {
+                    Tile tile = tiles[x][y];
+                    if (tile != null && tile.getGroundItems() != null) {
+                        for (TileItem item : tile.getGroundItems()) {
+                            JsonObject jsonObj = new JsonObject();
+                            jsonObj.addProperty("id", item.getId());
+                            jsonObj.addProperty("quantity", item.getQuantity());
+
+                            WorldPoint wp = tile.getWorldLocation();
+                            jsonObj.addProperty("worldX", wp.getX());
+                            jsonObj.addProperty("worldY", wp.getY());
+
+                            LocalPoint lp = tile.getLocalLocation();
+                            if (lp != null) {
+                                Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
+                                if (screenPoint != null) {
+                                    jsonObj.addProperty("screenX", screenPoint.getX());
+                                    jsonObj.addProperty("screenY", screenPoint.getY());
+                                }
+                            }
+                            response.add(jsonObj);
+                        }
+                    }
+                }
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class BankHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonArray response = new JsonArray();
+            ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+            if (bank != null) {
+                Item[] items = bank.getItems();
+                for (int i = 0; i < items.length; i++) {
+                    Item item = items[i];
+                    if (item.getId() != -1 && item.getId() != 0) {
+                        JsonObject itemObj = new JsonObject();
+                        itemObj.addProperty("id", item.getId());
+                        itemObj.addProperty("quantity", item.getQuantity());
+                        itemObj.addProperty("slot", i);
+                        response.add(itemObj);
+                    }
+                }
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class EquipmentHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonArray response = new JsonArray();
+            ItemContainer equipment = client.getItemContainer(InventoryID.EQUIPMENT);
+            if (equipment != null) {
+                Item[] items = equipment.getItems();
+                for (int i = 0; i < items.length; i++) {
+                    Item item = items[i];
+                    if (item.getId() != -1 && item.getId() != 0) {
+                        JsonObject itemObj = new JsonObject();
+                        itemObj.addProperty("id", item.getId());
+                        itemObj.addProperty("quantity", item.getQuantity());
+                        itemObj.addProperty("slot", i);
+                        response.add(itemObj);
+                    }
+                }
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+
+    class SkillsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            JsonObject response = new JsonObject();
+            for (Skill skill : Skill.values()) {
+                if (skill != Skill.OVERALL) {
+                    JsonObject skillObj = new JsonObject();
+                    skillObj.addProperty("level", client.getRealSkillLevel(skill));
+                    skillObj.addProperty("boostedLevel", client.getBoostedSkillLevel(skill));
+                    skillObj.addProperty("xp", client.getSkillExperience(skill));
+                    response.add(skill.getName(), skillObj);
+                }
+            }
+            sendResponse(t, 200, gson.toJson(response));
+        }
+    }
+}
