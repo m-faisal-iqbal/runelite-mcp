@@ -23,20 +23,30 @@ import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetInfo;
+import net.runelite.client.callback.ClientThread;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 public class ApiServer {
+    private static final long CLIENT_THREAD_TIMEOUT_SECONDS = 2;
+
     private HttpServer server;
     private final Client client;
+    private final ClientThread clientThread;
     private final Gson gson = new Gson();
 
-    public ApiServer(Client client) {
+    public ApiServer(Client client, ClientThread clientThread) {
         this.client = client;
+        this.clientThread = clientThread;
     }
 
     public void start() {
@@ -68,20 +78,66 @@ public class ApiServer {
 
     private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.sendResponseHeaders(statusCode, response.getBytes().length);
+        byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(statusCode, responseBytes.length);
         OutputStream os = exchange.getResponseBody();
-        os.write(response.getBytes());
+        os.write(responseBytes);
         os.close();
+    }
+
+    private void sendErrorResponse(HttpExchange exchange, String error, String message) throws IOException {
+        JsonObject response = new JsonObject();
+        response.addProperty("error", error);
+        if (message != null && !message.isEmpty()) {
+            response.addProperty("message", message);
+        }
+        sendResponse(exchange, 503, gson.toJson(response));
+    }
+
+    private void handleOnClientThread(HttpExchange exchange, JsonResponseSupplier supplier) throws IOException {
+        CompletableFuture<String> future = new CompletableFuture<>();
+
+        try {
+            clientThread.invoke(() -> {
+                try {
+                    future.complete(supplier.get());
+                } catch (Throwable e) {
+                    future.completeExceptionally(e);
+                }
+            });
+
+            sendResponse(exchange, 200, future.get(CLIENT_THREAD_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        } catch (TimeoutException e) {
+            future.cancel(false);
+            log.warn("Timed out waiting for RuneLite client thread response");
+            sendErrorResponse(exchange, "CLIENT_THREAD_TIMEOUT", null);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Interrupted while waiting for RuneLite client thread response", e);
+            sendErrorResponse(exchange, "CLIENT_THREAD_FAILURE", "Interrupted while waiting for client thread");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            log.error("RuneLite client thread request failed", cause);
+            sendErrorResponse(exchange, "CLIENT_THREAD_FAILURE", cause.getMessage());
+        } catch (RuntimeException e) {
+            log.error("Failed to schedule RuneLite client thread request", e);
+            sendErrorResponse(exchange, "CLIENT_THREAD_FAILURE", e.getMessage());
+        }
+    }
+
+    @FunctionalInterface
+    private interface JsonResponseSupplier {
+        String get() throws Exception;
     }
 
     class StateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonObject response = new JsonObject();
             if (client.getGameState() != net.runelite.api.GameState.LOGGED_IN) {
                 response.addProperty("status", "NOT_LOGGED_IN");
-                sendResponse(t, 200, gson.toJson(response));
-                return;
+                return gson.toJson(response);
             }
 
             Player player = client.getLocalPlayer();
@@ -99,13 +155,15 @@ public class ApiServer {
                 response.add("location", location);
             }
 
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class InventoryHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
             ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
             if (inventory != null) {
@@ -121,13 +179,15 @@ public class ApiServer {
                     }
                 }
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class NpcHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
             List<NPC> npcs = client.getNpcs();
             for (NPC npc : npcs) {
@@ -150,13 +210,15 @@ public class ApiServer {
                 }
                 response.add(npcObj);
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class DialogueHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonObject response = new JsonObject();
             
             // Check NPC Dialogue
@@ -176,8 +238,7 @@ public class ApiServer {
                         response.addProperty("continueScreenY", bounds.getCenterY());
                     }
                 }
-                sendResponse(t, 200, gson.toJson(response));
-                return;
+                return gson.toJson(response);
             }
 
             // Check Player Dialogue
@@ -194,8 +255,7 @@ public class ApiServer {
                         response.addProperty("continueScreenY", bounds.getCenterY());
                     }
                 }
-                sendResponse(t, 200, gson.toJson(response));
-                return;
+                return gson.toJson(response);
             }
 
             // Check Dialogue Options
@@ -220,18 +280,19 @@ public class ApiServer {
                     }
                 }
                 response.add("options", options);
-                sendResponse(t, 200, gson.toJson(response));
-                return;
+                return gson.toJson(response);
             }
             
             response.addProperty("type", "NONE");
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class ObjectHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
             Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
             for (int x = 0; x < tiles.length; x++) {
@@ -264,13 +325,15 @@ public class ApiServer {
                     }
                 }
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class GroundItemHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
             Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
             for (int x = 0; x < tiles.length; x++) {
@@ -299,13 +362,15 @@ public class ApiServer {
                     }
                 }
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class BankHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
             ItemContainer bank = client.getItemContainer(InventoryID.BANK);
             if (bank != null) {
@@ -321,13 +386,15 @@ public class ApiServer {
                     }
                 }
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class EquipmentHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonArray response = new JsonArray();
             ItemContainer equipment = client.getItemContainer(InventoryID.EQUIPMENT);
             if (equipment != null) {
@@ -343,13 +410,15 @@ public class ApiServer {
                     }
                 }
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 
     class SkillsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> {
             JsonObject response = new JsonObject();
             for (Skill skill : Skill.values()) {
                 if (skill != Skill.OVERALL) {
@@ -360,7 +429,8 @@ public class ApiServer {
                     response.add(skill.getName(), skillObj);
                 }
             }
-            sendResponse(t, 200, gson.toJson(response));
+            return gson.toJson(response);
+            });
         }
     }
 }

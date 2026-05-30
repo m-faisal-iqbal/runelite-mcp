@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import axios from "axios";
-import { mouse, Point, keyboard, Key } from "@nut-tree/nut-js";
+import { mouse, Point, keyboard, Key } from "@nut-tree-fork/nut-js";
 
 // Optional: configure nut-js for smoother, slower movements so it looks human
 mouse.config.mouseSpeed = 1000;
