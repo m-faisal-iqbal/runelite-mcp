@@ -420,6 +420,54 @@ async function invokeMenuAction(baseURL: string, action: {
   return res.data;
 }
 
+async function invokeWalkAction(baseURL: string, action: {
+  worldX: number;
+  worldY: number;
+  plane?: number;
+  dryRun?: boolean;
+}) {
+  const res = await runeliteApi(baseURL).post("/action/walk", {
+    worldX: action.worldX,
+    worldY: action.worldY,
+    plane: action.plane,
+    dryRun: action.dryRun ?? false,
+  });
+  return res.data;
+}
+
+async function invokeWidgetAction(baseURL: string, action: {
+  packedId?: number;
+  groupId?: number;
+  childId?: number;
+  param0?: number;
+  param1?: number;
+  actionIndex?: number;
+  menuAction?: string;
+  type?: string;
+  identifier?: number;
+  id?: number;
+  itemId?: number;
+  option?: string;
+  target?: string;
+  dryRun?: boolean;
+}) {
+  const res = await runeliteApi(baseURL).post("/action/widget", {
+    packedId: action.packedId,
+    groupId: action.groupId,
+    childId: action.childId,
+    param0: action.param0,
+    param1: action.param1,
+    actionIndex: action.actionIndex,
+    menuAction: action.menuAction ?? action.type,
+    identifier: action.identifier ?? action.id,
+    itemId: action.itemId,
+    option: action.option ?? "",
+    target: action.target ?? "",
+    dryRun: action.dryRun ?? false,
+  });
+  return res.data;
+}
+
 async function getPlayerLocation(target: ClientTarget = {}) {
   const { snapshot } = await getSnapshotForTarget(target);
   return snapshot.state?.location;
@@ -610,6 +658,15 @@ async function openContextMenuForTarget(args: OpenContextMenuArgs) {
       ageMs: target.ageMs,
     },
     menu,
+  };
+}
+
+async function interactWithTarget(args: OpenContextMenuArgs & { option: string; exact?: boolean }) {
+  const targetAndMenu = await openContextMenuForTarget(args);
+  const selected = await selectContextMenuOption(args.option, args, args.exact);
+  return {
+    ...targetAndMenu,
+    selected,
   };
 }
 
@@ -1385,6 +1442,73 @@ server.tool(
 );
 
 server.tool(
+  "invoke_walk_action",
+  "Invoke a RuneLite WALK menu action inside the client for a loaded-scene world tile. This is not long-distance pathfinding.",
+  {
+    worldX: z.number().describe("Target world X tile. Must be in the currently loaded scene."),
+    worldY: z.number().describe("Target world Y tile. Must be in the currently loaded scene."),
+    plane: z.number().optional().describe("Target plane. Defaults to the client's current plane."),
+    dryRun: z.boolean().optional().describe("Validate and echo the walk action without invoking it in-game"),
+    ...clientTargetSchema(),
+  },
+  async ({ worldX, worldY, plane, dryRun, instanceId, playerName, port }) => {
+    try {
+      const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+      const result = await invokeWalkAction(baseURL, { worldX, worldY, plane, dryRun });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("invoking walk action", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "invoke_widget_action",
+  "Invoke a RuneLite widget menu action inside the client. Prefer raw params from a widget/menu entry; otherwise use packedId or groupId+childId with actionIndex 1-5.",
+  {
+    packedId: z.number().optional().describe("Packed widget id. Used as param1 when provided."),
+    groupId: z.number().optional().describe("Widget group id; combine with childId when packedId is not provided."),
+    childId: z.number().optional().describe("Widget child id; combine with groupId when packedId is not provided."),
+    param0: z.number().optional().describe("Raw param0 for the widget action. Defaults to 0."),
+    param1: z.number().optional().describe("Raw param1/packed widget id. Used if packedId is omitted."),
+    actionIndex: z.number().optional().describe("Widget option index 1-5. Defaults to 1 unless menuAction/type is passed."),
+    menuAction: z.string().optional().describe("Explicit RuneLite MenuAction enum name for advanced widget actions."),
+    type: z.string().optional().describe("Alias for menuAction, useful when passing context menu entry data."),
+    identifier: z.number().optional().describe("RuneLite action identifier. Defaults to id or actionIndex."),
+    id: z.number().optional().describe("Alias for identifier."),
+    itemId: z.number().optional().describe("Item ID for item/widget actions, otherwise -1."),
+    option: z.string().optional().describe("Menu option text."),
+    target: z.string().optional().describe("Menu target text."),
+    dryRun: z.boolean().optional().describe("Validate and echo the widget action without invoking it in-game"),
+    ...clientTargetSchema(),
+  },
+  async ({ packedId, groupId, childId, param0, param1, actionIndex, menuAction, type, identifier, id, itemId, option, target, dryRun, instanceId, playerName, port }) => {
+    try {
+      const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+      const result = await invokeWidgetAction(baseURL, {
+        packedId,
+        groupId,
+        childId,
+        param0,
+        param1,
+        actionIndex,
+        menuAction,
+        type,
+        identifier,
+        id,
+        itemId,
+        option,
+        target,
+        dryRun,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("invoking widget action", e) }] };
+    }
+  }
+);
+
+server.tool(
   "open_context_menu_for_target",
   "Right-click a fresh NPC, object, player, or ground item target and return the resulting RuneLite context menu without selecting an option.",
   {
@@ -1419,6 +1543,44 @@ server.tool(
       };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error opening context menu for target: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "interact_with",
+  "Interact with a fresh NPC, object, player, or ground item by opening its context menu and invoking the selected RuneLite menu action in-client.",
+  {
+    entityType: z.enum(["npc", "object", "ground_item", "player"]).describe("Target type to interact with"),
+    option: z.string().describe("Menu option to select, for example Chop down, Talk-to, Attack, Take, Use, or Open"),
+    name: z.string().optional().describe("Optional exact target name"),
+    id: z.number().optional().describe("Optional target ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching target to the player"),
+    exact: z.boolean().optional().describe("Require an exact option/option+target match instead of substring matching"),
+    coordinateSource: z.string().optional().describe("Required coordinate source. Defaults to clickbox for objects and convexHull for NPCs/players."),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    menuDelayMs: z.number().optional().describe("Delay after right-click before reading the menu, default 150"),
+    ...clientTargetSchema(),
+  },
+  async ({ entityType, option, name, id, nearestToPlayer, exact, coordinateSource, maxAgeMs, menuDelayMs, instanceId, playerName, port }) => {
+    try {
+      const result = await interactWithTarget({
+        entityType,
+        option,
+        name,
+        id,
+        nearestToPlayer,
+        exact,
+        coordinateSource,
+        maxAgeMs,
+        menuDelayMs,
+        instanceId,
+        playerName,
+        port
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error interacting with target: ${e.message}` }] };
     }
   }
 );
@@ -1506,17 +1668,29 @@ server.tool(
 
 server.tool(
   "walk_to",
-  "Project a nearby world tile onto the minimap and click it. This is minimum viable navigation for loaded/nearby targets.",
+  "Walk to a nearby world tile. In auto mode, try an in-client WALK action for loaded-scene tiles before falling back to minimap click.",
   {
     worldX: z.number().describe("Target world X tile"),
     worldY: z.number().describe("Target world Y tile"),
     plane: z.number().optional().describe("Target plane, defaults to 0 if omitted"),
+    mode: z.enum(["auto", "client_action", "minimap"]).optional().describe("Action mode. auto tries in-client loaded-scene walk first, then minimap fallback."),
     ...clientTargetSchema(),
   },
-  async ({ worldX, worldY, plane, instanceId, playerName, port }) => {
+  async ({ worldX, worldY, plane, mode, instanceId, playerName, port }) => {
     try {
+      if (mode !== "minimap") {
+        const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+        try {
+          const result = await invokeWalkAction(baseURL, { worldX, worldY, plane });
+          return { content: [{ type: "text", text: JSON.stringify({ mode: "client_action", result }, null, 2) }] };
+        } catch (e: any) {
+          if (mode === "client_action") {
+            throw e;
+          }
+        }
+      }
       const target = await clickMinimapProjection(worldX, worldY, plane, { instanceId, playerName, port });
-      return { content: [{ type: "text", text: `Clicked minimap projection for ${worldX}, ${worldY}, ${plane ?? 0} at ${target.screenX}, ${target.screenY}.` }] };
+      return { content: [{ type: "text", text: JSON.stringify({ mode: "minimap", message: `Clicked minimap projection for ${worldX}, ${worldY}, ${plane ?? 0} at ${target.screenX}, ${target.screenY}.`, target }, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error walking to tile: ${e.message}` }] };
     }
@@ -2073,13 +2247,18 @@ server.tool(
     name: z.string().optional().describe("Object name, for example Tree"),
     id: z.number().optional().describe("Object ID"),
     nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching object to the player"),
+    option: z.string().optional().describe("Optional menu option to invoke in-client, for example Chop down or Open. When set, this uses the hybrid context-menu/menuAction path."),
     maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
     rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
     ...clientTargetSchema(),
   },
-  async ({ name, id, nearestToPlayer, maxAgeMs, rightClick, instanceId, playerName, port }) => {
+  async ({ name, id, nearestToPlayer, option, maxAgeMs, rightClick, instanceId, playerName, port }) => {
     try {
       const targetClient = { instanceId, playerName, port };
+      if (option) {
+        const result = await interactWithTarget({ entityType: "object", option, name, id, nearestToPlayer, maxAgeMs, instanceId, playerName, port });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
       const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
       await assertClientReady(baseURL);
       const objects = snapshot.objects ?? [];
@@ -2136,13 +2315,18 @@ server.tool(
     name: z.string().optional().describe("NPC name"),
     id: z.number().optional().describe("NPC ID"),
     nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching NPC to the player"),
+    option: z.string().optional().describe("Optional menu option to invoke in-client, for example Talk-to or Attack. When set, this uses the hybrid context-menu/menuAction path."),
     maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
     rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
     ...clientTargetSchema(),
   },
-  async ({ name, id, nearestToPlayer, maxAgeMs, rightClick, instanceId, playerName, port }) => {
+  async ({ name, id, nearestToPlayer, option, maxAgeMs, rightClick, instanceId, playerName, port }) => {
     try {
       const targetClient = { instanceId, playerName, port };
+      if (option) {
+        const result = await interactWithTarget({ entityType: "npc", option, name, id, nearestToPlayer, maxAgeMs, instanceId, playerName, port });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
       const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
       await assertClientReady(baseURL);
       const npcs = snapshot.npcs ?? [];
@@ -2199,13 +2383,18 @@ server.tool(
     name: z.string().optional().describe("Ground item name"),
     id: z.number().optional().describe("Item ID"),
     nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching item to the player"),
+    option: z.string().optional().describe("Optional menu option to invoke in-client, for example Take. When set, this uses the hybrid context-menu/menuAction path."),
     maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
     rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
     ...clientTargetSchema(),
   },
-  async ({ name, id, nearestToPlayer, maxAgeMs, rightClick, instanceId, playerName, port }) => {
+  async ({ name, id, nearestToPlayer, option, maxAgeMs, rightClick, instanceId, playerName, port }) => {
     try {
       const targetClient = { instanceId, playerName, port };
+      if (option) {
+        const result = await interactWithTarget({ entityType: "ground_item", option, name, id, nearestToPlayer, maxAgeMs, instanceId, playerName, port });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
       const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
       await assertClientReady(baseURL);
       const items = snapshot.groundItems ?? [];

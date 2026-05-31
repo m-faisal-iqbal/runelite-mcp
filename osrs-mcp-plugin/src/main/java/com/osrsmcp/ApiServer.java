@@ -131,6 +131,8 @@ public class ApiServer {
         server.createContext("/api", new ApiIndexHandler());
         server.createContext("/api/", new ApiIndexHandler());
         server.createContext("/api/action/menu", new ActionMenuHandler());
+        server.createContext("/api/action/walk", new ActionWalkHandler());
+        server.createContext("/api/action/widget", new ActionWidgetHandler());
         server.createContext("/api/state", new StateHandler());
         server.createContext("/api/inventory", new InventoryHandler());
         server.createContext("/api/npcs", new NpcHandler());
@@ -193,6 +195,15 @@ public class ApiServer {
             response.addProperty("message", message);
         }
         sendResponse(exchange, statusCode, gson.toJson(response));
+    }
+
+    private JsonObject readJsonRequestBody(HttpExchange exchange) throws IOException {
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        JsonObject request = gson.fromJson(body, JsonObject.class);
+        if (request == null) {
+            throw new IllegalArgumentException("Request body must be a JSON object");
+        }
+        return request;
     }
 
     private void handleOnClientThread(HttpExchange exchange, JsonResponseSupplier supplier) throws IOException {
@@ -374,6 +385,8 @@ public class ApiServer {
 
         JsonArray endpoints = new JsonArray();
         endpoints.add(endpoint("/api/action/menu", "POST a RuneLite menu action on the client thread using param0, param1, menuAction/type, identifier, itemId, option, and target."));
+        endpoints.add(endpoint("/api/action/walk", "POST a local-scene walk action using worldX, worldY, and optional plane. Uses RuneLite WALK menu action on the client thread."));
+        endpoints.add(endpoint("/api/action/widget", "POST a widget menu action using raw widget/menu params or packedId/groupId/childId plus actionIndex."));
         endpoints.add(endpoint("/api/state", "Current login status, player name, hitpoints, run energy, and world location."));
         endpoints.add(endpoint("/api/inventory", "Inventory item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/npcs", "Nearby NPC IDs, names, world coordinates, canvas coordinates, and absolute screen coordinates."));
@@ -1298,6 +1311,109 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private MenuAction widgetMenuActionForIndex(int actionIndex) {
+        switch (actionIndex) {
+            case 1:
+                return MenuAction.WIDGET_FIRST_OPTION;
+            case 2:
+                return MenuAction.WIDGET_SECOND_OPTION;
+            case 3:
+                return MenuAction.WIDGET_THIRD_OPTION;
+            case 4:
+                return MenuAction.WIDGET_FOURTH_OPTION;
+            case 5:
+                return MenuAction.WIDGET_FIFTH_OPTION;
+            default:
+                throw new IllegalArgumentException("actionIndex must be between 1 and 5 for WIDGET_*_OPTION actions; pass menuAction explicitly for other widget action types");
+        }
+    }
+
+    private int packedWidgetId(JsonObject request) {
+        if (request.has("packedId") && !request.get("packedId").isJsonNull()) {
+            return request.get("packedId").getAsInt();
+        }
+        if (request.has("param1") && !request.get("param1").isJsonNull()) {
+            return request.get("param1").getAsInt();
+        }
+        if (request.has("groupId") && request.has("childId")) {
+            return (request.get("groupId").getAsInt() << 16) | request.get("childId").getAsInt();
+        }
+        throw new IllegalArgumentException("packedId, param1, or groupId+childId is required");
+    }
+
+    private String invokeWidgetActionJson(JsonObject request) {
+        long capturedAt = System.currentTimeMillis();
+        int actionIndex = getOptionalInt(request, "actionIndex", 1);
+        int param0 = getOptionalInt(request, "param0", 0);
+        int param1 = packedWidgetId(request);
+        int identifier = getOptionalInt(request, "identifier", getOptionalInt(request, "id", actionIndex));
+        int itemId = getOptionalInt(request, "itemId", -1);
+        String option = getString(request, "option", "");
+        String target = getString(request, "target", "");
+        MenuAction menuAction = (request.has("menuAction") || request.has("type"))
+            ? parseMenuAction(request)
+            : widgetMenuActionForIndex(actionIndex);
+        boolean dryRun = getOptionalBoolean(request, "dryRun", false);
+
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("success", true);
+        response.addProperty("dryRun", dryRun);
+        response.addProperty("param0", param0);
+        response.addProperty("param1", param1);
+        response.addProperty("identifier", identifier);
+        response.addProperty("itemId", itemId);
+        response.addProperty("menuAction", menuAction.name());
+        response.addProperty("option", option);
+        response.addProperty("target", target);
+
+        if (!dryRun) {
+            client.menuAction(param0, param1, menuAction, identifier, itemId, option, target);
+        }
+
+        return gson.toJson(response);
+    }
+
+    private String invokeWalkActionJson(JsonObject request) {
+        long capturedAt = System.currentTimeMillis();
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            throw new IllegalStateException("Client is not logged in");
+        }
+
+        int worldX = getRequiredInt(request, "worldX");
+        int worldY = getRequiredInt(request, "worldY");
+        int plane = getOptionalInt(request, "plane", client.getPlane());
+        boolean dryRun = getOptionalBoolean(request, "dryRun", false);
+        WorldPoint worldPoint = new WorldPoint(worldX, worldY, plane);
+        LocalPoint localPoint = LocalPoint.fromWorld(client, worldPoint);
+        if (localPoint == null) {
+            throw new IllegalArgumentException("Target world tile is not in the loaded scene");
+        }
+
+        int param0 = localPoint.getSceneX();
+        int param1 = localPoint.getSceneY();
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("success", true);
+        response.addProperty("dryRun", dryRun);
+        response.addProperty("worldX", worldX);
+        response.addProperty("worldY", worldY);
+        response.addProperty("plane", plane);
+        response.addProperty("param0", param0);
+        response.addProperty("param1", param1);
+        response.addProperty("identifier", 0);
+        response.addProperty("itemId", -1);
+        response.addProperty("menuAction", MenuAction.WALK.name());
+        response.addProperty("option", "Walk here");
+        response.addProperty("target", "");
+
+        if (!dryRun) {
+            client.menuAction(param0, param1, MenuAction.WALK, 0, -1, "Walk here", "");
+        }
+
+        return gson.toJson(response);
+    }
+
     private Widget firstVisibleWidget(WidgetInfo... widgetInfos) {
         for (WidgetInfo widgetInfo : widgetInfos) {
             Widget widget = client.getWidget(widgetInfo);
@@ -1831,17 +1947,53 @@ public class ApiServer {
 
             JsonObject request;
             try {
-                String body = new String(t.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                request = gson.fromJson(body, JsonObject.class);
-                if (request == null) {
-                    throw new IllegalArgumentException("Request body must be a JSON object");
-                }
+                request = readJsonRequestBody(t);
             } catch (RuntimeException e) {
                 sendJsonErrorResponse(t, 400, "BAD_REQUEST", e.getMessage());
                 return;
             }
 
             handleOnClientThread(t, () -> invokeMenuActionJson(request));
+        }
+    }
+
+    class ActionWalkHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            if (!"POST".equalsIgnoreCase(t.getRequestMethod())) {
+                sendJsonErrorResponse(t, 405, "METHOD_NOT_ALLOWED", "Use POST with a JSON body");
+                return;
+            }
+
+            JsonObject request;
+            try {
+                request = readJsonRequestBody(t);
+            } catch (RuntimeException e) {
+                sendJsonErrorResponse(t, 400, "BAD_REQUEST", e.getMessage());
+                return;
+            }
+
+            handleOnClientThread(t, () -> invokeWalkActionJson(request));
+        }
+    }
+
+    class ActionWidgetHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            if (!"POST".equalsIgnoreCase(t.getRequestMethod())) {
+                sendJsonErrorResponse(t, 405, "METHOD_NOT_ALLOWED", "Use POST with a JSON body");
+                return;
+            }
+
+            JsonObject request;
+            try {
+                request = readJsonRequestBody(t);
+            } catch (RuntimeException e) {
+                sendJsonErrorResponse(t, 400, "BAD_REQUEST", e.getMessage());
+                return;
+            }
+
+            handleOnClientThread(t, () -> invokeWidgetActionJson(request));
         }
     }
 
