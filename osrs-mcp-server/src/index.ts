@@ -33,6 +33,7 @@ type RuneLiteSnapshot = {
   dialogue?: any;
   objects?: RuneLiteTarget[];
   groundItems?: RuneLiteTarget[];
+  players?: RuneLiteTarget[];
   inventory?: RuneLiteTarget[];
   bank?: RuneLiteTarget[];
   equipment?: RuneLiteTarget[];
@@ -256,6 +257,27 @@ function hasScreenPoint(target: RuneLiteTarget): boolean {
   return Number.isFinite(target.screenX) && Number.isFinite(target.screenY);
 }
 
+function targetsForType(snapshot: RuneLiteSnapshot, entityType: string): RuneLiteTarget[] {
+  switch (entityType.toLowerCase()) {
+    case "npc":
+    case "npcs":
+      return snapshot.npcs ?? [];
+    case "object":
+    case "objects":
+      return snapshot.objects ?? [];
+    case "ground_item":
+    case "grounditem":
+    case "grounditems":
+    case "item":
+      return snapshot.groundItems ?? [];
+    case "player":
+    case "players":
+      return snapshot.players ?? [];
+    default:
+      throw new Error(`Unsupported entityType: ${entityType}`);
+  }
+}
+
 function clientTargetSchema() {
   return {
     instanceId: z.string().optional().describe("Optional RuneLite plugin instanceId to target"),
@@ -349,6 +371,17 @@ server.tool("get_ground_items", "Get a list of items dropped on the ground with 
     };
   } catch (e: any) {
     return { content: [{ type: "text", text: errorText("fetching ground items", e) }] };
+  }
+});
+
+server.tool("get_players", "Get visible players with combat level, location, animation/interacting state, and screen coordinates when available", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
+  try {
+    const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port });
+    return {
+      content: [{ type: "text", text: JSON.stringify(snapshot.players ?? [], null, 2) }]
+    };
+  } catch (e: any) {
+    return { content: [{ type: "text", text: errorText("fetching players", e) }] };
   }
 });
 
@@ -512,6 +545,55 @@ server.tool(
       return { content: [{ type: "text", text: formatTarget(matches[0]) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("finding nearest ground item", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "verify_target_visible",
+  "Refresh the latest snapshot and verify a matching entity is visible, fresh, click-ready, and from the expected coordinate source without clicking.",
+  {
+    entityType: z.string().describe("npc, object, ground_item, or player"),
+    name: z.string().optional().describe("Entity name"),
+    id: z.number().optional().describe("Entity ID where available"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer nearest matching entity to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    coordinateSource: z.string().optional().describe("Optional required coordinateSource, for example clickbox or convexHull"),
+    ...clientTargetSchema(),
+  },
+  async ({ entityType, name, id, nearestToPlayer, maxAgeMs, coordinateSource, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const items = targetsForType(snapshot, entityType).filter((item: any) => targetMatches(item, name, id));
+      const sorted = sortNearestToPlayer(sortByDistance(items), nearestToPlayer ? snapshot.state?.location : null);
+      const target = coordinateSource
+        ? sorted.find((item) => item.coordinateSource === coordinateSource && hasScreenPoint(item))
+        : sorted.find((item) => hasScreenPoint(item));
+      requireFreshClickable(target, maxAgeMs ?? 600, coordinateSource);
+      return { content: [{ type: "text", text: JSON.stringify({ visible: true, target }, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: JSON.stringify({ visible: false, error: e.message }, null, 2) }] };
+    }
+  }
+);
+
+server.tool(
+  "get_vars",
+  "Read selected RuneLite varbit and varp values for quest/state checks without dumping every game variable.",
+  {
+    varbits: z.array(z.number()).optional().describe("Varbit IDs to read"),
+    varps: z.array(z.number()).optional().describe("VarPlayer/varp IDs to read"),
+    ...clientTargetSchema(),
+  },
+  async ({ varbits, varps, instanceId, playerName, port }) => {
+    try {
+      const api = await apiForTarget({ instanceId, playerName, port });
+      const res = await api.get("/vars", { params: { varbits: (varbits ?? []).join(","), varps: (varps ?? []).join(",") } });
+      return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("fetching vars", e) }] };
     }
   }
 );

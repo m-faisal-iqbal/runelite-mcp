@@ -128,9 +128,11 @@ public class ApiServer {
         server.createContext("/api/dialogue", new DialogueHandler());
         server.createContext("/api/objects", new ObjectHandler());
         server.createContext("/api/grounditems", new GroundItemHandler());
+        server.createContext("/api/players", new PlayersHandler());
         server.createContext("/api/bank", new BankHandler());
         server.createContext("/api/equipment", new EquipmentHandler());
         server.createContext("/api/skills", new SkillsHandler());
+        server.createContext("/api/vars", new VarsHandler());
         server.createContext("/api/debug/coordinates", new CoordinateDebugHandler());
         server.createContext("/api/snapshot", new SnapshotHandler());
         server.createContext("/api/stream", new StreamHandler());
@@ -208,6 +210,7 @@ public class ApiServer {
         final String dialogue;
         final String objects;
         final String groundItems;
+        final String players;
         final String inventory;
         final String bank;
         final String equipment;
@@ -221,6 +224,7 @@ public class ApiServer {
             String dialogue,
             String objects,
             String groundItems,
+            String players,
             String inventory,
             String bank,
             String equipment,
@@ -233,6 +237,7 @@ public class ApiServer {
             this.dialogue = dialogue;
             this.objects = objects;
             this.groundItems = groundItems;
+            this.players = players;
             this.inventory = inventory;
             this.bank = bank;
             this.equipment = equipment;
@@ -266,6 +271,7 @@ public class ApiServer {
         String dialogue = buildDialogueJson(capturedAt);
         String objects = buildObjectsJson(capturedAt);
         String groundItems = buildGroundItemsJson(capturedAt);
+        String players = buildPlayersJson(capturedAt);
         String inventory = buildInventoryJson(capturedAt);
         String bank = buildBankJson(capturedAt);
         String equipment = buildEquipmentJson(capturedAt);
@@ -278,12 +284,13 @@ public class ApiServer {
         snapshot.add("dialogue", gson.fromJson(dialogue, JsonElement.class));
         snapshot.add("objects", gson.fromJson(objects, JsonElement.class));
         snapshot.add("groundItems", gson.fromJson(groundItems, JsonElement.class));
+        snapshot.add("players", gson.fromJson(players, JsonElement.class));
         snapshot.add("inventory", gson.fromJson(inventory, JsonElement.class));
         snapshot.add("bank", gson.fromJson(bank, JsonElement.class));
         snapshot.add("equipment", gson.fromJson(equipment, JsonElement.class));
         snapshot.add("skills", gson.fromJson(skills, JsonElement.class));
 
-        return new GameStateSnapshot(capturedAt, state, npcs, dialogue, objects, groundItems, inventory, bank, equipment, skills, gson.toJson(snapshot));
+        return new GameStateSnapshot(capturedAt, state, npcs, dialogue, objects, groundItems, players, inventory, bank, equipment, skills, gson.toJson(snapshot));
     }
 
     private void addCaptureMeta(JsonObject response, long capturedAt) {
@@ -336,6 +343,8 @@ public class ApiServer {
                 return withCurrentAge(snapshot.objects);
             case "grounditems":
                 return withCurrentAge(snapshot.groundItems);
+            case "players":
+                return withCurrentAge(snapshot.players);
             case "inventory":
                 return withCurrentAge(snapshot.inventory);
             case "bank":
@@ -385,9 +394,11 @@ public class ApiServer {
         endpoints.add(endpoint("/api/dialogue", "Open NPC/player dialogue text, dialogue options, canvas coordinates, and absolute screen coordinates when available."));
         endpoints.add(endpoint("/api/objects", "Scene game object IDs, names, world coordinates, canvas coordinates, and absolute screen coordinates."));
         endpoints.add(endpoint("/api/grounditems", "Visible ground item IDs, names, quantities, world coordinates, canvas coordinates, and absolute screen coordinates."));
+        endpoints.add(endpoint("/api/players", "Visible players with combat level, world coordinates, animation/interacting state, and screen coordinates when available."));
         endpoints.add(endpoint("/api/bank", "Bank item IDs, names, quantities, and slots when the bank container is available."));
         endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
+        endpoints.add(endpoint("/api/vars?varbits=1,2&varps=3,4", "Read selected varbit and varp values for quest/state tools without dumping every game variable."));
         endpoints.add(endpoint("/api/debug/coordinates", "Canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data."));
         endpoints.add(endpoint("/api/snapshot", "Latest cached tick snapshot for state, NPCs, dialogue, objects, and ground items."));
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
@@ -977,6 +988,48 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private String buildPlayersJson(long capturedAt) {
+        JsonArray response = new JsonArray();
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            return gson.toJson(response);
+        }
+
+        List<Player> players = client.getPlayers();
+        for (Player player : players) {
+            if (player == null) {
+                continue;
+            }
+
+            JsonObject playerObj = new JsonObject();
+            addCaptureMeta(playerObj, capturedAt);
+            playerObj.addProperty("name", player.getName());
+            playerObj.addProperty("combatLevel", player.getCombatLevel());
+            playerObj.addProperty("animation", player.getAnimation());
+            playerObj.addProperty("healthRatio", player.getHealthRatio());
+            if (player.getInteracting() != null) {
+                playerObj.addProperty("interactingWith", player.getInteracting().getName());
+            }
+
+            WorldPoint wp = player.getWorldLocation();
+            if (wp != null) {
+                playerObj.addProperty("worldX", wp.getX());
+                playerObj.addProperty("worldY", wp.getY());
+                playerObj.addProperty("plane", wp.getPlane());
+                addDistanceToPlayer(playerObj, wp);
+                addEntityKey(playerObj, "player", player.getCombatLevel(), player.getName(), wp, null);
+            }
+
+            addRawLocalPoint(playerObj, player.getLocalLocation(), false, "localPoint");
+            addCanvasCoordinateFromShape(playerObj, player.getConvexHull(), "convexHull");
+            if (!hasCanvasCoordinates(playerObj)) {
+                playerObj.addProperty("coordinateWarning", "CONVEX_HULL_UNAVAILABLE");
+            }
+            response.add(playerObj);
+        }
+
+        return gson.toJson(response);
+    }
+
     private void addInventorySlotCoordinates(JsonObject itemObj, int slot) {
         Widget inventoryWidget = client.getWidget(WidgetInfo.INVENTORY);
         if (inventoryWidget == null || inventoryWidget.isHidden()) {
@@ -1236,6 +1289,50 @@ public class ApiServer {
         }
     }
 
+    private List<Integer> getCsvIntParam(Map<String, String> params, String key) {
+        List<Integer> values = new ArrayList<>();
+        String rawValue = params.get(key);
+        if (rawValue == null || rawValue.trim().isEmpty()) {
+            return values;
+        }
+
+        for (String part : rawValue.split(",")) {
+            try {
+                values.add(Integer.parseInt(part.trim()));
+            } catch (NumberFormatException e) {
+                log.debug("Ignoring invalid integer query value {}={}", key, part);
+            }
+        }
+        return values;
+    }
+
+    private String buildVarsJson(List<Integer> varbits, List<Integer> varps) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, System.currentTimeMillis());
+
+        JsonObject varbitValues = new JsonObject();
+        for (Integer id : varbits) {
+            try {
+                varbitValues.addProperty(String.valueOf(id), client.getVarbitValue(id));
+            } catch (RuntimeException e) {
+                varbitValues.addProperty(String.valueOf(id), "ERROR:" + e.getMessage());
+            }
+        }
+        response.add("varbits", varbitValues);
+
+        JsonObject varpValues = new JsonObject();
+        for (Integer id : varps) {
+            try {
+                varpValues.addProperty(String.valueOf(id), client.getVarpValue(id));
+            } catch (RuntimeException e) {
+                varpValues.addProperty(String.valueOf(id), "ERROR:" + e.getMessage());
+            }
+        }
+        response.add("varps", varpValues);
+
+        return gson.toJson(response);
+    }
+
     private String buildIdentityJson() {
         JsonObject response = new JsonObject();
         response.addProperty("instanceId", instanceId);
@@ -1366,6 +1463,16 @@ public class ApiServer {
         }
     }
 
+    class PlayersHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            if (sendCachedResponse(t, "players")) {
+                return;
+            }
+            handleOnClientThread(t, () -> buildPlayersJson(System.currentTimeMillis()));
+        }
+    }
+
     class BankHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
@@ -1393,6 +1500,16 @@ public class ApiServer {
                 return;
             }
             handleOnClientThread(t, () -> buildSkillsJson(System.currentTimeMillis()));
+        }
+    }
+
+    class VarsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            List<Integer> varbits = getCsvIntParam(params, "varbits");
+            List<Integer> varps = getCsvIntParam(params, "varps");
+            handleOnClientThread(t, () -> buildVarsJson(varbits, varps));
         }
     }
 

@@ -21,6 +21,7 @@ $HelperClasses = Join-Path $PluginRoot "build\runelite-dev-launcher"
 $PluginClasses = Join-Path $PluginRoot "build\classes\java\main"
 $PluginJar = Join-Path $PluginRoot "build\libs\osrs-mcp-plugin-1.0-SNAPSHOT.jar"
 $McpServerIndex = Join-Path $ServerRoot "build\index.js"
+$ApiPorts = 8080..8090
 
 function Write-Step($message) {
   Write-Host "[osrs-mcp] $message"
@@ -36,19 +37,46 @@ function Get-OsrsMcpServerProcesses {
     }
 }
 
-function Test-Api {
-  try {
-    Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8080/api/" -TimeoutSec 3 | Out-Null
-    return $true
-  } catch {
-    return $false
+function Get-ApiBaseUrl {
+  param(
+    [switch]$RequireCurrentSchema
+  )
+
+  foreach ($apiPort in $ApiPorts) {
+    $baseUrl = "http://localhost:$apiPort/api"
+    try {
+      $response = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/" -TimeoutSec 2
+      if (-not $RequireCurrentSchema -or (($response.Content -like "*/api/snapshot*") -and ($response.Content -like "*/api/identity*"))) {
+        return $baseUrl
+      }
+    } catch {
+      # Port is closed, stale, or responding too slowly. Try the next candidate.
+    }
   }
+
+  return $null
+}
+
+function Test-Api {
+  return [bool](Get-ApiBaseUrl)
 }
 
 function Test-CurrentApiSchema {
+  param(
+    [string]$BaseUrl
+  )
+
+  if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    $BaseUrl = Get-ApiBaseUrl -RequireCurrentSchema
+  }
+
+  if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    return $false
+  }
+
   try {
-    $response = Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8080/api/" -TimeoutSec 3
-    return $response.Content -like "*absolute screen coordinates*"
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/" -TimeoutSec 2
+    return ($response.Content -like "*/api/snapshot*") -and ($response.Content -like "*/api/identity*")
   } catch {
     return $false
   }
@@ -187,10 +215,11 @@ function Start-RuneLiteWithPlugin {
     Start-Sleep -Seconds 2
   }
 
-  $apiOk = Test-Api
-  if ($apiOk -and -not $RestartRuneLite) {
-    if (Test-CurrentApiSchema) {
-      Write-Step "RuneLite plugin API is already available at http://localhost:8080/api/."
+  $apiBaseUrl = Get-ApiBaseUrl
+  if ($apiBaseUrl -and -not $RestartRuneLite) {
+    $currentApiBaseUrl = Get-ApiBaseUrl -RequireCurrentSchema
+    if ($currentApiBaseUrl) {
+      Write-Step "RuneLite plugin API is already available at $currentApiBaseUrl/."
     } else {
       Write-Host ""
       Write-Host "RuneLite plugin API is responding, but it looks like an older plugin build."
@@ -220,8 +249,9 @@ function Start-RuneLiteWithPlugin {
 
   for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 1
-    if (Test-Api) {
-      Write-Step "RuneLite API is ready: http://localhost:8080/api/"
+    $currentApiBaseUrl = Get-ApiBaseUrl -RequireCurrentSchema
+    if ($currentApiBaseUrl) {
+      Write-Step "RuneLite API is ready: $currentApiBaseUrl/"
       return
     }
   }
