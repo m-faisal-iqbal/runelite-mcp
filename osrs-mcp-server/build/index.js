@@ -136,6 +136,11 @@ class StateCache {
         entry.inflight = undefined;
     }
     handleSseBlock(baseURL, block) {
+        const eventName = block
+            .split(/\r?\n/)
+            .find((line) => line.startsWith("event:"))
+            ?.slice(6)
+            .trim();
         const dataLines = block
             .split(/\r?\n/)
             .filter((line) => line.startsWith("data:"))
@@ -143,15 +148,24 @@ class StateCache {
         if (dataLines.length === 0) {
             return;
         }
-        const snapshot = JSON.parse(dataLines.join("\n"));
-        this.update(baseURL, snapshot);
-        this.entryFor(baseURL).streamLastEventAt = Date.now();
+        const parsed = JSON.parse(dataLines.join("\n"));
+        const entry = this.entryFor(baseURL);
+        if (!eventName || eventName === "snapshot") {
+            this.update(baseURL, parsed);
+        }
+        else if (eventName === "events") {
+            entry.recentEvents = parsed;
+        }
+        entry.streamLastEventAt = Date.now();
     }
 }
 const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
 mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
     ? configuredMouseSpeed
     : 300;
+const HUMANIZE_MOUSE = !["0", "false", "no"].includes(String(process.env.OSRS_HUMANIZE_MOUSE ?? "true").toLowerCase());
+const MOUSE_MIN_DELAY_MS = Math.max(0, Number(process.env.OSRS_MOUSE_MIN_DELAY_MS ?? "80") || 80);
+const MOUSE_MAX_DELAY_MS = Math.max(MOUSE_MIN_DELAY_MS, Number(process.env.OSRS_MOUSE_MAX_DELAY_MS ?? "240") || 240);
 const server = new McpServer({
     name: "osrs-mcp-server",
     version: "1.0.0",
@@ -290,7 +304,8 @@ function requireFreshClickable(target, maxAgeMs, coordinateSource) {
     }
 }
 async function clickPoint(x, y, rightClick) {
-    await mouse.setPosition(new Point(x, y));
+    await moveMouseHumanized(x, y);
+    await settleBeforeClick();
     if (rightClick) {
         await mouse.rightClick();
     }
@@ -299,13 +314,49 @@ async function clickPoint(x, y, rightClick) {
     }
 }
 async function movePoint(x, y) {
-    await mouse.setPosition(new Point(x, y));
+    await moveMouseHumanized(x, y);
 }
 function finiteNumber(value, fallback) {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 function clampInt(value, min, max) {
     return Math.max(min, Math.min(max, Math.round(value)));
+}
+function randomBetween(min, max) {
+    return min + Math.random() * (max - min);
+}
+function bezierPoint(start, control, end, t) {
+    const oneMinus = 1 - t;
+    return new Point(Math.round(oneMinus * oneMinus * start.x + 2 * oneMinus * t * control.x + t * t * end.x), Math.round(oneMinus * oneMinus * start.y + 2 * oneMinus * t * control.y + t * t * end.y));
+}
+async function moveMouseHumanized(x, y) {
+    const end = new Point(Math.round(x), Math.round(y));
+    if (!HUMANIZE_MOUSE) {
+        await mouse.setPosition(end);
+        return;
+    }
+    const start = await mouse.getPosition();
+    const distance = Math.hypot(end.x - start.x, end.y - start.y);
+    if (distance < 3) {
+        await mouse.setPosition(end);
+        return;
+    }
+    const normalX = -(end.y - start.y) / distance;
+    const normalY = (end.x - start.x) / distance;
+    const curve = randomBetween(-0.22, 0.22) * Math.min(distance, 420);
+    const control = new Point(Math.round((start.x + end.x) / 2 + normalX * curve + randomBetween(-12, 12)), Math.round((start.y + end.y) / 2 + normalY * curve + randomBetween(-12, 12)));
+    const points = [];
+    const steps = clampInt(distance / 32, 8, 28);
+    for (let i = 1; i <= steps; i += 1) {
+        const t = i / steps;
+        points.push(bezierPoint(start, control, end, t));
+    }
+    await mouse.move(points);
+}
+async function settleBeforeClick() {
+    if (HUMANIZE_MOUSE && MOUSE_MAX_DELAY_MS > 0) {
+        await sleep(Math.round(randomBetween(MOUSE_MIN_DELAY_MS, MOUSE_MAX_DELAY_MS)));
+    }
 }
 function canvasCaptureRect(debug, args) {
     if (debug?.canvasShowing === false) {
@@ -558,17 +609,19 @@ server.registerResource("latest-snapshot", "osrs://snapshot/latest", {
 });
 server.registerResource("recent-events", "osrs://events/recent", {
     title: "Recent OSRS Events",
-    description: "Recent event-style state for the selected OSRS client. Currently includes buffered RuneLite chat/game messages plus stream status.",
+    description: "Recent event-style state for the selected OSRS client, including plugin event hooks and chat/game messages.",
     mimeType: "application/json",
 }, async () => {
     const uri = "osrs://events/recent";
     try {
         const baseURL = await resolveRuneliteApi();
         const api = runeliteApi(baseURL);
+        const events = (await api.get("/events", { params: { limit: 80 } })).data;
         const chat = (await api.get("/chat", { params: { limit: 50 } })).data;
         return resourceText(uri, {
             baseURL,
             stream: snapshotStreamStatus(baseURL),
+            events,
             chat,
         });
     }
@@ -817,6 +870,11 @@ async function selectInventoryItemForUse(item, target, useRightClickMenu = true)
         await clickPoint(item.slotScreenX, item.slotScreenY);
     }
 }
+async function selectInventoryItemOption(item, option, target) {
+    await clickPoint(item.slotScreenX, item.slotScreenY, true);
+    await sleep(150);
+    return selectContextMenuOption(option, target, false);
+}
 async function selectContextMenuOption(text, target = {}, exact) {
     const baseURL = await resolveRuneliteApi(target);
     await assertClientReady(baseURL);
@@ -937,6 +995,74 @@ function buildActionVerification(snapshot, args) {
         checks,
         summary,
     };
+}
+function inventorySlotsUsed(snapshot) {
+    return (snapshot.inventory ?? []).filter((item) => item && item.id && item.id !== -1).length;
+}
+function healthPercent(snapshot) {
+    const current = Number(snapshot.state?.health);
+    const max = Number(snapshot.skills?.Hitpoints?.level ?? snapshot.skills?.["Hitpoints"]?.level);
+    if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
+        return undefined;
+    }
+    return (current / max) * 100;
+}
+function findFoodItem(snapshot, foodNames, foodName, foodId, slot) {
+    const names = [
+        ...(foodName ? [foodName] : []),
+        ...(foodNames ?? []),
+    ].map((name) => name.toLowerCase());
+    const defaultFoodNeedles = [
+        "shrimp", "sardine", "herring", "trout", "salmon", "tuna", "lobster", "swordfish",
+        "monkfish", "shark", "sea turtle", "manta ray", "anglerfish", "karambwan",
+        "cake", "pie", "pizza", "potato", "stew", "wine",
+    ];
+    return (snapshot.inventory ?? []).find((item) => {
+        if (slot !== undefined && item.slot !== slot) {
+            return false;
+        }
+        if (foodId !== undefined && item.id !== foodId) {
+            return false;
+        }
+        const itemName = String(item.name ?? "").toLowerCase();
+        if (names.length > 0) {
+            return names.some((name) => itemName.includes(name));
+        }
+        return defaultFoodNeedles.some((needle) => itemName.includes(needle));
+    });
+}
+function conditionMet(snapshot, args) {
+    switch (args.condition) {
+        case "inventory_full":
+            return { met: inventorySlotsUsed(snapshot) >= 28, value: inventorySlotsUsed(snapshot) };
+        case "inventory_quantity_at_least": {
+            const quantity = inventoryQuantity(snapshot, args.inventoryItemName, args.inventoryItemId);
+            return { met: quantity >= (args.inventoryQuantityAtLeast ?? 1), value: quantity };
+        }
+        case "chat_contains": {
+            const match = recentMessages(snapshot).find((message) => Number(message.capturedAt ?? 0) >= args.startedAt &&
+                matchesChatMessage(message, args.chatContains ?? "", args.caseSensitive, args.chatType));
+            return { met: Boolean(match), value: match };
+        }
+        case "entity_gone": {
+            const count = visibleEntityCount(snapshot, args.entityType, args.entityName, args.entityId);
+            return { met: count === 0, value: count };
+        }
+        case "location_reached": {
+            if (!Number.isFinite(args.worldX) || !Number.isFinite(args.worldY)) {
+                return { met: false, value: "worldX/worldY required" };
+            }
+            const distance = tileDistance(snapshot.state?.location, args.worldX, args.worldY, args.plane);
+            return { met: distance <= (args.radius ?? 1), value: distance };
+        }
+        case "idle":
+            return { met: isPlayerIdle(snapshot.state ?? {}), value: snapshot.state };
+        default:
+            throw new Error(`Unsupported condition: ${args.condition}`);
+    }
+}
+function cleanUiText(value) {
+    return String(value ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 // --- State Reading Tools ---
 server.tool("get_game_state", "Get current player state, location, and health", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
@@ -1938,6 +2064,18 @@ server.tool("get_chat_messages", "Read recent RuneLite chat/game messages buffer
         return { content: [{ type: "text", text: errorText("fetching chat messages", e) }] };
     }
 });
+server.tool("get_recent_events", "Read recent plugin event hooks such as chat, animation changes, item-container changes, and widget loads.", {
+    limit: z.number().optional().describe("Maximum events to return, default 50"),
+    ...clientTargetSchema(),
+}, async ({ limit, instanceId, playerName, port }) => {
+    try {
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/events", { params: { limit } });
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching recent events", e) }] };
+    }
+});
 server.tool("wait_until_idle", "Poll fresh snapshots until the player is idle or the timeout elapses.", {
     timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 10000"),
     pollMs: z.number().optional().describe("Polling interval in milliseconds, default 500"),
@@ -2133,6 +2271,250 @@ server.tool("verify_after_action", "Poll fresh snapshots until expected post-act
     }
     catch (e) {
         return { content: [{ type: "text", text: `Error verifying action result: ${e.message}` }] };
+    }
+});
+server.tool("handle_dialogue", "Continue dialogue and optionally select a dialogue option over several safe steps.", {
+    desiredOption: z.string().optional().describe("Option text to choose when dialogue options appear"),
+    optionIndex: z.number().optional().describe("1-based option index to choose when dialogue options appear"),
+    selectFirstOption: z.boolean().optional().describe("Select the first option if desiredOption/optionIndex are not provided. Defaults to false."),
+    maxSteps: z.number().optional().describe("Maximum dialogue actions to perform, default 8"),
+    waitMs: z.number().optional().describe("Delay after each action before re-reading dialogue, default 450"),
+    preferKeyboardContinue: z.boolean().optional().describe("Press Space for NPC/player dialogue continue, default true"),
+    ...clientTargetSchema(),
+}, async ({ desiredOption, optionIndex, selectFirstOption, maxSteps, waitMs, preferKeyboardContinue, instanceId, playerName, port }) => {
+    const targetClient = { instanceId, playerName, port };
+    const steps = [];
+    const limit = Math.max(1, maxSteps ?? 8);
+    const delay = Math.max(100, waitMs ?? 450);
+    try {
+        const baseURL = await resolveRuneliteApi(targetClient);
+        await assertClientReady(baseURL);
+        for (let step = 0; step < limit; step += 1) {
+            const snapshot = await getSnapshotForBase(baseURL, true);
+            const dialogue = snapshot.dialogue ?? {};
+            const type = dialogue.type ?? "NONE";
+            if (type === "NONE") {
+                return { content: [{ type: "text", text: JSON.stringify({ done: true, steps, dialogue }, null, 2) }] };
+            }
+            if (type === "NPC_DIALOGUE" || type === "PLAYER_DIALOGUE") {
+                if (preferKeyboardContinue ?? true) {
+                    await keyboard.type(Key.Space);
+                    steps.push({ action: "continue", method: "keyboard_space", dialogueType: type, text: cleanUiText(dialogue.text) });
+                }
+                else if (Number.isFinite(dialogue.continueScreenX) && Number.isFinite(dialogue.continueScreenY)) {
+                    await clickPoint(dialogue.continueScreenX, dialogue.continueScreenY);
+                    steps.push({ action: "continue", method: "click_continue_widget", dialogueType: type, text: cleanUiText(dialogue.text) });
+                }
+                else {
+                    throw new Error("Dialogue continue coordinate is unavailable");
+                }
+                await sleep(delay);
+                continue;
+            }
+            if (type === "DIALOGUE_OPTIONS") {
+                const options = Array.isArray(dialogue.options) ? dialogue.options : [];
+                const selectedIndex = optionIndex !== undefined
+                    ? optionIndex - 1
+                    : desiredOption
+                        ? options.findIndex((option) => cleanUiText(option.text).toLowerCase().includes(desiredOption.toLowerCase()))
+                        : (selectFirstOption ? 0 : -1);
+                if (selectedIndex < 0 || selectedIndex >= options.length) {
+                    return {
+                        content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    done: false,
+                                    needsChoice: true,
+                                    message: "Dialogue options are open; provide desiredOption, optionIndex, or selectFirstOption.",
+                                    options: options.map((option, index) => ({ index: index + 1, text: cleanUiText(option.text) })),
+                                    steps,
+                                }, null, 2)
+                            }]
+                    };
+                }
+                const selected = options[selectedIndex];
+                if (Number.isFinite(selected.screenX) && Number.isFinite(selected.screenY)) {
+                    await clickPoint(selected.screenX, selected.screenY);
+                    steps.push({ action: "select_option", method: "click_option_widget", index: selectedIndex + 1, text: cleanUiText(selected.text) });
+                }
+                else if (selectedIndex >= 0 && selectedIndex <= 8) {
+                    await keyboard.type([Key.Num1, Key.Num2, Key.Num3, Key.Num4, Key.Num5, Key.Num6, Key.Num7, Key.Num8, Key.Num9][selectedIndex]);
+                    steps.push({ action: "select_option", method: "keyboard_number", index: selectedIndex + 1, text: cleanUiText(selected.text) });
+                }
+                else {
+                    throw new Error("Selected dialogue option has no click coordinate and no supported number key");
+                }
+                await sleep(delay);
+                continue;
+            }
+            return { content: [{ type: "text", text: JSON.stringify({ done: false, unsupportedDialogueType: type, dialogue, steps }, null, 2) }] };
+        }
+        const finalSnapshot = await getSnapshotForTarget(targetClient, true);
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({ done: false, reason: "MAX_STEPS_REACHED", steps, dialogue: finalSnapshot.snapshot.dialogue ?? {} }, null, 2)
+                }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error handling dialogue: ${e.message}` }] };
+    }
+});
+server.tool("eat_food_when", "Eat a matching food item only when hitpoints are below the requested threshold.", {
+    hpBelow: z.number().optional().describe("Eat when current hitpoints are below this value"),
+    hpBelowPercent: z.number().optional().describe("Eat when current hitpoints percent is below this value"),
+    foodName: z.string().optional().describe("Preferred food name substring"),
+    foodNames: z.array(z.string()).optional().describe("Preferred food name substrings, checked before default food names"),
+    foodId: z.number().optional().describe("Preferred food item id"),
+    slot: z.number().optional().describe("Specific inventory slot to eat from"),
+    waitMs: z.number().optional().describe("Delay after eating before verifying, default 700"),
+    ...clientTargetSchema(),
+}, async ({ hpBelow, hpBelowPercent, foodName, foodNames, foodId, slot, waitMs, instanceId, playerName, port }) => {
+    const targetClient = { instanceId, playerName, port };
+    try {
+        const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+        await assertClientReady(baseURL);
+        const currentHp = Number(snapshot.state?.health);
+        const currentPercent = healthPercent(snapshot);
+        const shouldEatByHp = hpBelow === undefined || (Number.isFinite(currentHp) && currentHp < hpBelow);
+        const shouldEatByPercent = hpBelowPercent === undefined || (currentPercent !== undefined && currentPercent < hpBelowPercent);
+        if (!shouldEatByHp || !shouldEatByPercent) {
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({ ate: false, reason: "THRESHOLD_NOT_MET", health: currentHp, healthPercent: currentPercent, hpBelow, hpBelowPercent }, null, 2)
+                    }]
+            };
+        }
+        const item = findFoodItem(snapshot, foodNames, foodName, foodId, slot);
+        requireFreshInventoryItem(item, 1000);
+        const beforeHp = currentHp;
+        const selected = await selectInventoryItemOption(item, "Eat", targetClient);
+        await sleep(Math.max(100, waitMs ?? 700));
+        const after = await getSnapshotForBase(baseURL, true);
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        ate: true,
+                        item: { name: item.name, id: item.id, slot: item.slot },
+                        selected,
+                        before: { health: beforeHp, healthPercent: currentPercent },
+                        after: { health: after.state?.health, healthPercent: healthPercent(after) },
+                    }, null, 2)
+                }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error eating food: ${e.message}` }] };
+    }
+});
+server.tool("perform_until", "Repeat one high-level entity interaction until a snapshot condition is met or the iteration limit is reached.", {
+    actionEntityType: z.enum(["npc", "object", "ground_item", "player"]).describe("Entity type to interact with each iteration"),
+    actionName: z.string().optional().describe("Entity name to interact with"),
+    actionId: z.number().optional().describe("Entity id to interact with"),
+    actionOption: z.string().describe("Menu option to choose, for example Chop down, Mine, Bank, Talk-to"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching action target, default true"),
+    condition: z.enum(["inventory_full", "inventory_quantity_at_least", "chat_contains", "entity_gone", "location_reached", "idle"]).describe("Stop condition"),
+    inventoryItemName: z.string().optional().describe("Item name for inventory_quantity_at_least"),
+    inventoryItemId: z.number().optional().describe("Item id for inventory_quantity_at_least"),
+    inventoryQuantityAtLeast: z.number().optional().describe("Required quantity for inventory_quantity_at_least"),
+    chatContains: z.string().optional().describe("Message text for chat_contains"),
+    chatType: z.string().optional().describe("Optional chat type for chat_contains"),
+    caseSensitive: z.boolean().optional().describe("Whether chat matching is case-sensitive"),
+    entityType: z.enum(["npc", "object", "ground_item", "player"]).optional().describe("Entity type for entity_gone"),
+    entityName: z.string().optional().describe("Entity name for entity_gone"),
+    entityId: z.number().optional().describe("Entity id for entity_gone"),
+    worldX: z.number().optional().describe("World X for location_reached"),
+    worldY: z.number().optional().describe("World Y for location_reached"),
+    plane: z.number().optional().describe("Plane for location_reached"),
+    radius: z.number().optional().describe("Radius for location_reached, default 1"),
+    maxIterations: z.number().optional().describe("Maximum interactions to perform, default 10"),
+    settleMs: z.number().optional().describe("Delay after each interaction before condition polling, default 700"),
+    pollMs: z.number().optional().describe("Condition polling interval after each interaction, default 500"),
+    pollTimeoutMs: z.number().optional().describe("Maximum condition polling time after each interaction, default 8000"),
+    ...clientTargetSchema(),
+}, async ({ actionEntityType, actionName, actionId, actionOption, nearestToPlayer, condition, inventoryItemName, inventoryItemId, inventoryQuantityAtLeast, chatContains, chatType, caseSensitive, entityType, entityName, entityId, worldX, worldY, plane, radius, maxIterations, settleMs, pollMs, pollTimeoutMs, instanceId, playerName, port, }) => {
+    const targetClient = { instanceId, playerName, port };
+    const startedAt = Date.now();
+    const iterations = [];
+    const limit = Math.max(1, maxIterations ?? 10);
+    const interval = Math.max(100, pollMs ?? 500);
+    const perActionTimeout = Math.max(100, pollTimeoutMs ?? 8000);
+    try {
+        for (let iteration = 0; iteration <= limit; iteration += 1) {
+            const before = await getSnapshotForTarget(targetClient, true);
+            const beforeCondition = conditionMet(before.snapshot, {
+                condition,
+                startedAt,
+                inventoryItemName,
+                inventoryItemId,
+                inventoryQuantityAtLeast,
+                chatContains,
+                chatType,
+                caseSensitive,
+                entityType,
+                entityName,
+                entityId,
+                worldX,
+                worldY,
+                plane,
+                radius,
+            });
+            if (beforeCondition.met) {
+                return { content: [{ type: "text", text: JSON.stringify({ done: true, reason: "CONDITION_MET", iterations, condition: beforeCondition }, null, 2) }] };
+            }
+            if (iteration === limit) {
+                return { content: [{ type: "text", text: JSON.stringify({ done: false, reason: "MAX_ITERATIONS_REACHED", iterations, lastCondition: beforeCondition }, null, 2) }] };
+            }
+            const action = await interactWithTarget({
+                entityType: actionEntityType,
+                name: actionName,
+                id: actionId,
+                option: actionOption,
+                nearestToPlayer: nearestToPlayer ?? true,
+                instanceId,
+                playerName,
+                port,
+            });
+            await sleep(Math.max(100, settleMs ?? 700));
+            const pollStartedAt = Date.now();
+            let lastCondition = null;
+            while (Date.now() - pollStartedAt <= perActionTimeout) {
+                const after = await getSnapshotForTarget(targetClient, true);
+                lastCondition = conditionMet(after.snapshot, {
+                    condition,
+                    startedAt,
+                    inventoryItemName,
+                    inventoryItemId,
+                    inventoryQuantityAtLeast,
+                    chatContains,
+                    chatType,
+                    caseSensitive,
+                    entityType,
+                    entityName,
+                    entityId,
+                    worldX,
+                    worldY,
+                    plane,
+                    radius,
+                });
+                if (lastCondition.met) {
+                    iterations.push({ iteration: iteration + 1, action, condition: lastCondition });
+                    return { content: [{ type: "text", text: JSON.stringify({ done: true, reason: "CONDITION_MET_AFTER_ACTION", iterations, condition: lastCondition }, null, 2) }] };
+                }
+                if (condition === "idle" && lastCondition.met) {
+                    break;
+                }
+                await sleep(interval);
+            }
+            iterations.push({ iteration: iteration + 1, action, condition: lastCondition });
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ done: false, reason: "LOOP_EXITED", iterations }, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error performing action loop: ${e.message}` }] };
     }
 });
 server.tool("get_stream_status", "Inspect the MCP server's live /api/stream snapshot cache status for a RuneLite client.", {
@@ -2345,6 +2727,17 @@ server.tool("hover_ground_item", "Refresh the newest ground-item snapshot, find 
     }
 });
 // --- Action Tools (OS-Level) ---
+server.tool("get_input_profile", "Inspect OS fallback input settings. In-client menu actions are still preferred over OS mouse input.", {}, async () => ({
+    content: [{
+            type: "text",
+            text: JSON.stringify({
+                humanizeMouse: HUMANIZE_MOUSE,
+                mouseSpeed: mouse.config.mouseSpeed,
+                mouseDelayMs: { min: MOUSE_MIN_DELAY_MS, max: MOUSE_MAX_DELAY_MS },
+                note: "These settings apply only to nut-js OS fallback mouse movement; interact_with and invoke_* use in-client actions when possible.",
+            }, null, 2)
+        }]
+}));
 server.tool("move_mouse", "Moves the hardware mouse to an absolute desktop screen X/Y coordinate without clicking. Use this to verify RuneLite screenX/screenY safely.", {
     x: z.number().describe("The absolute desktop screen X coordinate, usually a screenX value from the RuneLite API"),
     y: z.number().describe("The absolute desktop screen Y coordinate, usually a screenY value from the RuneLite API")
@@ -2365,7 +2758,8 @@ server.tool("move_mouse_and_click", "Moves the hardware mouse to an absolute des
     rightClick: z.boolean().optional().describe("Whether to right click instead of left click")
 }, async ({ x, y, rightClick }) => {
     try {
-        await mouse.setPosition(new Point(x, y));
+        await moveMouseHumanized(x, y);
+        await settleBeforeClick();
         if (rightClick) {
             await mouse.rightClick();
         }

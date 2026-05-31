@@ -1,11 +1,15 @@
 package com.osrsmcp;
 
 import javax.inject.Inject;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.WidgetLoaded;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
@@ -81,6 +85,41 @@ public class OsrsMcpPlugin extends Plugin
 				event.getMessage(),
 				event.getTimestamp()
 			);
+		}
+	}
+
+	@Subscribe
+	public void onAnimationChanged(AnimationChanged event)
+	{
+		if (apiServer != null && event.getActor() != null)
+		{
+			Actor actor = event.getActor();
+			apiServer.addAnimationChanged(
+				actor.getName(),
+				actor.getAnimation(),
+				actor == client.getLocalPlayer()
+			);
+		}
+	}
+
+	@Subscribe
+	public void onItemContainerChanged(ItemContainerChanged event)
+	{
+		if (apiServer != null && event.getItemContainer() != null)
+		{
+			apiServer.addItemContainerChanged(
+				event.getContainerId(),
+				event.getItemContainer().getItems().length
+			);
+		}
+	}
+
+	@Subscribe
+	public void onWidgetLoaded(WidgetLoaded event)
+	{
+		if (apiServer != null)
+		{
+			apiServer.addWidgetLoaded(event.getGroupId());
 		}
 	}
 }

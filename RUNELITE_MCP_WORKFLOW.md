@@ -47,7 +47,9 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
   - `osrs://client/identity`
 - MCP prompts are available for common play loops: `experienced-player-loop`, `woodcut-and-bank`, `complete-dialogue`, and `withdraw-and-equip`.
 - The cached snapshot now includes `prayers`, `combat`, `chat`, and `interfaceSummary` in addition to player/entity/inventory state.
+- `/api/events` and `get_recent_events` expose recent plugin hooks such as chat, animation changes, item-container changes, and widget loads; `/api/stream` now emits both `snapshot` and `events` SSE messages.
 - Prefer `interact_with` for named object/NPC/player/ground-item interactions. It opens the context menu, then invokes the selected RuneLite menu action in-client using the real menu params.
+- Prefer `handle_dialogue` for NPC/player dialogue loops, `eat_food_when` for threshold-based food safety, and `perform_until` for repeated actions such as chopping/mining until inventory-full or a chat/entity condition.
 - `click_object`, `click_npc`, and `click_ground_item` accept an optional `option`; when set, they use the same hybrid `interact_with` path instead of a blind screen click.
 - `walk_to` now tries a loaded-scene in-client WALK action first in `auto` mode, then falls back to minimap click for farther tiles.
 - Use `invoke_menu_action`, `invoke_walk_action`, and `invoke_widget_action` directly only when you already have or are deliberately testing raw RuneLite action params. Prefer `dryRun: true` first.
@@ -57,6 +59,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - Use `calculate_path_to` to inspect bounded straight-line minimap steps before navigation, then `walk_path_to` to click only the next step.
 - After any click or walk, use `verify_after_action` for combined checks, or `wait_until_idle`, `wait_until_location`, and `wait_for_chat_message` for single-condition waits.
 - Use `capture_canvas_screenshot` before/after risky actions, or pass `canvasX`/`canvasY` from a target to capture a focused crop around the clickable area.
+- OS fallback mouse movement is humanized by default; inspect it with `get_input_profile` and disable with `OSRS_HUMANIZE_MOUSE=false` if coordinate testing needs instant movement.
 - Prefer `use_inventory_item_on_object`, `use_inventory_item_on_npc`, and `use_inventory_item_on_inventory_item` for item-use flows instead of manually chaining raw item and target clicks.
 - Prefer `right_click_npc`, `right_click_object`, `right_click_ground_item`, then `select_option` for actions that need a RuneLite context menu; `select_option` uses in-client action params when RuneLite exposes them.
 - Use `get_combat`/`click_special_attack` for combat controls and `get_shop`/`buy_item`/`sell_item` for shop interactions.

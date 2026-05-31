@@ -75,6 +75,8 @@ public class ApiServer {
     private static final long STREAM_MAX_DURATION_MS = 300000;
     private static final int FIRST_API_PORT = 8080;
     private static final int LAST_API_PORT = 8090;
+    private static final int RECENT_CHAT_LIMIT = 100;
+    private static final int RECENT_EVENT_LIMIT = 200;
     private static final Logger log = LoggerFactory.getLogger(ApiServer.class);
 
     private HttpServer server;
@@ -87,6 +89,7 @@ public class ApiServer {
     private final Gson gson = new Gson();
     private final AtomicReference<GameStateSnapshot> latestSnapshot = new AtomicReference<>();
     private final List<String> recentChatMessages = new ArrayList<>();
+    private final List<String> recentEvents = new ArrayList<>();
     private volatile long gameTick;
     private volatile long clientTick;
     private volatile long lastSnapshotAt;
@@ -157,6 +160,7 @@ public class ApiServer {
         server.createContext("/api/context_menu", new ContextMenuHandler());
         server.createContext("/api/minimap", new MinimapHandler());
         server.createContext("/api/chat", new ChatHandler());
+        server.createContext("/api/events", new EventsHandler());
         server.createContext("/api/identity", new IdentityHandler());
     }
 
@@ -428,6 +432,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/context_menu", "Current RuneLite right-click/context menu options with approximate screen coordinates when open."));
         endpoints.add(endpoint("/api/minimap", "Minimap bounds and optional world tile projection for walk tools."));
         endpoints.add(endpoint("/api/chat", "Recent buffered RuneLite chat/game messages for feedback and error detection."));
+        endpoints.add(endpoint("/api/events", "Recent plugin event buffer including chat, animation changes, item-container changes, and widget loads."));
         endpoints.add(endpoint("/api/identity", "Stable plugin instance identity, player name when available, port, and last snapshot time."));
         response.add("endpoints", endpoints);
 
@@ -851,8 +856,44 @@ public class ApiServer {
 
         synchronized (recentChatMessages) {
             recentChatMessages.add(gson.toJson(chatMessage));
-            while (recentChatMessages.size() > 100) {
+            while (recentChatMessages.size() > RECENT_CHAT_LIMIT) {
                 recentChatMessages.remove(0);
+            }
+        }
+        addPluginEvent("ChatMessage", chatMessage);
+    }
+
+    public void addAnimationChanged(String actorName, int animation, boolean localPlayer) {
+        JsonObject details = new JsonObject();
+        details.addProperty("actorName", actorName != null ? actorName : "");
+        details.addProperty("animation", animation);
+        details.addProperty("localPlayer", localPlayer);
+        addPluginEvent("AnimationChanged", details);
+    }
+
+    public void addItemContainerChanged(int containerId, int itemCount) {
+        JsonObject details = new JsonObject();
+        details.addProperty("containerId", containerId);
+        details.addProperty("itemCount", itemCount);
+        addPluginEvent("ItemContainerChanged", details);
+    }
+
+    public void addWidgetLoaded(int groupId) {
+        JsonObject details = new JsonObject();
+        details.addProperty("groupId", groupId);
+        addPluginEvent("WidgetLoaded", details);
+    }
+
+    public void addPluginEvent(String eventType, JsonObject details) {
+        JsonObject event = new JsonObject();
+        addCaptureMeta(event, System.currentTimeMillis());
+        event.addProperty("eventType", eventType != null ? eventType : "");
+        event.add("details", details != null ? details : new JsonObject());
+
+        synchronized (recentEvents) {
+            recentEvents.add(gson.toJson(event));
+            while (recentEvents.size() > RECENT_EVENT_LIMIT) {
+                recentEvents.remove(0);
             }
         }
     }
@@ -1562,6 +1603,24 @@ public class ApiServer {
         return buildChatJson(System.currentTimeMillis(), limit);
     }
 
+    private String buildEventsJson(long capturedAt, int limit) {
+        JsonArray events = new JsonArray();
+        synchronized (recentEvents) {
+            int start = Math.max(0, recentEvents.size() - Math.max(1, limit));
+            for (int i = start; i < recentEvents.size(); i++) {
+                events.add(gson.fromJson(recentEvents.get(i), JsonElement.class));
+            }
+        }
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.add("events", events);
+        return withCurrentAge(gson.toJson(response));
+    }
+
+    private String buildEventsJson(int limit) {
+        return buildEventsJson(System.currentTimeMillis(), limit);
+    }
+
     private void addVisibleWidgetSummary(JsonArray widgets, String label, Widget widget, long capturedAt) {
         if (widget == null || widget.isHidden()) {
             return;
@@ -1941,6 +2000,7 @@ public class ApiServer {
         response.addProperty("instanceId", instanceId);
         response.addProperty("apiVersion", 2);
         response.addProperty("supportsConcurrentStreams", true);
+        response.addProperty("supportsEventBuffer", true);
         response.addProperty("port", port);
         response.addProperty("baseUrl", getBaseUrl());
         response.addProperty("lastSeen", System.currentTimeMillis());
@@ -2268,6 +2328,10 @@ public class ApiServer {
                         os.write(event.getBytes(StandardCharsets.UTF_8));
                         os.flush();
                     }
+                    String events = buildEventsJson(50);
+                    String event = "event: events\n" + "data: " + events + "\n\n";
+                    os.write(event.getBytes(StandardCharsets.UTF_8));
+                    os.flush();
                     try {
                         Thread.sleep(STREAM_INTERVAL_MS);
                     } catch (InterruptedException e) {
@@ -2315,6 +2379,15 @@ public class ApiServer {
             Map<String, String> params = parseQuery(t);
             int limit = getIntParam(params, "limit", 20);
             sendResponse(t, 200, buildChatJson(limit));
+        }
+    }
+
+    class EventsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            int limit = getIntParam(params, "limit", 50);
+            sendResponse(t, 200, buildEventsJson(limit));
         }
     }
 
