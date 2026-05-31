@@ -1,76 +1,150 @@
-# OSRSMCP (RuneLite MCP Server) Implementation Plan
+# OSRS MCP Implementation Plan And Runbook
 
-This document outlines the architecture and steps to build a Model Context Protocol (MCP) server for Old School RuneScape (OSRS) via RuneLite. 
+This project connects RuneLite game-state reads to a local Model Context Protocol server. The working design is a three-part loop:
 
-## User Review Required
+1. RuneLite plugin reads game state on the RuneLite client thread.
+2. Local HTTP API exposes JSON at `http://localhost:8080/api/...`.
+3. TypeScript MCP server turns those endpoints into AI tools and uses `nut-js` for OS-level mouse/keyboard actions.
 
-> [!TIP]
-> **The "Hybrid Computer Use" Approach (Ban-Safe)**
-> We will use a hybrid approach to allow the AI to play the game without triggering ban-detection:
-> 1. **Perfect State (No Vision Needed):** We build a Standard RuneLite plugin. Its only job is to read the exact game state from memory (inventory, nearby NPCs, objects, **and UI dialogues**) and calculate both RuneLite canvas coordinates (`canvasX/canvasY`) and absolute desktop screen coordinates (`screenX/screenY`) for clickable targets.
-> 2. **External Actions:** The Node.js MCP server receives these exact coordinates over the local API.
-> 3. **OS-Level Controls:** Using inspiration from projects like `Windows-MCP`, the Node.js server takes control of your actual computer mouse and keyboard at the OS level to click and type smoothly.
+Automation may be against game rules depending on how it is used. This project should be treated as a local technical integration, not a guarantee of account safety.
 
-## How the AI Understands Dialogues and Quests
-
-You asked a fantastic question: *How will the AI talk to characters on Tutorial Island or type a name?*
-
-RuneScape's entire user interface—including the chatbox, NPC dialogues, the username creation screen, and quest journals—is built using **Widgets**. The RuneLite API allows us to perfectly read the text and state of any Widget on the screen.
-
-**Here is the loop for talking to an NPC:**
-1. **Reading the Dialogue:** The RuneLite Plugin checks for open Widgets. It detects an NPC dialogue and reads the exact text: *"RuneScape Guide: Welcome to RuneScape! Before you can get started, you need to create a name."*
-2. **Identifying Options:** The plugin also finds the "Click here to continue" button or any dialogue choices (e.g., "1. Yes", "2. No") and calculates exact absolute desktop `screenX/screenY` coordinates for nut-js to click.
-3. **Sending to AI:** The plugin sends this text and coordinate data back to the AI via the MCP Server.
-4. **AI Decision:** The AI reads the text, understands it's in a conversation, and decides to click "Continue". It tells the MCP Server: `click(x, y)`.
-5. **Typing Text:** When the AI reaches the Name Creation screen, the plugin tells the AI: *"Widget 'Enter name:' is active."* The AI then uses an OS-level keyboard command `type_text("MyCoolBot123")` and presses Enter.
-
-Because we are extracting the exact text directly from the game's memory, the AI doesn't need to struggle with reading blurry text from screenshots. It gets the dialogue handed to it perfectly as a string!
-
-## Architecture
+## Current Architecture
 
 ```mermaid
 graph LR
-    AI[AI Agent / Claude] <-->|stdio / MCP Protocol| MCP[Node.js MCP Server]
-    MCP <-->|REST HTTP API| HTTP[Standard RuneLite Plugin]
-    MCP -.->|OS Mouse/Keyboard Inputs| OS[Operating System]
-    HTTP -->|Reads State, Widgets & Screen Coords| OS
+    AI["AI / Codex MCP client"] <-->|"stdio / MCP"| MCP["Node.js MCP server"]
+    MCP <-->|"HTTP localhost:8080"| API["RuneLite plugin API"]
+    API -->|"ClientThread-safe reads"| RL["RuneLite client"]
+    MCP -.->|"nut-js mouse/keyboard"| OS["Windows desktop"]
 ```
 
-## Proposed Changes
+## RuneLite Plugin
 
-### 1. RuneLite Plugin (Java)
-We will create a standard RuneLite plugin project structure using Gradle.
-#### [NEW] `h:/runelite-mcp/osrs-mcp-plugin/build.gradle`
-Configures the standard RuneLite API dependencies.
-#### [NEW] `h:/runelite-mcp/osrs-mcp-plugin/src/main/java/com/osrsmcp/OsrsMcpPlugin.java`
-The main plugin class. It will start a local HTTP server on port `8080`.
-#### [NEW] `h:/runelite-mcp/osrs-mcp-plugin/src/main/java/com/osrsmcp/ApiServer.java`
-Serves endpoints that project 3D game coordinates to RuneLite canvas coordinates using `Perspective.localToCanvas`, adds the canvas location on screen to produce absolute desktop `screenX/screenY`, and extracts Widget text:
-- `GET /api/state`: Returns player stats and state.
-- `GET /api/inventory`: Returns items and their screen X/Y.
-- `GET /api/entities`: Returns nearby NPCs/Objects and their screen X/Y.
-- **`GET /api/dialogue`**: Reads the `Widget` system to return any currently open NPC text, player text, or dialogue choices, along with the screen X/Y bounds of the buttons to click.
+Main files:
 
-### 2. MCP Server (Node.js/TypeScript)
-We will create a Node.js project for the MCP server.
-#### [NEW] `h:/runelite-mcp/osrs-mcp-server/package.json`
-Dependencies: `@modelcontextprotocol/sdk`, `axios`, `typescript`, and an OS automation library like `@nut-tree/nut-js` (or similar tools from `Windows-MCP`).
-#### [NEW] `h:/runelite-mcp/osrs-mcp-server/src/index.ts`
-Initializes an `McpServer` over stdio. Registers tools for the AI:
-- `get_game_state`: Fetches game data.
-- `get_dialogue_state`: Checks if the player is currently in a conversation and what options are available.
-- `move_mouse_and_click`: Uses OS automation to move the mouse and click.
-- `type_text`: Uses OS automation to type characters on the keyboard (for naming accounts, chatting, etc.).
+- `osrs-mcp-plugin/src/main/java/com/osrsmcp/OsrsMcpPlugin.java`
+- `osrs-mcp-plugin/src/main/java/com/osrsmcp/ApiServer.java`
 
-## Verification Plan
+Important implementation details:
 
-### Automated Tests
-- Test the local HTTP API to ensure it correctly extracts dialogue text when an NPC is spoken to.
+- `ClientThread` is injected into `OsrsMcpPlugin` and passed to `ApiServer`.
+- Every RuneLite API read in HTTP handlers runs through `clientThread.invoke(...)` and a timeout-backed `CompletableFuture`.
+- Timeout/failure responses are controlled JSON errors instead of uncaught thread exceptions.
+- `ItemManager` is injected for item names.
+- Game object names come from `client.getObjectDefinition(obj.getId()).getName()`.
+- NPC names use `npc.getName()` with definition fallback.
 
-### Manual Verification
-1. Build and load the Java plugin into standard RuneLite.
-2. Start the Node.js MCP server.
-3. Log into an account and talk to the Lumbridge Guide (or any NPC).
-4. Ask the AI: "What is the NPC saying to me right now?"
-5. The AI should fetch the dialogue state and reply with the exact text the NPC is saying.
-6. Ask the AI: "Click continue to progress the dialogue." The AI will click the specific X/Y coordinate of the continue button.
+## HTTP Endpoints
+
+- `GET /api/` - endpoint index
+- `GET /api/state` - player login status, name, health, run energy, world location
+- `GET /api/inventory` - item IDs, names, quantities, slots
+- `GET /api/npcs` - nearby NPCs, names, world location, click coordinates
+- `GET /api/dialogue` - NPC/player dialogue, options, continue/options coordinates
+- `GET /api/objects` - scene objects, names, world location, click coordinates
+- `GET /api/grounditems` - ground item IDs, names, quantities, locations
+- `GET /api/bank` - bank item IDs, names, quantities, slots
+- `GET /api/equipment` - equipment item IDs, names, quantities, slots
+- `GET /api/skills` - real level, boosted level, XP
+- `GET /api/debug/coordinates` - canvas origin, canvas size, DPI transform, mouse position, player coordinate debug
+
+## Coordinate Contract
+
+For clickable game entities:
+
+- `rawCanvasX/rawCanvasY` are the raw `Perspective.localToCanvas(...)` projection.
+- `canvasX/canvasY` are the selected click target inside the RuneLite canvas.
+- `screenX/screenY` are absolute desktop coordinates for `nut-js`.
+- `screenX/screenY` are only emitted when the target point is inside the visible RuneLite canvas.
+- `coordinateWarning` explains why click-ready coordinates are missing.
+
+Object and NPC targeting:
+
+- Game objects use `obj.getClickbox()` and click the center of the clickbox bounds.
+- NPCs use `npc.getConvexHull()` and click the center of the hull bounds.
+- Objects/NPCs do not fall back to unsafe tile/local-point coordinates for `screenX/screenY`.
+- Ground items still use tile local point coordinates because RuneLite does not expose the same object clickbox shape for them in this implementation.
+
+DPI/window behavior:
+
+- The plugin records `canvasOriginX/canvasOriginY` from `client.getCanvas().getLocationOnScreen()`.
+- Screen coordinates are derived from canvas origin plus canvas target, adjusted by the Java graphics transform for DPI scaling.
+- RuneLite does not need to be fullscreen. Coordinates were verified with the canvas at `(1120, 28)` and size `792x1007`.
+- If RuneLite is minimized/off-screen, `screenX/screenY` are withheld and `coordinateWarning` is returned.
+
+## MCP Server
+
+Main file:
+
+- `osrs-mcp-server/src/index.ts`
+
+Tools:
+
+- `get_game_state`
+- `get_inventory`
+- `get_npcs`
+- `get_dialogue`
+- `get_game_objects`
+- `get_ground_items`
+- `get_bank`
+- `get_equipment`
+- `get_skills`
+- `get_coordinate_debug`
+- `move_mouse_and_click`
+- `type_text`
+- `press_key`
+
+Runtime configuration:
+
+- `OSRS_MOUSE_SPEED`, default `300`
+- `OSRS_RUNELITE_API`, default `http://localhost:8080/api`
+- `OSRS_API_TIMEOUT_MS`, default `3000`
+
+`move_mouse_and_click` expects absolute desktop `screenX/screenY` from API results. Do not pass `canvasX/canvasY` to it.
+
+## Codex MCP Config
+
+The new project uses a separate MCP entry:
+
+```toml
+[mcp_servers.osrs_mcp_server]
+command = 'C:\Program Files\nodejs\node.exe'
+args = [ 'H:\runelite-mcp\osrs-mcp-server\build\index.js' ]
+startup_timeout_sec = 30
+```
+
+Do not overwrite any older `[mcp_servers.osrs_runelite]` entry.
+
+## Build And Run
+
+Preferred scripts from repo root:
+
+- `Build-OSRS-MCP.bat` - compile/package plugin and build TypeScript server only.
+- `Start-OSRS-MCP.bat` - build and start RuneLite with the plugin when RuneLite is not already running. It will not close an open RuneLite client.
+- `Restart-OSRS-MCP.bat` - explicit restart path. It warns first, then closes RuneLite and starts the local plugin launcher.
+
+The scripts use:
+
+- RuneLite bundled JRE: `%LOCALAPPDATA%\RuneLite\jre\bin\java.exe`
+- Cached RuneLite jars: `%USERPROFILE%\.runelite\repository2`
+- ECJ compiler downloaded to `%TEMP%\codex-runelite-tools`
+
+This avoids requiring Java, Gradle, or IntelliJ on `PATH`.
+
+## Verification
+
+Known passing checks:
+
+- `cmd /c npm run build` in `H:\runelite-mcp\osrs-mcp-server`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-OsrsMcp.ps1 -BuildOnly`
+- MCP stdio smoke test lists all tools.
+- Runtime API `/api/debug/coordinates` returns canvas/DPI data.
+- Runtime test chopped 5 nearby normal trees using only `coordinateSource: "clickbox"` and absolute `screenX/screenY`; normal logs increased from 5 to 10.
+
+Before clicking entities:
+
+1. Query `/api/debug/coordinates` and confirm `canvasOnScreen: true`.
+2. Query `/api/objects` or `/api/npcs`.
+3. Use only entries with `coordinateSource: "clickbox"` for objects or `coordinateSource: "convexHull"` for NPCs.
+4. Use only entries that include `screenX/screenY`.
+5. Pass those `screenX/screenY` values to `move_mouse_and_click`.

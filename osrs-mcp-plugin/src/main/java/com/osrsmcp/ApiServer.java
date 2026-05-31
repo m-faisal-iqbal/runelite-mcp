@@ -253,6 +253,15 @@ public class ApiServer {
         return false;
     }
 
+    private boolean isCanvasPointVisible(int canvasX, int canvasY) {
+        Component canvas = client.getCanvas();
+        if (canvas == null) {
+            return false;
+        }
+
+        return canvasX >= 0 && canvasY >= 0 && canvasX < canvas.getWidth() && canvasY < canvas.getHeight();
+    }
+
     private void addCanvasAndScreenCoordinates(JsonObject response, int canvasX, int canvasY) {
         response.addProperty("canvasX", canvasX);
         response.addProperty("canvasY", canvasY);
@@ -268,9 +277,12 @@ public class ApiServer {
             response.addProperty("screenScaleX", getCanvasScaleX());
             response.addProperty("screenScaleY", getCanvasScaleY());
             response.addProperty("canvasOnScreen", isCanvasOnAnyScreen(canvasOrigin));
-            if (isCanvasOnAnyScreen(canvasOrigin)) {
+            response.addProperty("canvasPointVisible", isCanvasPointVisible(canvasX, canvasY));
+            if (isCanvasOnAnyScreen(canvasOrigin) && isCanvasPointVisible(canvasX, canvasY)) {
                 response.addProperty("screenX", toNutScreenX(awtScreenX));
                 response.addProperty("screenY", toNutScreenY(awtScreenY));
+            } else if (!isCanvasPointVisible(canvasX, canvasY)) {
+                response.addProperty("coordinateWarning", "CANVAS_POINT_OUTSIDE_VISIBLE_CANVAS");
             } else {
                 response.addProperty("coordinateWarning", "CANVAS_OFFSCREEN_OR_MINIMIZED");
             }
@@ -292,9 +304,12 @@ public class ApiServer {
             response.addProperty("screenScaleX", getCanvasScaleX());
             response.addProperty("screenScaleY", getCanvasScaleY());
             response.addProperty("canvasOnScreen", isCanvasOnAnyScreen(canvasOrigin));
-            if (isCanvasOnAnyScreen(canvasOrigin)) {
+            response.addProperty(prefix + "CanvasPointVisible", isCanvasPointVisible(canvasX, canvasY));
+            if (isCanvasOnAnyScreen(canvasOrigin) && isCanvasPointVisible(canvasX, canvasY)) {
                 response.addProperty(prefix + "ScreenX", toNutScreenX(awtScreenX));
                 response.addProperty(prefix + "ScreenY", toNutScreenY(awtScreenY));
+            } else if (!isCanvasPointVisible(canvasX, canvasY)) {
+                response.addProperty("coordinateWarning", "CANVAS_POINT_OUTSIDE_VISIBLE_CANVAS");
             } else {
                 response.addProperty("coordinateWarning", "CANVAS_OFFSCREEN_OR_MINIMIZED");
             }
@@ -347,7 +362,7 @@ public class ApiServer {
         return response.has("canvasX") && response.has("canvasY");
     }
 
-    private void addRawLocalPoint(JsonObject response, LocalPoint lp) {
+    private void addRawLocalPoint(JsonObject response, LocalPoint lp, boolean useAsFallback, String fallbackSource) {
         if (lp == null) {
             return;
         }
@@ -356,8 +371,8 @@ public class ApiServer {
         if (rawPoint != null) {
             response.addProperty("rawCanvasX", rawPoint.getX());
             response.addProperty("rawCanvasY", rawPoint.getY());
-            if (!hasCanvasCoordinates(response)) {
-                response.addProperty("coordinateSource", "localPoint");
+            if (useAsFallback && !hasCanvasCoordinates(response)) {
+                response.addProperty("coordinateSource", fallbackSource);
                 addCanvasAndScreenCoordinates(response, rawPoint.getX(), rawPoint.getY());
             }
         }
@@ -474,7 +489,7 @@ public class ApiServer {
                 playerJson.addProperty("worldY", wp.getY());
                 playerJson.addProperty("plane", wp.getPlane());
             }
-            addRawLocalPoint(playerJson, player.getLocalLocation());
+            addRawLocalPoint(playerJson, player.getLocalLocation(), true, "localPoint");
             Shape hull = player.getConvexHull();
             if (hull != null) {
                 addBounds(playerJson, "clickboxBounds", hull.getBounds());
@@ -576,8 +591,11 @@ public class ApiServer {
                 npcObj.addProperty("worldY", wp.getY());
 
                 LocalPoint lp = npc.getLocalLocation();
-                addRawLocalPoint(npcObj, lp);
+                addRawLocalPoint(npcObj, lp, false, "localPoint");
                 addCanvasCoordinateFromShape(npcObj, npc.getConvexHull(), "convexHull");
+                if (!hasCanvasCoordinates(npcObj)) {
+                    npcObj.addProperty("coordinateWarning", "CONVEX_HULL_UNAVAILABLE");
+                }
                 response.add(npcObj);
             }
             return gson.toJson(response);
@@ -672,8 +690,11 @@ public class ApiServer {
                                     jsonObj.addProperty("worldY", wp.getY());
 
                                     LocalPoint lp = obj.getLocalLocation();
-                                    addRawLocalPoint(jsonObj, lp);
+                                    addRawLocalPoint(jsonObj, lp, false, "localPoint");
                                     addCanvasCoordinateFromShape(jsonObj, obj.getClickbox(), "clickbox");
+                                    if (!hasCanvasCoordinates(jsonObj)) {
+                                        jsonObj.addProperty("coordinateWarning", "CLICKBOX_UNAVAILABLE");
+                                    }
                                     response.add(jsonObj);
                                 }
                             }
@@ -711,7 +732,7 @@ public class ApiServer {
                             jsonObj.addProperty("worldY", wp.getY());
 
                             LocalPoint lp = tile.getLocalLocation();
-                            addRawLocalPoint(jsonObj, lp);
+                            addRawLocalPoint(jsonObj, lp, true, "tileLocalPoint");
                             response.add(jsonObj);
                         }
                     }

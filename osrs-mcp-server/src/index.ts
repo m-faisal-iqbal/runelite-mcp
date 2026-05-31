@@ -14,117 +14,132 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-const RUNELITE_API = "http://localhost:8080/api";
+const RUNELITE_API = process.env.OSRS_RUNELITE_API ?? "http://localhost:8080/api";
+const configuredApiTimeoutMs = Number(process.env.OSRS_API_TIMEOUT_MS ?? "3000");
+const API_TIMEOUT_MS = Number.isFinite(configuredApiTimeoutMs) && configuredApiTimeoutMs > 0
+  ? configuredApiTimeoutMs
+  : 3000;
+
+const runeliteApi = axios.create({
+  baseURL: RUNELITE_API,
+  timeout: API_TIMEOUT_MS,
+});
+
+function errorText(action: string, e: any): string {
+  const status = e?.response?.status ? ` HTTP ${e.response.status}` : "";
+  const responseData = e?.response?.data ? ` ${JSON.stringify(e.response.data)}` : "";
+  return `Error ${action}:${status} ${e?.message ?? String(e)}${responseData}`;
+}
 
 // --- State Reading Tools ---
 
 server.tool("get_game_state", "Get current player state, location, and health", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/state`);
+    const res = await runeliteApi.get("/state");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching state: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching state", e) }] };
   }
 });
 
 server.tool("get_inventory", "Get the items currently in the player's inventory", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/inventory`);
+    const res = await runeliteApi.get("/inventory");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching inventory: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching inventory", e) }] };
   }
 });
 
 server.tool("get_npcs", "Get a list of nearby NPCs with canvas coordinates and absolute desktop screen coordinates", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/npcs`);
+    const res = await runeliteApi.get("/npcs");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching NPCs: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching NPCs", e) }] };
   }
 });
 
 server.tool("get_dialogue", "Check for open NPC dialogues, player dialogues, or dialogue options with absolute desktop screen coordinates when clickable", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/dialogue`);
+    const res = await runeliteApi.get("/dialogue");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching dialogue: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching dialogue", e) }] };
   }
 });
 
 server.tool("get_game_objects", "Get a list of interactable game objects (trees, doors, rocks) with names and absolute desktop screen coordinates", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/objects`);
+    const res = await runeliteApi.get("/objects");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching game objects: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching game objects", e) }] };
   }
 });
 
 server.tool("get_ground_items", "Get a list of items dropped on the ground with names and absolute desktop screen coordinates", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/grounditems`);
+    const res = await runeliteApi.get("/grounditems");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching ground items: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching ground items", e) }] };
   }
 });
 
 server.tool("get_bank", "Get all items currently in the player's bank (if the bank interface is open)", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/bank`);
+    const res = await runeliteApi.get("/bank");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching bank: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching bank", e) }] };
   }
 });
 
 server.tool("get_equipment", "Get all items currently equipped by the player", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/equipment`);
+    const res = await runeliteApi.get("/equipment");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching equipment: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching equipment", e) }] };
   }
 });
 
 server.tool("get_skills", "Get the player's level, boosted level, and XP for all 23 skills", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/skills`);
+    const res = await runeliteApi.get("/skills");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching skills: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching skills", e) }] };
   }
 });
 
 server.tool("get_coordinate_debug", "Get RuneLite canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data", {}, async () => {
   try {
-    const res = await axios.get(`${RUNELITE_API}/debug/coordinates`);
+    const res = await runeliteApi.get("/debug/coordinates");
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
     };
   } catch (e: any) {
-    return { content: [{ type: "text", text: `Error fetching coordinate debug: ${e.message}` }] };
+    return { content: [{ type: "text", text: errorText("fetching coordinate debug", e) }] };
   }
 });
 
