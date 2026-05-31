@@ -13,8 +13,11 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
+import net.runelite.api.Prayer;
+import net.runelite.api.Quest;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
+import net.runelite.api.QuestState;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.Perspective;
@@ -133,6 +136,10 @@ public class ApiServer {
         server.createContext("/api/equipment", new EquipmentHandler());
         server.createContext("/api/skills", new SkillsHandler());
         server.createContext("/api/vars", new VarsHandler());
+        server.createContext("/api/quest_state", new QuestStateHandler());
+        server.createContext("/api/prayers", new PrayersHandler());
+        server.createContext("/api/combat", new CombatHandler());
+        server.createContext("/api/shop", new ShopHandler());
         server.createContext("/api/debug/coordinates", new CoordinateDebugHandler());
         server.createContext("/api/snapshot", new SnapshotHandler());
         server.createContext("/api/stream", new StreamHandler());
@@ -399,6 +406,10 @@ public class ApiServer {
         endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
         endpoints.add(endpoint("/api/vars?varbits=1,2&varps=3,4", "Read selected varbit and varp values for quest/state tools without dumping every game variable."));
+        endpoints.add(endpoint("/api/quest_state?name=Cook%27s%20Assistant", "Read RuneLite quest state by name, enum name, or id; omit name for all quest states."));
+        endpoints.add(endpoint("/api/prayers", "Prayer level, active prayers, prayer varbits, and prayer/quick-prayer orb click coordinates."));
+        endpoints.add(endpoint("/api/combat", "Combat style widgets, auto-retaliate widget, tab coordinates, and current player combat state."));
+        endpoints.add(endpoint("/api/shop", "Visible shop/trade action widgets and shop inventory-side container data when a shop interface is open."));
         endpoints.add(endpoint("/api/debug/coordinates", "Canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data."));
         endpoints.add(endpoint("/api/snapshot", "Latest cached tick snapshot for state, NPCs, dialogue, objects, and ground items."));
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
@@ -558,6 +569,53 @@ public class ApiServer {
             addBounds(response, prefix + "Bounds", bounds);
             addPrefixedCanvasAndScreenCoordinates(response, prefix, (int) bounds.getCenterX(), (int) bounds.getCenterY());
         }
+    }
+
+    private JsonObject buildWidgetJson(String label, WidgetInfo widgetInfo, Widget widget, long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("label", label);
+        if (widgetInfo != null) {
+            response.addProperty("widgetInfo", widgetInfo.name());
+            response.addProperty("packedId", widgetInfo.getPackedId());
+            response.addProperty("groupId", widgetInfo.getGroupId());
+            response.addProperty("childId", widgetInfo.getChildId());
+        }
+
+        if (widget == null) {
+            response.addProperty("available", false);
+            return response;
+        }
+
+        response.addProperty("available", true);
+        response.addProperty("hidden", widget.isHidden());
+        response.addProperty("text", widget.getText() != null ? widget.getText() : "");
+        response.addProperty("name", widget.getName() != null ? widget.getName() : "");
+        response.addProperty("itemId", widget.getItemId());
+        response.addProperty("itemQuantity", widget.getItemQuantity());
+
+        String[] actions = widget.getActions();
+        JsonArray actionsJson = new JsonArray();
+        if (actions != null) {
+            for (String action : actions) {
+                if (action != null && !action.trim().isEmpty()) {
+                    actionsJson.add(action);
+                }
+            }
+        }
+        response.add("actions", actionsJson);
+
+        Rectangle bounds = widget.getBounds();
+        if (bounds != null && !bounds.isEmpty()) {
+            addBounds(response, "bounds", bounds);
+            response.addProperty("coordinateSource", "widgetBounds");
+            addCanvasAndScreenCoordinates(response, (int) bounds.getCenterX(), (int) bounds.getCenterY());
+        }
+        return response;
+    }
+
+    private void addWidgetControl(JsonArray controls, String label, WidgetInfo widgetInfo, long capturedAt) {
+        controls.add(buildWidgetJson(label, widgetInfo, client.getWidget(widgetInfo), capturedAt));
     }
 
     private void addBounds(JsonObject response, String property, Rectangle bounds) {
@@ -1333,6 +1391,169 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private boolean questMatches(Quest quest, String query) {
+        if (query == null || query.trim().isEmpty()) {
+            return true;
+        }
+
+        String normalizedQuery = query.trim().toLowerCase().replace("_", " ");
+        if (String.valueOf(quest.getId()).equals(normalizedQuery)) {
+            return true;
+        }
+
+        String enumName = quest.name().toLowerCase().replace("_", " ");
+        String displayName = quest.getName().toLowerCase();
+        return enumName.equals(normalizedQuery) ||
+            displayName.equals(normalizedQuery) ||
+            enumName.contains(normalizedQuery) ||
+            displayName.contains(normalizedQuery);
+    }
+
+    private String buildQuestStateJson(String query) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, System.currentTimeMillis());
+        response.addProperty("query", query != null ? query : "");
+
+        JsonArray quests = new JsonArray();
+        for (Quest quest : Quest.values()) {
+            if (!questMatches(quest, query)) {
+                continue;
+            }
+
+            JsonObject questJson = new JsonObject();
+            addCaptureMeta(questJson, System.currentTimeMillis());
+            questJson.addProperty("enumName", quest.name());
+            questJson.addProperty("name", quest.getName());
+            questJson.addProperty("id", quest.getId());
+            try {
+                QuestState state = quest.getState(client);
+                questJson.addProperty("state", state != null ? state.name() : "UNKNOWN");
+            } catch (RuntimeException e) {
+                questJson.addProperty("state", "ERROR");
+                questJson.addProperty("message", e.getMessage());
+            }
+            quests.add(questJson);
+        }
+
+        response.addProperty("count", quests.size());
+        response.add("quests", quests);
+        return gson.toJson(response);
+    }
+
+    private String buildPrayersJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("level", client.getRealSkillLevel(Skill.PRAYER));
+        response.addProperty("boostedLevel", client.getBoostedSkillLevel(Skill.PRAYER));
+
+        JsonArray controls = new JsonArray();
+        addWidgetControl(controls, "prayerOrb", WidgetInfo.MINIMAP_PRAYER_ORB, capturedAt);
+        addWidgetControl(controls, "quickPrayerOrb", WidgetInfo.MINIMAP_QUICK_PRAYER_ORB, capturedAt);
+        addWidgetControl(controls, "quickPrayerPrayers", WidgetInfo.QUICK_PRAYER_PRAYERS, capturedAt);
+        response.add("controls", controls);
+
+        int activeCount = 0;
+        JsonArray prayers = new JsonArray();
+        for (Prayer prayer : Prayer.values()) {
+            JsonObject prayerJson = new JsonObject();
+            addCaptureMeta(prayerJson, capturedAt);
+            prayerJson.addProperty("enumName", prayer.name());
+            prayerJson.addProperty("varbit", prayer.getVarbit());
+            boolean active = client.isPrayerActive(prayer);
+            prayerJson.addProperty("active", active);
+            if (active) {
+                activeCount++;
+            }
+            try {
+                prayerJson.addProperty("varbitValue", client.getVarbitValue(prayer.getVarbit()));
+            } catch (RuntimeException e) {
+                prayerJson.addProperty("varbitValueError", e.getMessage());
+            }
+            prayers.add(prayerJson);
+        }
+        response.addProperty("activeCount", activeCount);
+        response.add("prayers", prayers);
+        return gson.toJson(response);
+    }
+
+    private String buildCombatJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+
+        Player player = client.getLocalPlayer();
+        if (player != null) {
+            response.addProperty("playerAnimation", player.getAnimation());
+            response.addProperty("playerIdle", player.getAnimation() == -1 && player.getInteracting() == null);
+            if (player.getInteracting() != null) {
+                response.addProperty("interactingWith", player.getInteracting().getName());
+            }
+        }
+
+        JsonArray controls = new JsonArray();
+        addWidgetControl(controls, "combatTabFixed", WidgetInfo.FIXED_VIEWPORT_COMBAT_TAB, capturedAt);
+        addWidgetControl(controls, "combatTabResizable", WidgetInfo.RESIZABLE_VIEWPORT_COMBAT_TAB, capturedAt);
+        addWidgetControl(controls, "style1", WidgetInfo.COMBAT_STYLE_ONE, capturedAt);
+        addWidgetControl(controls, "style2", WidgetInfo.COMBAT_STYLE_TWO, capturedAt);
+        addWidgetControl(controls, "style3", WidgetInfo.COMBAT_STYLE_THREE, capturedAt);
+        addWidgetControl(controls, "style4", WidgetInfo.COMBAT_STYLE_FOUR, capturedAt);
+        addWidgetControl(controls, "autoRetaliate", WidgetInfo.COMBAT_AUTO_RETALIATE, capturedAt);
+        response.add("controls", controls);
+        return gson.toJson(response);
+    }
+
+    private boolean hasActionContaining(Widget widget, String needle) {
+        String[] actions = widget.getActions();
+        if (actions == null) {
+            return false;
+        }
+        String lowerNeedle = needle.toLowerCase();
+        for (String action : actions) {
+            if (action != null && action.toLowerCase().contains(lowerNeedle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void addActionWidgets(JsonArray response, Widget[] widgets, long capturedAt, int limit) {
+        if (widgets == null || response.size() >= limit) {
+            return;
+        }
+
+        for (Widget widget : widgets) {
+            if (widget == null || response.size() >= limit) {
+                continue;
+            }
+            if (!widget.isHidden() && (hasActionContaining(widget, "buy") || hasActionContaining(widget, "sell"))) {
+                response.add(buildWidgetJson("shopAction", null, widget, capturedAt));
+            }
+        }
+    }
+
+    private String buildShopJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("topLevelInterfaceId", client.getTopLevelInterfaceId());
+
+        Widget inventoryContainer = client.getWidget(WidgetInfo.SHOP_INVENTORY_ITEMS_CONTAINER);
+        response.add("inventoryContainer", buildWidgetJson("shopInventoryItemsContainer", WidgetInfo.SHOP_INVENTORY_ITEMS_CONTAINER, inventoryContainer, capturedAt));
+
+        JsonArray actionWidgets = new JsonArray();
+        Widget[] roots = client.getWidgetRoots();
+        if (roots != null) {
+            for (Widget root : roots) {
+                if (root == null || actionWidgets.size() >= 120) {
+                    continue;
+                }
+                addActionWidgets(actionWidgets, root.getNestedChildren(), capturedAt, 120);
+                addActionWidgets(actionWidgets, root.getDynamicChildren(), capturedAt, 120);
+                addActionWidgets(actionWidgets, root.getStaticChildren(), capturedAt, 120);
+            }
+        }
+        response.add("actionWidgets", actionWidgets);
+        return gson.toJson(response);
+    }
+
     private String buildIdentityJson() {
         JsonObject response = new JsonObject();
         response.addProperty("instanceId", instanceId);
@@ -1510,6 +1731,36 @@ public class ApiServer {
             List<Integer> varbits = getCsvIntParam(params, "varbits");
             List<Integer> varps = getCsvIntParam(params, "varps");
             handleOnClientThread(t, () -> buildVarsJson(varbits, varps));
+        }
+    }
+
+    class QuestStateHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            String query = params.containsKey("name") ? params.get("name") : params.get("id");
+            handleOnClientThread(t, () -> buildQuestStateJson(query));
+        }
+    }
+
+    class PrayersHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> buildPrayersJson(System.currentTimeMillis()));
+        }
+    }
+
+    class CombatHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> buildCombatJson(System.currentTimeMillis()));
+        }
+    }
+
+    class ShopHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> buildShopJson(System.currentTimeMillis()));
         }
     }
 

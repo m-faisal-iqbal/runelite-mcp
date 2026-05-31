@@ -483,6 +483,139 @@ server.tool("get_vars", "Read selected RuneLite varbit and varp values for quest
         return { content: [{ type: "text", text: errorText("fetching vars", e) }] };
     }
 });
+server.tool("get_quest_state", "Read RuneLite quest state by quest name, enum name, or id. Omit name to list all quest states.", {
+    name: z.string().optional().describe("Quest name or enum name, for example Cook's Assistant or COOKS_ASSISTANT"),
+    id: z.number().optional().describe("RuneLite quest id"),
+    ...clientTargetSchema(),
+}, async ({ name, id, instanceId, playerName, port }) => {
+    try {
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/quest_state", {
+            params: { name: name ?? id },
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching quest state", e) }] };
+    }
+});
+server.tool("get_prayers", "Read prayer level, active prayers, prayer varbits, and prayer/quick-prayer orb coordinates.", {
+    ...clientTargetSchema(),
+}, async ({ instanceId, playerName, port }) => {
+    try {
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/prayers");
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching prayers", e) }] };
+    }
+});
+server.tool("click_prayer_orb", "Click the minimap prayer orb or quick-prayer orb using fresh widget screen coordinates.", {
+    orb: z.enum(["prayer", "quick_prayer"]).describe("Which orb to click"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+}, async ({ orb, rightClick, instanceId, playerName, port }) => {
+    try {
+        const targetClient = { instanceId, playerName, port };
+        const baseURL = await resolveRuneliteApi(targetClient);
+        await assertClientReady(baseURL);
+        const res = await runeliteApi(baseURL).get("/prayers");
+        const label = orb === "quick_prayer" ? "quickPrayerOrb" : "prayerOrb";
+        const target = (res.data?.controls ?? []).find((control) => control.label === label);
+        requireFreshClickable(target, 1000, "widgetBounds");
+        await clickPoint(target.screenX, target.screenY, rightClick);
+        return { content: [{ type: "text", text: `Clicked ${label} at ${target.screenX}, ${target.screenY}.` }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error clicking prayer orb: ${e.message}` }] };
+    }
+});
+server.tool("get_combat", "Read combat style widgets, auto-retaliate widget, combat tab coordinates, and player combat state.", {
+    ...clientTargetSchema(),
+}, async ({ instanceId, playerName, port }) => {
+    try {
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/combat");
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching combat controls", e) }] };
+    }
+});
+server.tool("click_combat_style", "Click one of the four visible combat style widgets using fresh widget screen coordinates.", {
+    style: z.number().min(1).max(4).describe("Combat style number 1-4"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+}, async ({ style, rightClick, instanceId, playerName, port }) => {
+    try {
+        const targetClient = { instanceId, playerName, port };
+        const baseURL = await resolveRuneliteApi(targetClient);
+        await assertClientReady(baseURL);
+        const res = await runeliteApi(baseURL).get("/combat");
+        const target = (res.data?.controls ?? []).find((control) => control.label === `style${style}`);
+        requireFreshClickable(target, 1000, "widgetBounds");
+        await clickPoint(target.screenX, target.screenY, rightClick);
+        return { content: [{ type: "text", text: `Clicked combat style ${style} at ${target.screenX}, ${target.screenY}.` }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error clicking combat style: ${e.message}` }] };
+    }
+});
+server.tool("toggle_auto_retaliate", "Click the auto-retaliate combat widget using fresh widget screen coordinates.", {
+    ...clientTargetSchema(),
+}, async ({ instanceId, playerName, port }) => {
+    try {
+        const targetClient = { instanceId, playerName, port };
+        const baseURL = await resolveRuneliteApi(targetClient);
+        await assertClientReady(baseURL);
+        const res = await runeliteApi(baseURL).get("/combat");
+        const target = (res.data?.controls ?? []).find((control) => control.label === "autoRetaliate");
+        requireFreshClickable(target, 1000, "widgetBounds");
+        await clickPoint(target.screenX, target.screenY);
+        return { content: [{ type: "text", text: `Clicked auto-retaliate at ${target.screenX}, ${target.screenY}.` }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error toggling auto-retaliate: ${e.message}` }] };
+    }
+});
+server.tool("get_shop", "Read visible shop/trade action widgets with Buy/Sell actions and click-ready widget coordinates.", {
+    ...clientTargetSchema(),
+}, async ({ instanceId, playerName, port }) => {
+    try {
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/shop");
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching shop", e) }] };
+    }
+});
+server.tool("click_shop_action", "Click a visible shop/trade widget whose actions include Buy/Sell text, optionally filtered by item name or item id.", {
+    actionText: z.string().describe("Action text to match, for example Buy 1, Buy, Sell 5"),
+    itemName: z.string().optional().describe("Optional item widget name/text substring"),
+    itemId: z.number().optional().describe("Optional item id"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+}, async ({ actionText, itemName, itemId, rightClick, instanceId, playerName, port }) => {
+    try {
+        const targetClient = { instanceId, playerName, port };
+        const baseURL = await resolveRuneliteApi(targetClient);
+        await assertClientReady(baseURL);
+        const res = await runeliteApi(baseURL).get("/shop");
+        const actionNeedle = actionText.toLowerCase();
+        const itemNeedle = itemName?.toLowerCase();
+        const target = (res.data?.actionWidgets ?? []).find((widget) => {
+            const actions = Array.isArray(widget.actions) ? widget.actions.join(" ").toLowerCase() : "";
+            const label = `${widget.name ?? ""} ${widget.text ?? ""}`.toLowerCase();
+            return actions.includes(actionNeedle) &&
+                (itemId === undefined || widget.itemId === itemId) &&
+                (!itemNeedle || label.includes(itemNeedle));
+        });
+        requireFreshClickable(target, 1000, "widgetBounds");
+        await clickPoint(target.screenX, target.screenY, rightClick);
+        return { content: [{ type: "text", text: `Clicked shop action at ${target.screenX}, ${target.screenY}.` }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error clicking shop action: ${e.message}` }] };
+    }
+});
 server.tool("get_minimap", "Read minimap bounds and optionally project a world tile to minimap screen coordinates.", {
     worldX: z.number().optional().describe("Optional target world X tile to project"),
     worldY: z.number().optional().describe("Optional target world Y tile to project"),
