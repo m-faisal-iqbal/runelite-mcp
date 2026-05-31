@@ -12,6 +12,10 @@ final class GameStateSnapshot {
     final String bank;
     final String equipment;
     final String skills;
+    final String prayers;
+    final String combat;
+    final String chat;
+    final String interfaceSummary;
     final String snapshot;
 
     GameStateSnapshot(
@@ -26,6 +30,10 @@ final class GameStateSnapshot {
         String bank,
         String equipment,
         String skills,
+        String prayers,
+        String combat,
+        String chat,
+        String interfaceSummary,
         String snapshot
     ) {
         this.capturedAt = capturedAt;
@@ -39,6 +47,10 @@ final class GameStateSnapshot {
         this.bank = bank;
         this.equipment = equipment;
         this.skills = skills;
+        this.prayers = prayers;
+        this.combat = combat;
+        this.chat = chat;
+        this.interfaceSummary = interfaceSummary;
         this.snapshot = snapshot;
     }
 }

@@ -2,7 +2,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import axios from "axios";
-import { mouse, Point, keyboard, Key } from "@nut-tree-fork/nut-js";
+import { readFile, mkdir } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree-fork/nut-js";
 class StateCache {
     ttlMs;
     apiTimeoutMs;
@@ -298,6 +301,76 @@ async function clickPoint(x, y, rightClick) {
 async function movePoint(x, y) {
     await mouse.setPosition(new Point(x, y));
 }
+function finiteNumber(value, fallback) {
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function clampInt(value, min, max) {
+    return Math.max(min, Math.min(max, Math.round(value)));
+}
+function canvasCaptureRect(debug, args) {
+    if (debug?.canvasShowing === false) {
+        throw new Error("RuneLite canvas is not visible");
+    }
+    const canvasWidth = finiteNumber(debug?.canvasWidth, 0);
+    const canvasHeight = finiteNumber(debug?.canvasHeight, 0);
+    const originX = finiteNumber(debug?.canvasOriginNutX, NaN);
+    const originY = finiteNumber(debug?.canvasOriginNutY, NaN);
+    const scaleX = finiteNumber(debug?.screenScaleX, 1);
+    const scaleY = finiteNumber(debug?.screenScaleY, 1);
+    if (!canvasWidth || !canvasHeight || !Number.isFinite(originX) || !Number.isFinite(originY)) {
+        throw new Error("RuneLite canvas origin/size is unavailable; client may be minimized or not loaded");
+    }
+    let left = 0;
+    let top = 0;
+    let width = canvasWidth;
+    let height = canvasHeight;
+    if (Number.isFinite(args.canvasX) && Number.isFinite(args.canvasY)) {
+        const radius = clampInt(args.radius ?? 140, 20, 500);
+        left = clampInt(args.canvasX - radius, 0, Math.max(0, canvasWidth - 1));
+        top = clampInt(args.canvasY - radius, 0, Math.max(0, canvasHeight - 1));
+        width = clampInt(radius * 2, 1, canvasWidth - left);
+        height = clampInt(radius * 2, 1, canvasHeight - top);
+    }
+    else if (Number.isFinite(args.width) || Number.isFinite(args.height)) {
+        left = clampInt(args.canvasX ?? 0, 0, Math.max(0, canvasWidth - 1));
+        top = clampInt(args.canvasY ?? 0, 0, Math.max(0, canvasHeight - 1));
+        width = clampInt(args.width ?? canvasWidth, 1, canvasWidth - left);
+        height = clampInt(args.height ?? canvasHeight, 1, canvasHeight - top);
+    }
+    return {
+        canvas: { x: left, y: top, width, height },
+        screen: {
+            x: Math.round(originX + left * scaleX),
+            y: Math.round(originY + top * scaleY),
+            width: Math.max(1, Math.round(width * scaleX)),
+            height: Math.max(1, Math.round(height * scaleY)),
+        },
+        canvasOriginNutX: originX,
+        canvasOriginNutY: originY,
+        screenScaleX: scaleX,
+        screenScaleY: scaleY,
+        canvasWidth,
+        canvasHeight,
+    };
+}
+async function captureCanvasImage(baseURL, args) {
+    const debug = (await runeliteApi(baseURL).get("/debug/coordinates")).data;
+    const capture = canvasCaptureRect(debug, args);
+    const outputDir = path.join(os.tmpdir(), "runelite-mcp-captures");
+    await mkdir(outputDir, { recursive: true });
+    const fileBase = `canvas_${Date.now()}`;
+    const filePath = await screen.captureRegion(fileBase, new Region(capture.screen.x, capture.screen.y, capture.screen.width, capture.screen.height), FileType.PNG, outputDir);
+    const response = {
+        filePath,
+        mimeType: "image/png",
+        capturedAt: Date.now(),
+        ...capture,
+    };
+    if (args.includeImage !== false) {
+        response.base64 = (await readFile(filePath)).toString("base64");
+    }
+    return response;
+}
 async function invokeMenuAction(baseURL, action) {
     const body = {
         param0: action.param0,
@@ -456,6 +529,184 @@ function clientTargetSchema() {
         port: z.number().optional().describe("Optional RuneLite API port to target, for example 8081"),
     };
 }
+function resourceText(uri, data) {
+    return {
+        contents: [{
+                uri,
+                mimeType: "application/json",
+                text: JSON.stringify(data, null, 2),
+            }]
+    };
+}
+server.registerResource("latest-snapshot", "osrs://snapshot/latest", {
+    title: "Latest OSRS Snapshot",
+    description: "Latest cached RuneLite snapshot for the selected OSRS client, including live state and high-value UI context.",
+    mimeType: "application/json",
+}, async () => {
+    const uri = "osrs://snapshot/latest";
+    try {
+        const { baseURL, snapshot } = await getSnapshotForTarget();
+        return resourceText(uri, {
+            baseURL,
+            stream: snapshotStreamStatus(baseURL),
+            snapshot,
+        });
+    }
+    catch (e) {
+        return resourceText(uri, { error: errorText("reading latest snapshot resource", e) });
+    }
+});
+server.registerResource("recent-events", "osrs://events/recent", {
+    title: "Recent OSRS Events",
+    description: "Recent event-style state for the selected OSRS client. Currently includes buffered RuneLite chat/game messages plus stream status.",
+    mimeType: "application/json",
+}, async () => {
+    const uri = "osrs://events/recent";
+    try {
+        const baseURL = await resolveRuneliteApi();
+        const api = runeliteApi(baseURL);
+        const chat = (await api.get("/chat", { params: { limit: 50 } })).data;
+        return resourceText(uri, {
+            baseURL,
+            stream: snapshotStreamStatus(baseURL),
+            chat,
+        });
+    }
+    catch (e) {
+        return resourceText(uri, { error: errorText("reading recent events resource", e) });
+    }
+});
+server.registerResource("client-identity", "osrs://client/identity", {
+    title: "Selected OSRS Client Identity",
+    description: "Identity, selected base URL, and discovered RuneLite plugin clients.",
+    mimeType: "application/json",
+}, async () => {
+    const uri = "osrs://client/identity";
+    try {
+        const clients = await discoverClients();
+        let identity = null;
+        try {
+            const baseURL = await resolveRuneliteApi();
+            identity = (await runeliteApi(baseURL).get("/identity")).data;
+        }
+        catch (e) {
+            identity = { error: errorText("fetching selected identity", e) };
+        }
+        return resourceText(uri, {
+            selectedBaseUrl: selectedRuneliteApi,
+            selectedClientInstanceId,
+            identity,
+            clients,
+        });
+    }
+    catch (e) {
+        return resourceText(uri, { error: errorText("reading client identity resource", e) });
+    }
+});
+server.registerPrompt("experienced-player-loop", {
+    title: "Experienced OSRS Player Loop",
+    description: "General observe-plan-act-verify loop for controlling OSRS through this MCP bridge.",
+    argsSchema: {
+        task: z.string().describe("The user's gameplay objective"),
+    },
+}, async ({ task }) => ({
+    messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: [
+                    `Objective: ${task}`,
+                    "",
+                    "Act like an experienced OSRS player using this MCP bridge.",
+                    "1. Read osrs://client/identity and osrs://snapshot/latest before acting.",
+                    "2. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
+                    "3. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
+                    "4. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
+                    "5. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
+                    "6. For navigation beyond the loaded scene, use calculate_path_to/walk_path_to as a temporary fallback until collision-aware pathing is available.",
+                ].join("\n"),
+            },
+        }],
+}));
+server.registerPrompt("woodcut-and-bank", {
+    title: "Woodcut And Bank",
+    description: "Task template for cutting nearby trees and banking logs with verification between actions.",
+    argsSchema: {
+        treeName: z.string().default("Tree").describe("Tree object name, for example Tree, Oak tree, Willow tree"),
+        logName: z.string().default("Logs").describe("Inventory/bank item name for the logs"),
+        bankTarget: z.string().default("Banker").describe("NPC or object to open the bank"),
+    },
+}, async ({ treeName, logName, bankTarget }) => ({
+    messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: [
+                    `Woodcut target: ${treeName}`,
+                    `Log item: ${logName}`,
+                    `Bank opener: ${bankTarget}`,
+                    "",
+                    "Use this loop:",
+                    "1. Read osrs://snapshot/latest. Confirm inventory, player location, nearby objects, chat, and interfaceSummary.",
+                    `2. If inventory is not full, use interact_with({ entityType: \"object\", name: \"${treeName}\", option: \"Chop down\", nearestToPlayer: true }).`,
+                    "3. Wait until player is idle or tree disappears. Check chat for errors.",
+                    "4. Repeat until inventory is full.",
+                    "5. Navigate to bank using walk_to/walk_path_to as available.",
+                    `6. Open bank with interact_with on ${bankTarget} using option Bank/Open.`,
+                    `7. Deposit ${logName} using bank tools, then verify inventory/bank state.`,
+                ].join("\n"),
+            },
+        }],
+}));
+server.registerPrompt("complete-dialogue", {
+    title: "Complete Dialogue",
+    description: "Task template for continuing NPC/player dialogue and selecting dialogue options safely.",
+    argsSchema: {
+        desiredOption: z.string().optional().describe("Option text or number to choose when dialogue options appear"),
+    },
+}, async ({ desiredOption }) => ({
+    messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: [
+                    "Dialogue handling loop:",
+                    "1. Read get_dialogue or osrs://snapshot/latest.",
+                    "2. If type is NPC_DIALOGUE or PLAYER_DIALOGUE, click the continue widget or press Space after checking interfaceSummary.",
+                    `3. If type is DIALOGUE_OPTIONS, choose ${desiredOption ? `"${desiredOption}"` : "the option matching the task goal"} with select_option or keyboard number if appropriate.`,
+                    "4. After each action, wait briefly and re-read dialogue/chat.",
+                    "5. Stop when dialogue type is NONE or the task state/chat confirms completion.",
+                ].join("\n"),
+            },
+        }],
+}));
+server.registerPrompt("withdraw-and-equip", {
+    title: "Withdraw And Equip",
+    description: "Task template for opening bank, withdrawing an item, and equipping or using it.",
+    argsSchema: {
+        itemName: z.string().describe("Item to withdraw"),
+        quantity: z.string().default("1").describe("Quantity, for example 1, 5, 10, all"),
+    },
+}, async ({ itemName, quantity }) => ({
+    messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: [
+                    `Item: ${itemName}`,
+                    `Quantity: ${quantity}`,
+                    "",
+                    "Bank/equip loop:",
+                    "1. Read osrs://snapshot/latest and get_interface_summary.",
+                    "2. If bank is not open, interact with nearest banker/bank booth using option Bank/Open.",
+                    "3. Use get_bank_actions and withdraw_bank_item for the requested item/quantity.",
+                    "4. Verify inventory changed and chat has no error.",
+                    "5. Close bank if needed, then use inventory/equipment tools to equip/use the item.",
+                    "6. Verify equipment or inventory state after the action.",
+                ].join("\n"),
+            },
+        }],
+}));
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -617,6 +868,76 @@ function matchesChatMessage(message, text, caseSensitive, type) {
     const haystack = String(message.message ?? "");
     return caseSensitive ? haystack.includes(text) : haystack.toLowerCase().includes(text.toLowerCase());
 }
+function inventoryQuantity(snapshot, name, id) {
+    return (snapshot.inventory ?? [])
+        .filter((item) => targetMatches(item, name, id))
+        .reduce((total, item) => total + (Number.isFinite(item.quantity) ? Number(item.quantity) : 1), 0);
+}
+function recentMessages(snapshot) {
+    return Array.isArray(snapshot.chat?.messages) ? snapshot.chat.messages : [];
+}
+function visibleEntityCount(snapshot, entityType, name, id) {
+    if (!entityType) {
+        return 0;
+    }
+    return targetsForType(snapshot, entityType).filter((target) => targetMatches(target, name, id)).length;
+}
+function buildActionVerification(snapshot, args) {
+    const checks = [];
+    const state = snapshot.state ?? {};
+    const location = state.location;
+    if (args.expectIdle) {
+        checks.push({ name: "idle", ok: isPlayerIdle(state), state });
+    }
+    if (Number.isFinite(args.expectedWorldX) && Number.isFinite(args.expectedWorldY)) {
+        const distance = tileDistance(location, args.expectedWorldX, args.expectedWorldY, args.expectedPlane);
+        checks.push({
+            name: "location",
+            ok: distance <= Math.max(0, args.locationRadius ?? 1),
+            distance,
+            location,
+            expected: { x: args.expectedWorldX, y: args.expectedWorldY, plane: args.expectedPlane, radius: args.locationRadius ?? 1 },
+        });
+    }
+    if (args.chatContains) {
+        const match = recentMessages(snapshot).find((message) => Number(message.capturedAt ?? 0) >= args.startedAt &&
+            matchesChatMessage(message, args.chatContains, args.caseSensitive, args.chatType));
+        checks.push({ name: "chat", ok: Boolean(match), match });
+    }
+    if (args.inventoryItemName || Number.isFinite(args.inventoryItemId) || Number.isFinite(args.inventoryQuantityAtLeast) || Number.isFinite(args.inventoryQuantityChangedFrom)) {
+        const quantity = inventoryQuantity(snapshot, args.inventoryItemName, args.inventoryItemId);
+        const okAtLeast = !Number.isFinite(args.inventoryQuantityAtLeast) || quantity >= args.inventoryQuantityAtLeast;
+        const okChanged = !Number.isFinite(args.inventoryQuantityChangedFrom) || quantity !== args.inventoryQuantityChangedFrom;
+        checks.push({
+            name: "inventory",
+            ok: okAtLeast && okChanged,
+            quantity,
+            itemName: args.inventoryItemName,
+            itemId: args.inventoryItemId,
+            quantityAtLeast: args.inventoryQuantityAtLeast,
+            quantityChangedFrom: args.inventoryQuantityChangedFrom,
+        });
+    }
+    if (args.requireEntityVisible || args.entityType) {
+        const count = visibleEntityCount(snapshot, args.entityType, args.entityName, args.entityId);
+        checks.push({ name: "entityVisible", ok: count > 0, count, entityType: args.entityType, entityName: args.entityName, id: args.entityId });
+    }
+    if (args.dialogueType) {
+        const actual = snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type;
+        checks.push({ name: "dialogueType", ok: String(actual ?? "").toLowerCase() === args.dialogueType.toLowerCase(), actual, expected: args.dialogueType });
+    }
+    const summary = {
+        state,
+        inventorySlotsUsed: (snapshot.inventory ?? []).filter((item) => item && item.id && item.id !== -1).length,
+        dialogueType: snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type,
+        recentChat: recentMessages(snapshot).slice(0, 5),
+    };
+    return {
+        ok: checks.length === 0 ? true : checks.every((check) => check.ok),
+        checks,
+        summary,
+    };
+}
 // --- State Reading Tools ---
 server.tool("get_game_state", "Get current player state, location, and health", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
     try {
@@ -739,6 +1060,17 @@ server.tool("get_skills", "Get the player's level, boosted level, and XP for all
         return { content: [{ type: "text", text: errorText("fetching skills", e) }] };
     }
 });
+server.tool("get_interface_summary", "Get compact open-interface and high-value visible widget state from the latest cached snapshot", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
+    try {
+        const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port });
+        return {
+            content: [{ type: "text", text: JSON.stringify(snapshot.interfaceSummary ?? {}, null, 2) }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching interface summary", e) }] };
+    }
+});
 server.tool("get_coordinate_debug", "Get RuneLite canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
     try {
         const res = await (await apiForTarget({ instanceId, playerName, port })).get("/debug/coordinates");
@@ -748,6 +1080,31 @@ server.tool("get_coordinate_debug", "Get RuneLite canvas origin, canvas size, DP
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("fetching coordinate debug", e) }] };
+    }
+});
+server.tool("capture_canvas_screenshot", "Capture the current RuneLite canvas, or a crop around canvasX/canvasY, as a PNG for visual verification before/after actions.", {
+    ...clientTargetSchema(),
+    canvasX: z.number().optional().describe("Optional RuneLite canvas-relative X coordinate. With canvasY, captures a crop around this point."),
+    canvasY: z.number().optional().describe("Optional RuneLite canvas-relative Y coordinate. With canvasX, captures a crop around this point."),
+    width: z.number().optional().describe("Optional canvas-relative crop width. Used with canvasX/canvasY as the top-left if radius is omitted."),
+    height: z.number().optional().describe("Optional canvas-relative crop height. Used with canvasX/canvasY as the top-left if radius is omitted."),
+    radius: z.number().optional().describe("Optional crop radius around canvasX/canvasY, default 140 canvas pixels."),
+    includeImage: z.boolean().optional().describe("Include base64 image content in the MCP response. Defaults to true."),
+}, async ({ canvasX, canvasY, width, height, radius, includeImage, instanceId, playerName, port }) => {
+    try {
+        const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+        const result = await captureCanvasImage(baseURL, { canvasX, canvasY, width, height, radius, includeImage });
+        const { base64, ...metadata } = result;
+        const content = [
+            { type: "text", text: JSON.stringify(metadata, null, 2) },
+        ];
+        if (base64) {
+            content.push({ type: "image", data: base64, mimeType: "image/png" });
+        }
+        return { content };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("capturing RuneLite canvas", e) }] };
     }
 });
 server.tool("get_latest_snapshot", "Get the latest cached RuneLite snapshot with state, NPCs, dialogue, objects, ground items, tick, capturedAt, and ageMs.", {
@@ -894,8 +1251,8 @@ server.tool("get_prayers", "Read prayer level, active prayers, prayer varbits, a
     ...clientTargetSchema(),
 }, async ({ instanceId, playerName, port }) => {
     try {
-        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/prayers");
-        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+        const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port });
+        return { content: [{ type: "text", text: JSON.stringify(snapshot.prayers ?? {}, null, 2) }] };
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("fetching prayers", e) }] };
@@ -925,8 +1282,8 @@ server.tool("get_combat", "Read combat style widgets, auto-retaliate widget, com
     ...clientTargetSchema(),
 }, async ({ instanceId, playerName, port }) => {
     try {
-        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/combat");
-        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+        const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port });
+        return { content: [{ type: "text", text: JSON.stringify(snapshot.combat ?? {}, null, 2) }] };
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("fetching combat controls", e) }] };
@@ -1706,6 +2063,76 @@ server.tool("wait_for_chat_message", "Poll recent chat/game messages until a fre
     }
     catch (e) {
         return { content: [{ type: "text", text: `Error waiting for chat message: ${e.message}` }] };
+    }
+});
+server.tool("verify_after_action", "Poll fresh snapshots until expected post-action evidence is observed, then return a compact verification report.", {
+    timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 8000"),
+    pollMs: z.number().optional().describe("Polling interval in milliseconds, default 500"),
+    expectIdle: z.boolean().optional().describe("Require the player to be idle"),
+    expectedWorldX: z.number().optional().describe("Expected player world X tile"),
+    expectedWorldY: z.number().optional().describe("Expected player world Y tile"),
+    expectedPlane: z.number().optional().describe("Expected plane when checking location"),
+    locationRadius: z.number().optional().describe("Accepted Chebyshev tile radius for location, default 1"),
+    chatContains: z.string().optional().describe("Require a fresh chat/game message containing this text"),
+    chatType: z.string().optional().describe("Optional RuneLite chat message type filter"),
+    caseSensitive: z.boolean().optional().describe("Whether chat matching is case-sensitive"),
+    inventoryItemName: z.string().optional().describe("Inventory item name to check"),
+    inventoryItemId: z.number().optional().describe("Inventory item id to check"),
+    inventoryQuantityAtLeast: z.number().optional().describe("Require the matching inventory quantity to be at least this value"),
+    inventoryQuantityChangedFrom: z.number().optional().describe("Require the matching inventory quantity to differ from this previous value"),
+    entityType: z.enum(["npc", "object", "ground_item", "player"]).optional().describe("Entity type to verify visible"),
+    entityName: z.string().optional().describe("Entity name to verify visible"),
+    entityId: z.number().optional().describe("Entity id to verify visible"),
+    requireEntityVisible: z.boolean().optional().describe("Require a matching entity to be visible"),
+    dialogueType: z.string().optional().describe("Require this dialogue/interface type, for example NONE or OPTIONS"),
+    ...clientTargetSchema(),
+}, async ({ timeoutMs, pollMs, expectIdle, expectedWorldX, expectedWorldY, expectedPlane, locationRadius, chatContains, chatType, caseSensitive, inventoryItemName, inventoryItemId, inventoryQuantityAtLeast, inventoryQuantityChangedFrom, entityType, entityName, entityId, requireEntityVisible, dialogueType, instanceId, playerName, port, }) => {
+    const startedAt = Date.now();
+    const timeout = Math.max(1, timeoutMs ?? 8000);
+    const interval = Math.max(100, pollMs ?? 500);
+    let lastReport = null;
+    try {
+        while (Date.now() - startedAt <= timeout) {
+            const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port }, true);
+            lastReport = buildActionVerification(snapshot, {
+                startedAt,
+                expectIdle,
+                expectedWorldX,
+                expectedWorldY,
+                expectedPlane,
+                locationRadius,
+                chatContains,
+                chatType,
+                caseSensitive,
+                inventoryItemName,
+                inventoryItemId,
+                inventoryQuantityAtLeast,
+                inventoryQuantityChangedFrom,
+                entityType,
+                entityName,
+                entityId,
+                requireEntityVisible,
+                dialogueType,
+            });
+            if (lastReport.ok) {
+                return {
+                    content: [{
+                            type: "text",
+                            text: JSON.stringify({ verified: true, waitedMs: Date.now() - startedAt, ...lastReport }, null, 2)
+                        }]
+                };
+            }
+            await sleep(interval);
+        }
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({ verified: false, waitedMs: Date.now() - startedAt, ...lastReport }, null, 2)
+                }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error verifying action result: ${e.message}` }] };
     }
 });
 server.tool("get_stream_status", "Inspect the MCP server's live /api/stream snapshot cache status for a RuneLite client.", {

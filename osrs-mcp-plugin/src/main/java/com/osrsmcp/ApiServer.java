@@ -144,6 +144,7 @@ public class ApiServer {
         server.createContext("/api/bank_actions", new BankActionsHandler());
         server.createContext("/api/equipment", new EquipmentHandler());
         server.createContext("/api/skills", new SkillsHandler());
+        server.createContext("/api/interface_summary", new InterfaceSummaryHandler());
         server.createContext("/api/vars", new VarsHandler());
         server.createContext("/api/quest_state", new QuestStateHandler());
         server.createContext("/api/prayers", new PrayersHandler());
@@ -272,6 +273,10 @@ public class ApiServer {
         String bank = buildBankJson(capturedAt);
         String equipment = buildEquipmentJson(capturedAt);
         String skills = buildSkillsJson(capturedAt);
+        String prayers = buildPrayersJson(capturedAt);
+        String combat = buildCombatJson(capturedAt);
+        String chat = buildChatJson(capturedAt, 25);
+        String interfaceSummary = buildInterfaceSummaryJson(capturedAt);
 
         JsonObject snapshot = new JsonObject();
         addCaptureMeta(snapshot, capturedAt);
@@ -285,8 +290,12 @@ public class ApiServer {
         snapshot.add("bank", gson.fromJson(bank, JsonElement.class));
         snapshot.add("equipment", gson.fromJson(equipment, JsonElement.class));
         snapshot.add("skills", gson.fromJson(skills, JsonElement.class));
+        snapshot.add("prayers", gson.fromJson(prayers, JsonElement.class));
+        snapshot.add("combat", gson.fromJson(combat, JsonElement.class));
+        snapshot.add("chat", gson.fromJson(chat, JsonElement.class));
+        snapshot.add("interfaceSummary", gson.fromJson(interfaceSummary, JsonElement.class));
 
-        return new GameStateSnapshot(capturedAt, state, npcs, dialogue, objects, groundItems, players, inventory, bank, equipment, skills, gson.toJson(snapshot));
+        return new GameStateSnapshot(capturedAt, state, npcs, dialogue, objects, groundItems, players, inventory, bank, equipment, skills, prayers, combat, chat, interfaceSummary, gson.toJson(snapshot));
     }
 
     private void addCaptureMeta(JsonObject response, long capturedAt) {
@@ -349,6 +358,14 @@ public class ApiServer {
                 return withCurrentAge(snapshot.equipment);
             case "skills":
                 return withCurrentAge(snapshot.skills);
+            case "prayers":
+                return withCurrentAge(snapshot.prayers);
+            case "combat":
+                return withCurrentAge(snapshot.combat);
+            case "chat":
+                return withCurrentAge(snapshot.chat);
+            case "interface_summary":
+                return withCurrentAge(snapshot.interfaceSummary);
             case "snapshot":
                 return withCurrentAge(snapshot.snapshot);
             default:
@@ -398,6 +415,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/bank_actions", "Visible bank and inventory widgets with Withdraw/Deposit actions and click coordinates."));
         endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
+        endpoints.add(endpoint("/api/interface_summary", "Compact summary of open/high-value interfaces and visible widget bounds."));
         endpoints.add(endpoint("/api/vars?varbits=1,2&varps=3,4", "Read selected varbit and varp values for quest/state tools without dumping every game variable."));
         endpoints.add(endpoint("/api/quest_state?name=Cook%27s%20Assistant", "Read RuneLite quest state by name, enum name, or id; omit name for all quest states."));
         endpoints.add(endpoint("/api/prayers", "Prayer level, active prayers, prayer varbits, and prayer/quick-prayer orb click coordinates."));
@@ -1526,7 +1544,7 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
-    private String buildChatJson(int limit) {
+    private String buildChatJson(long capturedAt, int limit) {
         JsonArray messages = new JsonArray();
         synchronized (recentChatMessages) {
             int start = Math.max(0, recentChatMessages.size() - Math.max(1, limit));
@@ -1535,9 +1553,63 @@ public class ApiServer {
             }
         }
         JsonObject response = new JsonObject();
-        addCaptureMeta(response, System.currentTimeMillis());
+        addCaptureMeta(response, capturedAt);
         response.add("messages", messages);
         return withCurrentAge(gson.toJson(response));
+    }
+
+    private String buildChatJson(int limit) {
+        return buildChatJson(System.currentTimeMillis(), limit);
+    }
+
+    private void addVisibleWidgetSummary(JsonArray widgets, String label, Widget widget, long capturedAt) {
+        if (widget == null || widget.isHidden()) {
+            return;
+        }
+        widgets.add(buildWidgetJson(label, null, widget, capturedAt));
+    }
+
+    private String buildInterfaceSummaryJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("gameState", client.getGameState() != null ? client.getGameState().name() : "");
+        response.addProperty("loggedIn", client.getGameState() == GameState.LOGGED_IN);
+        response.addProperty("contextMenuOpen", client.isMenuOpen());
+        response.addProperty("bankContainerAvailable", client.getItemContainer(InventoryID.BANK) != null);
+        response.addProperty("inventoryContainerAvailable", client.getItemContainer(InventoryID.INVENTORY) != null);
+        response.addProperty("equipmentContainerAvailable", client.getItemContainer(InventoryID.EQUIPMENT) != null);
+
+        Widget npcDialogueText = client.getWidget(WidgetInfo.DIALOG_NPC_TEXT);
+        Widget playerDialogueText = client.getWidget(WidgetInfo.DIALOG_PLAYER_TEXT);
+        Widget dialogueOptions = client.getWidget(WidgetInfo.DIALOG_OPTION_OPTIONS);
+        if (npcDialogueText != null && !npcDialogueText.isHidden()) {
+            response.addProperty("dialogueType", "NPC_DIALOGUE");
+        } else if (playerDialogueText != null && !playerDialogueText.isHidden()) {
+            response.addProperty("dialogueType", "PLAYER_DIALOGUE");
+        } else if (dialogueOptions != null && !dialogueOptions.isHidden()) {
+            response.addProperty("dialogueType", "DIALOGUE_OPTIONS");
+        } else {
+            response.addProperty("dialogueType", "NONE");
+        }
+
+        JsonArray visibleWidgets = new JsonArray();
+        addVisibleWidgetSummary(visibleWidgets, "inventory", client.getWidget(WidgetInfo.INVENTORY), capturedAt);
+        addVisibleWidgetSummary(visibleWidgets, "dialogueNpcText", npcDialogueText, capturedAt);
+        addVisibleWidgetSummary(visibleWidgets, "dialoguePlayerText", playerDialogueText, capturedAt);
+        addVisibleWidgetSummary(visibleWidgets, "dialogueOptions", dialogueOptions, capturedAt);
+        addVisibleWidgetSummary(visibleWidgets, "shopInventoryItemsContainer", client.getWidget(WidgetInfo.SHOP_INVENTORY_ITEMS_CONTAINER), capturedAt);
+        addVisibleWidgetSummary(visibleWidgets, "combatTabFixed", client.getWidget(WidgetInfo.FIXED_VIEWPORT_COMBAT_TAB), capturedAt);
+        addVisibleWidgetSummary(visibleWidgets, "combatTabResizable", client.getWidget(WidgetInfo.RESIZABLE_VIEWPORT_COMBAT_TAB), capturedAt);
+        Widget minimap = firstVisibleWidget(
+            WidgetInfo.RESIZABLE_MINIMAP_DRAW_AREA,
+            WidgetInfo.RESIZABLE_MINIMAP_STONES_DRAW_AREA,
+            WidgetInfo.FIXED_VIEWPORT_MINIMAP_DRAW_AREA,
+            WidgetInfo.FIXED_VIEWPORT_MINIMAP
+        );
+        addVisibleWidgetSummary(visibleWidgets, "minimap", minimap, capturedAt);
+        response.add("visibleWidgets", visibleWidgets);
+
+        return gson.toJson(response);
     }
 
     private Map<String, String> parseQuery(HttpExchange exchange) {
@@ -2101,6 +2173,16 @@ public class ApiServer {
                 return;
             }
             handleOnClientThread(t, () -> buildSkillsJson(System.currentTimeMillis()));
+        }
+    }
+
+    class InterfaceSummaryHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            if (sendCachedResponse(t, "interface_summary")) {
+                return;
+            }
+            handleOnClientThread(t, () -> buildInterfaceSummaryJson(System.currentTimeMillis()));
         }
     }
 
