@@ -40,7 +40,96 @@ function apiBaseFromPort(port) {
 function runeliteApiForPort(port) {
     return runeliteApi(port === undefined ? selectedRuneliteApi : apiBaseFromPort(port));
 }
+function getOrCreateSnapshotCacheEntry(baseURL) {
+    const existing = snapshotCache.get(baseURL);
+    if (existing) {
+        return existing;
+    }
+    const entry = { fetchedAt: 0, snapshot: {} };
+    snapshotCache.set(baseURL, entry);
+    return entry;
+}
+function updateSnapshotCache(baseURL, snapshot) {
+    const entry = getOrCreateSnapshotCacheEntry(baseURL);
+    entry.fetchedAt = Date.now();
+    entry.snapshot = snapshot;
+    entry.inflight = undefined;
+}
+function handleSseBlock(baseURL, block) {
+    const dataLines = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart());
+    if (dataLines.length === 0) {
+        return;
+    }
+    const snapshot = JSON.parse(dataLines.join("\n"));
+    const entry = getOrCreateSnapshotCacheEntry(baseURL);
+    updateSnapshotCache(baseURL, snapshot);
+    entry.streamLastEventAt = Date.now();
+}
+function startSnapshotStream(baseURL) {
+    const entry = getOrCreateSnapshotCacheEntry(baseURL);
+    if (entry.streamStarted) {
+        return;
+    }
+    entry.streamStarted = true;
+    void (async () => {
+        let retryDelayMs = 750;
+        while (entry.streamStarted) {
+            try {
+                const response = await fetch(`${baseURL}/stream`);
+                if (!response.ok || !response.body) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                entry.streamActive = true;
+                entry.streamError = undefined;
+                retryDelayMs = 750;
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = "";
+                while (entry.streamStarted) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+                    buffer += decoder.decode(value, { stream: true });
+                    let separatorIndex = buffer.search(/\r?\n\r?\n/);
+                    while (separatorIndex >= 0) {
+                        const block = buffer.slice(0, separatorIndex);
+                        buffer = buffer.slice(separatorIndex + (buffer[separatorIndex] === "\r" ? 4 : 2));
+                        handleSseBlock(baseURL, block);
+                        separatorIndex = buffer.search(/\r?\n\r?\n/);
+                    }
+                }
+            }
+            catch (error) {
+                entry.streamError = error?.message ?? String(error);
+            }
+            finally {
+                entry.streamActive = false;
+            }
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            retryDelayMs = Math.min(retryDelayMs * 2, 5000);
+        }
+    })();
+}
+function snapshotStreamStatus(baseURL) {
+    const entry = snapshotCache.get(baseURL);
+    return {
+        baseURL,
+        cached: Boolean(entry && entry.fetchedAt > 0),
+        fetchedAt: entry?.fetchedAt ?? 0,
+        cacheAgeMs: entry?.fetchedAt ? Date.now() - entry.fetchedAt : null,
+        streamStarted: Boolean(entry?.streamStarted),
+        streamActive: Boolean(entry?.streamActive),
+        streamLastEventAt: entry?.streamLastEventAt ?? 0,
+        streamAgeMs: entry?.streamLastEventAt ? Date.now() - entry.streamLastEventAt : null,
+        streamError: entry?.streamError,
+    };
+}
 async function getSnapshotForBase(baseURL, force = false) {
+    startSnapshotStream(baseURL);
     const now = Date.now();
     const cached = snapshotCache.get(baseURL);
     if (!force && cached && now - cached.fetchedAt <= SNAPSHOT_CACHE_TTL_MS) {
@@ -51,18 +140,19 @@ async function getSnapshotForBase(baseURL, force = false) {
     }
     const inflight = runeliteApi(baseURL).get("/snapshot").then((res) => {
         const snapshot = res.data;
-        snapshotCache.set(baseURL, { fetchedAt: Date.now(), snapshot });
+        updateSnapshotCache(baseURL, snapshot);
         return snapshot;
     }).catch((error) => {
         if (cached) {
-            snapshotCache.set(baseURL, { fetchedAt: cached.fetchedAt, snapshot: cached.snapshot });
+            cached.inflight = undefined;
         }
         else {
             snapshotCache.delete(baseURL);
         }
         throw error;
     });
-    snapshotCache.set(baseURL, { fetchedAt: cached?.fetchedAt ?? 0, snapshot: cached?.snapshot ?? {}, inflight });
+    const entry = getOrCreateSnapshotCacheEntry(baseURL);
+    entry.inflight = inflight;
     return inflight;
 }
 async function discoverClients() {
@@ -756,6 +846,18 @@ server.tool("get_chat_messages", "Read recent RuneLite chat/game messages buffer
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("fetching chat messages", e) }] };
+    }
+});
+server.tool("get_stream_status", "Inspect the MCP server's live /api/stream snapshot cache status for a RuneLite client.", {
+    ...clientTargetSchema(),
+}, async ({ instanceId, playerName, port }) => {
+    try {
+        const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+        startSnapshotStream(baseURL);
+        return { content: [{ type: "text", text: JSON.stringify(snapshotStreamStatus(baseURL), null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("checking stream status", e) }] };
     }
 });
 server.tool("list_clients", "List active OSRS MCP RuneLite plugin clients discovered on local ports 8080-8090", {}, async () => {

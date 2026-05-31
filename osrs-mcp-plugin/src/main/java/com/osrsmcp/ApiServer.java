@@ -58,6 +58,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -75,6 +77,7 @@ public class ApiServer {
     private static final Logger log = LoggerFactory.getLogger(ApiServer.class);
 
     private HttpServer server;
+    private ExecutorService executor;
     private volatile int port = FIRST_API_PORT;
     private final Client client;
     private final ClientThread clientThread;
@@ -97,7 +100,8 @@ public class ApiServer {
         try {
             server = createHttpServer();
             registerContexts();
-            server.setExecutor(null); // creates a default executor
+            executor = Executors.newCachedThreadPool();
+            server.setExecutor(executor);
             server.start();
             log.info("API Server started on port {}", port);
         } catch (IOException e) {
@@ -153,6 +157,10 @@ public class ApiServer {
         if (server != null) {
             server.stop(0);
             log.info("API Server stopped");
+        }
+        if (executor != null) {
+            executor.shutdownNow();
+            executor = null;
         }
     }
 
