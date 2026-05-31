@@ -27,6 +27,32 @@ function Write-Step($message) {
   Write-Host "[osrs-mcp] $message"
 }
 
+function Quote-ProcessArgument($argument) {
+  '"' + ([string]$argument).Replace('"', '\"') + '"'
+}
+
+function Invoke-CapturedProcess {
+  param(
+    [string]$FilePath,
+    [string[]]$Arguments
+  )
+
+  $stdout = [System.IO.Path]::GetTempFileName()
+  $stderr = [System.IO.Path]::GetTempFileName()
+  try {
+    $quotedArguments = ($Arguments | ForEach-Object { Quote-ProcessArgument $_ }) -join " "
+    $process = Start-Process -FilePath $FilePath -ArgumentList $quotedArguments -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $output = (Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue)
+    [pscustomobject]@{
+      ExitCode = $process.ExitCode
+      Output = $output
+    }
+  } finally {
+    Remove-Item -LiteralPath $stdout -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stderr -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Get-OsrsMcpServerProcesses {
   $serverPattern = "*$McpServerIndex*"
   Get-CimInstance Win32_Process |
@@ -130,20 +156,13 @@ function Build-Plugin {
 
   Write-Step "Compiling RuneLite plugin..."
   $pluginSources = @(Get-ChildItem -LiteralPath (Join-Path $PluginRoot "src\main\java") -Recurse -Filter "*.java" | ForEach-Object { $_.FullName })
-  $pluginCompilerErrors = [System.IO.Path]::GetTempFileName()
-  $previousErrorActionPreference = $ErrorActionPreference
-  $ErrorActionPreference = "Continue"
-  try {
-    $pluginCompileOutput = & $RuneLiteJre -jar $EcjJar -11 -encoding UTF-8 -cp $classPath -d $PluginClasses @pluginSources 2> $pluginCompilerErrors
-    $pluginCompileExitCode = $LASTEXITCODE
-  } finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-    $pluginCompileErrorOutput = Get-Content -LiteralPath $pluginCompilerErrors -Raw -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $pluginCompilerErrors -Force -ErrorAction SilentlyContinue
+  $pluginCompileArguments = @("-jar", $EcjJar, "-11", "-encoding", "UTF-8", "-cp", $classPath, "-d", $PluginClasses) + $pluginSources
+  $pluginCompileResult = Invoke-CapturedProcess -FilePath $RuneLiteJre -Arguments $pluginCompileArguments
+  if (-not [string]::IsNullOrWhiteSpace($pluginCompileResult.Output)) {
+    Write-Host $pluginCompileResult.Output
   }
-  @($pluginCompileOutput, $pluginCompileErrorOutput) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Out-String | Write-Host
-  if ($pluginCompileExitCode -ne 0) {
-    throw "RuneLite plugin compilation failed with exit code $pluginCompileExitCode"
+  if ($pluginCompileResult.ExitCode -ne 0) {
+    throw "RuneLite plugin compilation failed with exit code $($pluginCompileResult.ExitCode)"
   }
 
   if (Test-Path -LiteralPath $HelperClasses) {
@@ -152,21 +171,12 @@ function Build-Plugin {
   New-Item -ItemType Directory -Force -Path $HelperClasses | Out-Null
 
   Write-Step "Compiling local RuneLite dev launcher..."
-  $launcherCompilerErrors = [System.IO.Path]::GetTempFileName()
-  $previousErrorActionPreference = $ErrorActionPreference
-  $ErrorActionPreference = "Continue"
-  try {
-    $launcherCompileOutput = & $RuneLiteJre -jar $EcjJar -11 -encoding UTF-8 -cp "$PluginClasses;$classPath" -d $HelperClasses `
-      (Join-Path $PSScriptRoot "RunOsrsMcpPlugin.java") 2> $launcherCompilerErrors
-    $launcherCompileExitCode = $LASTEXITCODE
-  } finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-    $launcherCompileErrorOutput = Get-Content -LiteralPath $launcherCompilerErrors -Raw -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $launcherCompilerErrors -Force -ErrorAction SilentlyContinue
+  $launcherCompileResult = Invoke-CapturedProcess -FilePath $RuneLiteJre -Arguments @("-jar", $EcjJar, "-11", "-encoding", "UTF-8", "-cp", "$PluginClasses;$classPath", "-d", $HelperClasses, (Join-Path $PSScriptRoot "RunOsrsMcpPlugin.java"))
+  if (-not [string]::IsNullOrWhiteSpace($launcherCompileResult.Output)) {
+    Write-Host $launcherCompileResult.Output
   }
-  @($launcherCompileOutput, $launcherCompileErrorOutput) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Out-String | Write-Host
-  if ($launcherCompileExitCode -ne 0) {
-    throw "RuneLite dev launcher compilation failed with exit code $launcherCompileExitCode"
+  if ($launcherCompileResult.ExitCode -ne 0) {
+    throw "RuneLite dev launcher compilation failed with exit code $($launcherCompileResult.ExitCode)"
   }
 
   Add-Type -AssemblyName System.IO.Compression

@@ -9,6 +9,11 @@ type RuneLiteTarget = {
   name?: string;
   option?: string;
   target?: string;
+  identifier?: number;
+  param0?: number;
+  param1?: number;
+  type?: string;
+  itemId?: number;
   worldX?: number;
   worldY?: number;
   coordinateSource?: string;
@@ -54,6 +59,164 @@ type SnapshotCacheEntry = {
   streamError?: string;
 };
 
+class StateCache {
+  private readonly entries = new Map<string, SnapshotCacheEntry>();
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly apiTimeoutMs: number,
+  ) {}
+
+  status(baseURL: string) {
+    const entry = this.entries.get(baseURL);
+    return {
+      baseURL,
+      cached: Boolean(entry && entry.fetchedAt > 0),
+      fetchedAt: entry?.fetchedAt ?? 0,
+      cacheAgeMs: entry?.fetchedAt ? Date.now() - entry.fetchedAt : null,
+      streamStarted: Boolean(entry?.streamStarted),
+      streamSupported: Boolean(entry?.streamSupported),
+      streamSupportChecked: Boolean(entry?.streamSupportChecked),
+      streamActive: Boolean(entry?.streamActive),
+      streamLastEventAt: entry?.streamLastEventAt ?? 0,
+      streamAgeMs: entry?.streamLastEventAt ? Date.now() - entry.streamLastEventAt : null,
+      streamError: entry?.streamError,
+    };
+  }
+
+  async ensureStreamSupported(baseURL: string): Promise<boolean> {
+    const entry = this.entryFor(baseURL);
+    if (entry.streamSupportChecked) {
+      return Boolean(entry.streamSupported);
+    }
+
+    try {
+      const identity = (await axios.get(`${baseURL}/identity`, { timeout: Math.min(this.apiTimeoutMs, 900) })).data;
+      entry.streamSupported = identity?.supportsConcurrentStreams === true;
+    } catch (error: any) {
+      entry.streamSupported = false;
+      entry.streamError = error?.message ?? String(error);
+    }
+    entry.streamSupportChecked = true;
+    return Boolean(entry.streamSupported);
+  }
+
+  startStream(baseURL: string) {
+    const entry = this.entryFor(baseURL);
+    if (entry.streamStarted) {
+      return;
+    }
+
+    entry.streamStarted = true;
+    void (async () => {
+      let retryDelayMs = 750;
+      while (entry.streamStarted) {
+        try {
+          const response = await fetch(`${baseURL}/stream`);
+          if (!response.ok || !response.body) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          entry.streamActive = true;
+          entry.streamError = undefined;
+          retryDelayMs = 750;
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (entry.streamStarted) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            let separatorIndex = buffer.search(/\r?\n\r?\n/);
+            while (separatorIndex >= 0) {
+              const block = buffer.slice(0, separatorIndex);
+              buffer = buffer.slice(separatorIndex + (buffer[separatorIndex] === "\r" ? 4 : 2));
+              this.handleSseBlock(baseURL, block);
+              separatorIndex = buffer.search(/\r?\n\r?\n/);
+            }
+          }
+        } catch (error: any) {
+          entry.streamError = error?.message ?? String(error);
+        } finally {
+          entry.streamActive = false;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        retryDelayMs = Math.min(retryDelayMs * 2, 5000);
+      }
+    })();
+  }
+
+  async get(baseURL: string, force = false): Promise<RuneLiteSnapshot> {
+    if (!force && await this.ensureStreamSupported(baseURL)) {
+      this.startStream(baseURL);
+    }
+
+    const now = Date.now();
+    const cached = this.entries.get(baseURL);
+    if (!force && cached && now - cached.fetchedAt <= this.ttlMs) {
+      return cached.snapshot;
+    }
+    if (!force && cached?.inflight) {
+      return cached.inflight;
+    }
+
+    const inflight = runeliteApi(baseURL).get("/snapshot").then((res) => {
+      const snapshot = res.data as RuneLiteSnapshot;
+      this.update(baseURL, snapshot);
+      return snapshot;
+    }).catch((error) => {
+      if (cached) {
+        cached.inflight = undefined;
+      } else {
+        this.entries.delete(baseURL);
+      }
+      throw error;
+    });
+
+    this.entryFor(baseURL).inflight = inflight;
+    return inflight;
+  }
+
+  private entryFor(baseURL: string): SnapshotCacheEntry {
+    const existing = this.entries.get(baseURL);
+    if (existing) {
+      return existing;
+    }
+
+    const entry: SnapshotCacheEntry = { fetchedAt: 0, snapshot: {} };
+    this.entries.set(baseURL, entry);
+    return entry;
+  }
+
+  private update(baseURL: string, snapshot: RuneLiteSnapshot) {
+    const entry = this.entryFor(baseURL);
+    entry.fetchedAt = Date.now();
+    entry.snapshot = snapshot;
+    entry.inflight = undefined;
+  }
+
+  private handleSseBlock(baseURL: string, block: string) {
+    const dataLines = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart());
+
+    if (dataLines.length === 0) {
+      return;
+    }
+
+    const snapshot = JSON.parse(dataLines.join("\n")) as RuneLiteSnapshot;
+    this.update(baseURL, snapshot);
+    this.entryFor(baseURL).streamLastEventAt = Date.now();
+  }
+}
+
 const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
 mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
   ? configuredMouseSpeed
@@ -75,7 +238,7 @@ const configuredSnapshotCacheTtlMs = Number(process.env.OSRS_SNAPSHOT_CACHE_TTL_
 const SNAPSHOT_CACHE_TTL_MS = Number.isFinite(configuredSnapshotCacheTtlMs) && configuredSnapshotCacheTtlMs >= 0
   ? configuredSnapshotCacheTtlMs
   : 250;
-const snapshotCache = new Map<string, SnapshotCacheEntry>();
+const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS);
 
 function runeliteApi(baseURL = selectedRuneliteApi) {
   return axios.create({
@@ -98,154 +261,20 @@ function runeliteApiForPort(port?: number) {
   return runeliteApi(port === undefined ? selectedRuneliteApi : apiBaseFromPort(port));
 }
 
-function getOrCreateSnapshotCacheEntry(baseURL: string): SnapshotCacheEntry {
-  const existing = snapshotCache.get(baseURL);
-  if (existing) {
-    return existing;
-  }
-
-  const entry: SnapshotCacheEntry = { fetchedAt: 0, snapshot: {} };
-  snapshotCache.set(baseURL, entry);
-  return entry;
-}
-
-function updateSnapshotCache(baseURL: string, snapshot: RuneLiteSnapshot) {
-  const entry = getOrCreateSnapshotCacheEntry(baseURL);
-  entry.fetchedAt = Date.now();
-  entry.snapshot = snapshot;
-  entry.inflight = undefined;
-}
-
-function handleSseBlock(baseURL: string, block: string) {
-  const dataLines = block
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart());
-
-  if (dataLines.length === 0) {
-    return;
-  }
-
-  const snapshot = JSON.parse(dataLines.join("\n")) as RuneLiteSnapshot;
-  const entry = getOrCreateSnapshotCacheEntry(baseURL);
-  updateSnapshotCache(baseURL, snapshot);
-  entry.streamLastEventAt = Date.now();
-}
-
 function startSnapshotStream(baseURL: string) {
-  const entry = getOrCreateSnapshotCacheEntry(baseURL);
-  if (entry.streamStarted) {
-    return;
-  }
-
-  entry.streamStarted = true;
-  void (async () => {
-    let retryDelayMs = 750;
-    while (entry.streamStarted) {
-      try {
-        const response = await fetch(`${baseURL}/stream`);
-        if (!response.ok || !response.body) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        entry.streamActive = true;
-        entry.streamError = undefined;
-        retryDelayMs = 750;
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (entry.streamStarted) {
-          const { value, done } = await reader.read();
-          if (done) {
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          let separatorIndex = buffer.search(/\r?\n\r?\n/);
-          while (separatorIndex >= 0) {
-            const block = buffer.slice(0, separatorIndex);
-            buffer = buffer.slice(separatorIndex + (buffer[separatorIndex] === "\r" ? 4 : 2));
-            handleSseBlock(baseURL, block);
-            separatorIndex = buffer.search(/\r?\n\r?\n/);
-          }
-        }
-      } catch (error: any) {
-        entry.streamError = error?.message ?? String(error);
-      } finally {
-        entry.streamActive = false;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      retryDelayMs = Math.min(retryDelayMs * 2, 5000);
-    }
-  })();
+  stateCache.startStream(baseURL);
 }
 
 function snapshotStreamStatus(baseURL: string) {
-  const entry = snapshotCache.get(baseURL);
-  return {
-    baseURL,
-    cached: Boolean(entry && entry.fetchedAt > 0),
-    fetchedAt: entry?.fetchedAt ?? 0,
-    cacheAgeMs: entry?.fetchedAt ? Date.now() - entry.fetchedAt : null,
-    streamStarted: Boolean(entry?.streamStarted),
-    streamSupported: Boolean(entry?.streamSupported),
-    streamSupportChecked: Boolean(entry?.streamSupportChecked),
-    streamActive: Boolean(entry?.streamActive),
-    streamLastEventAt: entry?.streamLastEventAt ?? 0,
-    streamAgeMs: entry?.streamLastEventAt ? Date.now() - entry.streamLastEventAt : null,
-    streamError: entry?.streamError,
-  };
+  return stateCache.status(baseURL);
 }
 
 async function ensureSnapshotStreamSupported(baseURL: string): Promise<boolean> {
-  const entry = getOrCreateSnapshotCacheEntry(baseURL);
-  if (entry.streamSupportChecked) {
-    return Boolean(entry.streamSupported);
-  }
-
-  try {
-    const identity = (await axios.get(`${baseURL}/identity`, { timeout: Math.min(API_TIMEOUT_MS, 900) })).data;
-    entry.streamSupported = identity?.supportsConcurrentStreams === true;
-  } catch (error: any) {
-    entry.streamSupported = false;
-    entry.streamError = error?.message ?? String(error);
-  }
-  entry.streamSupportChecked = true;
-  return Boolean(entry.streamSupported);
+  return stateCache.ensureStreamSupported(baseURL);
 }
 
 async function getSnapshotForBase(baseURL: string, force = false): Promise<RuneLiteSnapshot> {
-  if (!force && await ensureSnapshotStreamSupported(baseURL)) {
-    startSnapshotStream(baseURL);
-  }
-  const now = Date.now();
-  const cached = snapshotCache.get(baseURL);
-  if (!force && cached && now - cached.fetchedAt <= SNAPSHOT_CACHE_TTL_MS) {
-    return cached.snapshot;
-  }
-  if (!force && cached?.inflight) {
-    return cached.inflight;
-  }
-
-  const inflight = runeliteApi(baseURL).get("/snapshot").then((res) => {
-    const snapshot = res.data as RuneLiteSnapshot;
-    updateSnapshotCache(baseURL, snapshot);
-    return snapshot;
-  }).catch((error) => {
-    if (cached) {
-      cached.inflight = undefined;
-    } else {
-      snapshotCache.delete(baseURL);
-    }
-    throw error;
-  });
-
-  const entry = getOrCreateSnapshotCacheEntry(baseURL);
-  entry.inflight = inflight;
-  return inflight;
+  return stateCache.get(baseURL, force);
 }
 
 async function discoverClients() {
@@ -363,6 +392,32 @@ async function clickPoint(x: number, y: number, rightClick?: boolean) {
 
 async function movePoint(x: number, y: number) {
   await mouse.setPosition(new Point(x, y));
+}
+
+async function invokeMenuAction(baseURL: string, action: {
+  param0: number;
+  param1: number;
+  menuAction?: string;
+  type?: string;
+  identifier?: number;
+  id?: number;
+  itemId?: number;
+  option?: string;
+  target?: string;
+  dryRun?: boolean;
+}) {
+  const body = {
+    param0: action.param0,
+    param1: action.param1,
+    menuAction: action.menuAction ?? action.type,
+    identifier: action.identifier ?? action.id,
+    itemId: action.itemId ?? -1,
+    option: action.option ?? "",
+    target: action.target ?? "",
+    dryRun: action.dryRun ?? false,
+  };
+  const res = await runeliteApi(baseURL).post("/action/menu", body);
+  return res.data;
 }
 
 async function getPlayerLocation(target: ClientTarget = {}) {
@@ -665,9 +720,26 @@ async function selectContextMenuOption(text: string, target: ClientTarget = {}, 
     return exact ? optionText === needle || String(entry.option ?? "").toLowerCase() === needle : optionText.includes(needle);
   });
 
+  if (!match) {
+    throw new Error("No matching context menu option found");
+  }
+
+  if (Number.isFinite(match.param0) && Number.isFinite(match.param1) && Number.isFinite(match.identifier) && match.type) {
+    const action = await invokeMenuAction(baseURL, {
+      param0: match.param0 as number,
+      param1: match.param1 as number,
+      type: match.type,
+      identifier: match.identifier,
+      itemId: match.itemId,
+      option: match.option,
+      target: match.target,
+    });
+    return { ...match, actionMode: "client_menu_action", action };
+  }
+
   requireFreshClickable(match, 1000);
   await clickPoint(match.screenX, match.screenY);
-  return match;
+  return { ...match, actionMode: "os_click_fallback" };
 }
 
 function isPlayerIdle(state: any): boolean {
@@ -1245,6 +1317,22 @@ server.tool(
 );
 
 server.tool(
+  "get_camera",
+  "Read RuneLite camera yaw, pitch, position, map angle, minimap zoom, viewport size, and player orientation context.",
+  {
+    ...clientTargetSchema(),
+  },
+  async ({ instanceId, playerName, port }) => {
+    try {
+      const res = await (await apiForTarget({ instanceId, playerName, port })).get("/camera");
+      return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("fetching camera", e) }] };
+    }
+  }
+);
+
+server.tool(
   "get_context_menu",
   "Read the current RuneLite right-click/context menu entries and row screen coordinates when the menu is open.",
   {
@@ -1256,6 +1344,42 @@ server.tool(
       return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("fetching context menu", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "invoke_menu_action",
+  "Invoke a RuneLite menu action inside the client on the RuneLite ClientThread. Use params from get_context_menu entries or dryRun first when unsure.",
+  {
+    param0: z.number().describe("RuneLite menu action param0, usually scene X, widget child id, or slot depending on action type"),
+    param1: z.number().describe("RuneLite menu action param1, usually scene Y, widget packed id, or widget id depending on action type"),
+    menuAction: z.string().describe("RuneLite MenuAction enum name, for example GAME_OBJECT_FIRST_OPTION, NPC_FIRST_OPTION, WIDGET_TARGET, or WALK"),
+    identifier: z.number().optional().describe("RuneLite menu action identifier. If omitted, id is used."),
+    id: z.number().optional().describe("Alias for identifier"),
+    itemId: z.number().optional().describe("Item ID for item/widget actions, otherwise -1"),
+    option: z.string().optional().describe("Menu option text, for example Chop down, Talk-to, Use, Walk here"),
+    target: z.string().optional().describe("Menu target text"),
+    dryRun: z.boolean().optional().describe("Validate and echo the action without invoking it in-game"),
+    ...clientTargetSchema(),
+  },
+  async ({ param0, param1, menuAction, identifier, id, itemId, option, target, dryRun, instanceId, playerName, port }) => {
+    try {
+      const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+      const result = await invokeMenuAction(baseURL, {
+        param0,
+        param1,
+        menuAction,
+        identifier,
+        id,
+        itemId,
+        option,
+        target,
+        dryRun,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("invoking menu action", e) }] };
     }
   }
 );

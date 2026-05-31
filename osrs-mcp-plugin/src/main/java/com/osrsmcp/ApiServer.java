@@ -17,6 +17,7 @@ import net.runelite.api.Prayer;
 import net.runelite.api.Quest;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
 import net.runelite.api.QuestState;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
@@ -129,6 +130,7 @@ public class ApiServer {
         server.createContext("/", new ApiIndexHandler());
         server.createContext("/api", new ApiIndexHandler());
         server.createContext("/api/", new ApiIndexHandler());
+        server.createContext("/api/action/menu", new ActionMenuHandler());
         server.createContext("/api/state", new StateHandler());
         server.createContext("/api/inventory", new InventoryHandler());
         server.createContext("/api/npcs", new NpcHandler());
@@ -145,6 +147,7 @@ public class ApiServer {
         server.createContext("/api/prayers", new PrayersHandler());
         server.createContext("/api/combat", new CombatHandler());
         server.createContext("/api/shop", new ShopHandler());
+        server.createContext("/api/camera", new CameraHandler());
         server.createContext("/api/debug/coordinates", new CoordinateDebugHandler());
         server.createContext("/api/snapshot", new SnapshotHandler());
         server.createContext("/api/stream", new StreamHandler());
@@ -181,6 +184,15 @@ public class ApiServer {
             response.addProperty("message", message);
         }
         sendResponse(exchange, 503, gson.toJson(response));
+    }
+
+    private void sendJsonErrorResponse(HttpExchange exchange, int statusCode, String error, String message) throws IOException {
+        JsonObject response = new JsonObject();
+        response.addProperty("error", error);
+        if (message != null && !message.isEmpty()) {
+            response.addProperty("message", message);
+        }
+        sendResponse(exchange, statusCode, gson.toJson(response));
     }
 
     private void handleOnClientThread(HttpExchange exchange, JsonResponseSupplier supplier) throws IOException {
@@ -357,10 +369,11 @@ public class ApiServer {
     private String getApiIndexJson() {
         JsonObject response = new JsonObject();
         response.addProperty("name", "OSRS MCP RuneLite API");
-        response.addProperty("description", "Local read-only RuneLite game-state API for the OSRS MCP server. Runtime data is read safely on the RuneLite client thread.");
+        response.addProperty("description", "Local RuneLite game-state and action API for the OSRS MCP server. Runtime data and in-client actions are handled safely on the RuneLite client thread.");
         response.addProperty("baseUrl", getBaseUrl());
 
         JsonArray endpoints = new JsonArray();
+        endpoints.add(endpoint("/api/action/menu", "POST a RuneLite menu action on the client thread using param0, param1, menuAction/type, identifier, itemId, option, and target."));
         endpoints.add(endpoint("/api/state", "Current login status, player name, hitpoints, run energy, and world location."));
         endpoints.add(endpoint("/api/inventory", "Inventory item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/npcs", "Nearby NPC IDs, names, world coordinates, canvas coordinates, and absolute screen coordinates."));
@@ -377,6 +390,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/prayers", "Prayer level, active prayers, prayer varbits, and prayer/quick-prayer orb click coordinates."));
         endpoints.add(endpoint("/api/combat", "Combat style widgets, auto-retaliate widget, tab coordinates, and current player combat state."));
         endpoints.add(endpoint("/api/shop", "Visible shop/trade action widgets and shop inventory-side container data when a shop interface is open."));
+        endpoints.add(endpoint("/api/camera", "Camera yaw, pitch, position, map angle, minimap zoom, and player orientation context."));
         endpoints.add(endpoint("/api/debug/coordinates", "Canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data."));
         endpoints.add(endpoint("/api/snapshot", "Latest cached tick snapshot for state, NPCs, dialogue, objects, and ground items."));
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
@@ -1216,6 +1230,74 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private MenuAction parseMenuAction(JsonObject request) {
+        String action = getString(request, "menuAction", getString(request, "type", ""));
+        if (action == null || action.trim().isEmpty()) {
+            throw new IllegalArgumentException("menuAction or type is required");
+        }
+        return MenuAction.valueOf(action.trim().toUpperCase());
+    }
+
+    private int getRequiredInt(JsonObject request, String key) {
+        if (!request.has(key) || request.get(key).isJsonNull()) {
+            throw new IllegalArgumentException(key + " is required");
+        }
+        return request.get(key).getAsInt();
+    }
+
+    private int getOptionalInt(JsonObject request, String key, int fallback) {
+        if (!request.has(key) || request.get(key).isJsonNull()) {
+            return fallback;
+        }
+        return request.get(key).getAsInt();
+    }
+
+    private boolean getOptionalBoolean(JsonObject request, String key, boolean fallback) {
+        if (!request.has(key) || request.get(key).isJsonNull()) {
+            return fallback;
+        }
+        return request.get(key).getAsBoolean();
+    }
+
+    private String getString(JsonObject request, String key, String fallback) {
+        if (!request.has(key) || request.get(key).isJsonNull()) {
+            return fallback;
+        }
+        return request.get(key).getAsString();
+    }
+
+    private String invokeMenuActionJson(JsonObject request) {
+        long capturedAt = System.currentTimeMillis();
+        int param0 = getRequiredInt(request, "param0");
+        int param1 = getRequiredInt(request, "param1");
+        int identifier = request.has("identifier")
+            ? getRequiredInt(request, "identifier")
+            : getRequiredInt(request, "id");
+        int itemId = getOptionalInt(request, "itemId", -1);
+        String option = getString(request, "option", "");
+        String target = getString(request, "target", "");
+        MenuAction menuAction = parseMenuAction(request);
+        boolean dryRun = getOptionalBoolean(request, "dryRun", false);
+
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("success", true);
+        response.addProperty("dryRun", dryRun);
+        response.addProperty("param0", param0);
+        response.addProperty("param1", param1);
+        response.addProperty("identifier", identifier);
+        response.addProperty("itemId", itemId);
+        response.addProperty("menuAction", menuAction.name());
+        response.addProperty("option", option);
+        response.addProperty("target", target);
+
+        if (!dryRun) {
+            client.menuAction(param0, param1, menuAction, identifier, itemId, option, target);
+        }
+
+        return gson.toJson(response);
+    }
+
     private Widget firstVisibleWidget(WidgetInfo... widgetInfos) {
         for (WidgetInfo widgetInfo : widgetInfos) {
             Widget widget = client.getWidget(widgetInfo);
@@ -1282,6 +1364,47 @@ public class ApiServer {
                 target.addProperty("coordinateWarning", "TARGET_OUTSIDE_LOADED_SCENE");
             }
             response.add("target", target);
+        }
+
+        return gson.toJson(response);
+    }
+
+    private String buildCameraJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("cameraX", client.getCameraX());
+        response.addProperty("cameraY", client.getCameraY());
+        response.addProperty("cameraZ", client.getCameraZ());
+        response.addProperty("cameraYaw", client.getCameraYaw());
+        response.addProperty("cameraPitch", client.getCameraPitch());
+        response.addProperty("mapAngle", client.getMapAngle());
+        response.addProperty("minimapZoom", client.getMinimapZoom());
+        response.addProperty("viewportWidth", client.getViewportWidth());
+        response.addProperty("viewportHeight", client.getViewportHeight());
+
+        Player player = client.getLocalPlayer();
+        if (player != null) {
+            JsonObject playerJson = new JsonObject();
+            playerJson.addProperty("name", player.getName());
+            playerJson.addProperty("orientation", player.getOrientation());
+            WorldPoint worldPoint = player.getWorldLocation();
+            if (worldPoint != null) {
+                playerJson.addProperty("worldX", worldPoint.getX());
+                playerJson.addProperty("worldY", worldPoint.getY());
+                playerJson.addProperty("plane", worldPoint.getPlane());
+            }
+            addRawLocalPoint(playerJson, player.getLocalLocation(), false, "localPoint");
+            response.add("player", playerJson);
+        }
+
+        Widget minimap = firstVisibleWidget(
+            WidgetInfo.RESIZABLE_MINIMAP_DRAW_AREA,
+            WidgetInfo.RESIZABLE_MINIMAP_STONES_DRAW_AREA,
+            WidgetInfo.FIXED_VIEWPORT_MINIMAP_DRAW_AREA,
+            WidgetInfo.FIXED_VIEWPORT_MINIMAP
+        );
+        if (minimap != null) {
+            response.add("minimap", buildWidgetJson("minimap", null, minimap, capturedAt));
         }
 
         return gson.toJson(response);
@@ -1698,6 +1821,30 @@ public class ApiServer {
         }
     }
 
+    class ActionMenuHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            if (!"POST".equalsIgnoreCase(t.getRequestMethod())) {
+                sendJsonErrorResponse(t, 405, "METHOD_NOT_ALLOWED", "Use POST with a JSON body");
+                return;
+            }
+
+            JsonObject request;
+            try {
+                String body = new String(t.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                request = gson.fromJson(body, JsonObject.class);
+                if (request == null) {
+                    throw new IllegalArgumentException("Request body must be a JSON object");
+                }
+            } catch (RuntimeException e) {
+                sendJsonErrorResponse(t, 400, "BAD_REQUEST", e.getMessage());
+                return;
+            }
+
+            handleOnClientThread(t, () -> invokeMenuActionJson(request));
+        }
+    }
+
     class StateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
@@ -1842,6 +1989,13 @@ public class ApiServer {
         @Override
         public void handle(HttpExchange t) throws IOException {
             handleOnClientThread(t, () -> buildShopJson(System.currentTimeMillis()));
+        }
+    }
+
+    class CameraHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> buildCameraJson(System.currentTimeMillis()));
         }
     }
 

@@ -42,6 +42,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - The scripts do not unexpectedly close RuneLite unless `Restart-OSRS-MCP.bat` or `-RestartRuneLite` is used.
 - Click tools refuse stale coordinates and hidden/minimized canvases.
 - Prefer `click_object`, `click_npc`, `click_ground_item`, `click_inventory_slot`, `walk_to`, and `click_minimap_tile` over raw `move_mouse_and_click`.
+- Use `get_minimap` and `get_camera` to inspect orientation, map angle, minimap zoom, and viewport context before tricky navigation.
 - Use `calculate_path_to` to inspect bounded straight-line minimap steps before navigation, then `walk_path_to` to click only the next step.
 - After any click or walk, use `wait_until_idle`, `wait_until_location`, or `wait_for_chat_message` to verify what happened before choosing the next action.
 - Prefer `use_inventory_item_on_object`, `use_inventory_item_on_npc`, and `use_inventory_item_on_inventory_item` for item-use flows instead of manually chaining raw item and target clicks.
