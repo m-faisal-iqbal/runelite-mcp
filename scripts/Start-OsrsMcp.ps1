@@ -171,8 +171,18 @@ function Stop-StaleMcpServers {
 }
 
 function Start-RuneLiteWithPlugin {
+  $normalRuneLite = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "RuneLite.exe" })
+  $devRuneLite = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "java|javaw" -and $_.CommandLine -like "*RunOsrsMcpPlugin*" })
+
+  if ($RestartRuneLite) {
+    Write-Step "Restart requested: closing RuneLite processes so the local plugin can load..."
+    $normalRuneLite | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    $devRuneLite | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    Start-Sleep -Seconds 2
+  }
+
   $apiOk = Test-Api
-  if ($apiOk) {
+  if ($apiOk -and -not $RestartRuneLite) {
     if (Test-CurrentApiSchema) {
       Write-Step "RuneLite plugin API is already available at http://localhost:8080/api/."
     } else {
@@ -185,9 +195,6 @@ function Start-RuneLiteWithPlugin {
     return
   }
 
-  $normalRuneLite = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "RuneLite.exe" })
-  $devRuneLite = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "java|javaw" -and $_.CommandLine -like "*RunOsrsMcpPlugin*" })
-
   if (($normalRuneLite.Count -gt 0 -or $devRuneLite.Count -gt 0) -and -not $RestartRuneLite) {
     Write-Host ""
     Write-Host "RuneLite is already running, but the OSRS MCP API is not responding."
@@ -197,20 +204,13 @@ function Start-RuneLiteWithPlugin {
     return
   }
 
-  if ($RestartRuneLite) {
-    Write-Step "Restart requested: closing RuneLite processes so the local plugin can load..."
-    $normalRuneLite | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-    $devRuneLite | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-    Start-Sleep -Seconds 2
-  }
-
   $runClassPath = "$HelperClasses;$PluginClasses;$(Get-RuneLiteClasspath)"
   $javaArgs = "-ea -Xmx${MaxMemoryMb}m -Xss2m -cp `"$runClassPath`" RunOsrsMcpPlugin"
   Write-Step "Starting RuneLite with OSRS MCP plugin..."
   Start-Process -FilePath $RuneLiteJre `
     -ArgumentList $javaArgs `
     -WorkingDirectory $RuneLiteRoot `
-    -WindowStyle Hidden
+    -WindowStyle Normal
 
   for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 1

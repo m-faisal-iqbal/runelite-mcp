@@ -117,6 +117,17 @@ server.tool("get_skills", "Get the player's level, boosted level, and XP for all
   }
 });
 
+server.tool("get_coordinate_debug", "Get RuneLite canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data", {}, async () => {
+  try {
+    const res = await axios.get(`${RUNELITE_API}/debug/coordinates`);
+    return {
+      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }]
+    };
+  } catch (e: any) {
+    return { content: [{ type: "text", text: `Error fetching coordinate debug: ${e.message}` }] };
+  }
+});
+
 // --- Action Tools (OS-Level) ---
 
 server.tool(

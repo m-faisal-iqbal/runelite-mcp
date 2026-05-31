@@ -28,8 +28,17 @@ import net.runelite.client.game.ItemManager;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.awt.Component;
+import java.awt.GraphicsConfiguration;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
 import java.awt.IllegalComponentStateException;
+import java.awt.MouseInfo;
+import java.awt.PointerInfo;
 import java.awt.Rectangle;
+import java.awt.Shape;
+import java.awt.Toolkit;
+import java.awt.geom.AffineTransform;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -71,6 +80,7 @@ public class ApiServer {
             server.createContext("/api/bank", new BankHandler());
             server.createContext("/api/equipment", new EquipmentHandler());
             server.createContext("/api/skills", new SkillsHandler());
+            server.createContext("/api/debug/coordinates", new CoordinateDebugHandler());
             server.setExecutor(null); // creates a default executor
             server.start();
             log.info("API Server started on port 8080");
@@ -163,6 +173,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/bank", "Bank item IDs, names, quantities, and slots when the bank container is available."));
         endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
+        endpoints.add(endpoint("/api/debug/coordinates", "Canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data."));
         response.add("endpoints", endpoints);
 
         return gson.toJson(response);
@@ -179,14 +190,90 @@ public class ApiServer {
         }
     }
 
+    private double getCanvasScaleX() {
+        Component canvas = client.getCanvas();
+        if (canvas == null || canvas.getGraphicsConfiguration() == null) {
+            return 1.0;
+        }
+
+        return canvas.getGraphicsConfiguration().getDefaultTransform().getScaleX();
+    }
+
+    private double getCanvasScaleY() {
+        Component canvas = client.getCanvas();
+        if (canvas == null || canvas.getGraphicsConfiguration() == null) {
+            return 1.0;
+        }
+
+        return canvas.getGraphicsConfiguration().getDefaultTransform().getScaleY();
+    }
+
+    private int toNutScreenX(int awtScreenX) {
+        Component canvas = client.getCanvas();
+        if (canvas == null || canvas.getGraphicsConfiguration() == null) {
+            return awtScreenX;
+        }
+
+        GraphicsConfiguration config = canvas.getGraphicsConfiguration();
+        Rectangle bounds = config.getBounds();
+        double scaleX = config.getDefaultTransform().getScaleX();
+        return bounds.x + (int) Math.round((awtScreenX - bounds.x) * scaleX);
+    }
+
+    private int toNutScreenY(int awtScreenY) {
+        Component canvas = client.getCanvas();
+        if (canvas == null || canvas.getGraphicsConfiguration() == null) {
+            return awtScreenY;
+        }
+
+        GraphicsConfiguration config = canvas.getGraphicsConfiguration();
+        Rectangle bounds = config.getBounds();
+        double scaleY = config.getDefaultTransform().getScaleY();
+        return bounds.y + (int) Math.round((awtScreenY - bounds.y) * scaleY);
+    }
+
+    private boolean isCanvasOnAnyScreen(java.awt.Point canvasOrigin) {
+        Component canvas = client.getCanvas();
+        if (canvas == null || canvasOrigin == null) {
+            return false;
+        }
+
+        Rectangle canvasBounds = new Rectangle(canvasOrigin.x, canvasOrigin.y, canvas.getWidth(), canvas.getHeight());
+        try {
+            for (GraphicsDevice device : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+                GraphicsConfiguration config = device.getDefaultConfiguration();
+                if (config != null && config.getBounds().intersects(canvasBounds)) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException e) {
+            return true;
+        }
+
+        return false;
+    }
+
     private void addCanvasAndScreenCoordinates(JsonObject response, int canvasX, int canvasY) {
         response.addProperty("canvasX", canvasX);
         response.addProperty("canvasY", canvasY);
 
         java.awt.Point canvasOrigin = getCanvasScreenLocation();
         if (canvasOrigin != null) {
-            response.addProperty("screenX", canvasOrigin.x + canvasX);
-            response.addProperty("screenY", canvasOrigin.y + canvasY);
+            int awtScreenX = canvasOrigin.x + canvasX;
+            int awtScreenY = canvasOrigin.y + canvasY;
+            response.addProperty("canvasOriginX", canvasOrigin.x);
+            response.addProperty("canvasOriginY", canvasOrigin.y);
+            response.addProperty("awtScreenX", awtScreenX);
+            response.addProperty("awtScreenY", awtScreenY);
+            response.addProperty("screenScaleX", getCanvasScaleX());
+            response.addProperty("screenScaleY", getCanvasScaleY());
+            response.addProperty("canvasOnScreen", isCanvasOnAnyScreen(canvasOrigin));
+            if (isCanvasOnAnyScreen(canvasOrigin)) {
+                response.addProperty("screenX", toNutScreenX(awtScreenX));
+                response.addProperty("screenY", toNutScreenY(awtScreenY));
+            } else {
+                response.addProperty("coordinateWarning", "CANVAS_OFFSCREEN_OR_MINIMIZED");
+            }
         }
     }
 
@@ -196,8 +283,21 @@ public class ApiServer {
 
         java.awt.Point canvasOrigin = getCanvasScreenLocation();
         if (canvasOrigin != null) {
-            response.addProperty(prefix + "ScreenX", canvasOrigin.x + canvasX);
-            response.addProperty(prefix + "ScreenY", canvasOrigin.y + canvasY);
+            int awtScreenX = canvasOrigin.x + canvasX;
+            int awtScreenY = canvasOrigin.y + canvasY;
+            response.addProperty("canvasOriginX", canvasOrigin.x);
+            response.addProperty("canvasOriginY", canvasOrigin.y);
+            response.addProperty(prefix + "AwtScreenX", awtScreenX);
+            response.addProperty(prefix + "AwtScreenY", awtScreenY);
+            response.addProperty("screenScaleX", getCanvasScaleX());
+            response.addProperty("screenScaleY", getCanvasScaleY());
+            response.addProperty("canvasOnScreen", isCanvasOnAnyScreen(canvasOrigin));
+            if (isCanvasOnAnyScreen(canvasOrigin)) {
+                response.addProperty(prefix + "ScreenX", toNutScreenX(awtScreenX));
+                response.addProperty(prefix + "ScreenY", toNutScreenY(awtScreenY));
+            } else {
+                response.addProperty("coordinateWarning", "CANVAS_OFFSCREEN_OR_MINIMIZED");
+            }
         }
     }
 
@@ -208,7 +308,58 @@ public class ApiServer {
 
         Rectangle bounds = widget.getBounds();
         if (bounds != null) {
+            addBounds(response, prefix + "Bounds", bounds);
             addPrefixedCanvasAndScreenCoordinates(response, prefix, (int) bounds.getCenterX(), (int) bounds.getCenterY());
+        }
+    }
+
+    private void addBounds(JsonObject response, String property, Rectangle bounds) {
+        if (bounds == null) {
+            return;
+        }
+
+        JsonObject boundsJson = new JsonObject();
+        boundsJson.addProperty("x", bounds.x);
+        boundsJson.addProperty("y", bounds.y);
+        boundsJson.addProperty("width", bounds.width);
+        boundsJson.addProperty("height", bounds.height);
+        boundsJson.addProperty("centerX", (int) bounds.getCenterX());
+        boundsJson.addProperty("centerY", (int) bounds.getCenterY());
+        response.add(property, boundsJson);
+    }
+
+    private void addCanvasCoordinateFromShape(JsonObject response, Shape shape, String source) {
+        if (shape == null) {
+            return;
+        }
+
+        Rectangle bounds = shape.getBounds();
+        if (bounds == null || bounds.isEmpty()) {
+            return;
+        }
+
+        response.addProperty("coordinateSource", source);
+        addBounds(response, "clickboxBounds", bounds);
+        addCanvasAndScreenCoordinates(response, (int) bounds.getCenterX(), (int) bounds.getCenterY());
+    }
+
+    private boolean hasCanvasCoordinates(JsonObject response) {
+        return response.has("canvasX") && response.has("canvasY");
+    }
+
+    private void addRawLocalPoint(JsonObject response, LocalPoint lp) {
+        if (lp == null) {
+            return;
+        }
+
+        Point rawPoint = Perspective.localToCanvas(client, lp, client.getPlane());
+        if (rawPoint != null) {
+            response.addProperty("rawCanvasX", rawPoint.getX());
+            response.addProperty("rawCanvasY", rawPoint.getY());
+            if (!hasCanvasCoordinates(response)) {
+                response.addProperty("coordinateSource", "localPoint");
+                addCanvasAndScreenCoordinates(response, rawPoint.getX(), rawPoint.getY());
+            }
         }
     }
 
@@ -242,6 +393,96 @@ public class ApiServer {
 
         String definitionName = client.getNpcDefinition(npc.getId()).getName();
         return definitionName != null ? definitionName : "";
+    }
+
+    private JsonObject getCoordinateDebug() {
+        JsonObject response = new JsonObject();
+        Component canvas = client.getCanvas();
+        java.awt.Point canvasOrigin = getCanvasScreenLocation();
+
+        response.addProperty("coordinateContract", "canvasX/canvasY are RuneLite canvas-relative. screenX/screenY are intended for nut-js absolute desktop pixels.");
+        response.addProperty("screenCoordinateFormula", "awtScreen = canvasOrigin + canvas; screen = graphicsConfigBounds.origin + ((awtScreen - graphicsConfigBounds.origin) * defaultTransformScale)");
+        response.addProperty("canvasShowing", canvas != null && canvas.isShowing());
+
+        if (canvas != null) {
+            response.addProperty("canvasWidth", canvas.getWidth());
+            response.addProperty("canvasHeight", canvas.getHeight());
+            response.addProperty("canvasClass", canvas.getClass().getName());
+
+            GraphicsConfiguration config = canvas.getGraphicsConfiguration();
+            if (config != null) {
+                AffineTransform transform = config.getDefaultTransform();
+                AffineTransform normalizingTransform = config.getNormalizingTransform();
+                response.addProperty("defaultTransformScaleX", transform.getScaleX());
+                response.addProperty("defaultTransformScaleY", transform.getScaleY());
+                response.addProperty("normalizingTransformScaleX", normalizingTransform.getScaleX());
+                response.addProperty("normalizingTransformScaleY", normalizingTransform.getScaleY());
+
+                Rectangle bounds = config.getBounds();
+                addBounds(response, "graphicsConfigBounds", bounds);
+            }
+        }
+
+        if (canvasOrigin != null) {
+            response.addProperty("canvasOriginX", canvasOrigin.x);
+            response.addProperty("canvasOriginY", canvasOrigin.y);
+            response.addProperty("canvasOnScreen", isCanvasOnAnyScreen(canvasOrigin));
+            response.addProperty("screenScaleX", getCanvasScaleX());
+            response.addProperty("screenScaleY", getCanvasScaleY());
+            response.addProperty("canvasOriginNutX", toNutScreenX(canvasOrigin.x));
+            response.addProperty("canvasOriginNutY", toNutScreenY(canvasOrigin.y));
+        }
+
+        try {
+            response.addProperty("toolkitScreenResolutionDpi", Toolkit.getDefaultToolkit().getScreenResolution());
+        } catch (RuntimeException e) {
+            response.addProperty("toolkitScreenResolutionError", e.getMessage());
+        }
+
+        PointerInfo pointer = MouseInfo.getPointerInfo();
+        if (pointer != null && pointer.getLocation() != null) {
+            response.addProperty("awtMouseX", pointer.getLocation().x);
+            response.addProperty("awtMouseY", pointer.getLocation().y);
+        }
+
+        JsonArray devices = new JsonArray();
+        try {
+            for (GraphicsDevice device : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+                JsonObject deviceJson = new JsonObject();
+                deviceJson.addProperty("id", device.getIDstring());
+                GraphicsConfiguration config = device.getDefaultConfiguration();
+                if (config != null) {
+                    addBounds(deviceJson, "bounds", config.getBounds());
+                    AffineTransform transform = config.getDefaultTransform();
+                    deviceJson.addProperty("defaultTransformScaleX", transform.getScaleX());
+                    deviceJson.addProperty("defaultTransformScaleY", transform.getScaleY());
+                }
+                devices.add(deviceJson);
+            }
+        } catch (RuntimeException e) {
+            response.addProperty("screenDevicesError", e.getMessage());
+        }
+        response.add("screenDevices", devices);
+
+        Player player = client.getLocalPlayer();
+        if (player != null) {
+            JsonObject playerJson = new JsonObject();
+            playerJson.addProperty("name", player.getName());
+            WorldPoint wp = player.getWorldLocation();
+            if (wp != null) {
+                playerJson.addProperty("worldX", wp.getX());
+                playerJson.addProperty("worldY", wp.getY());
+                playerJson.addProperty("plane", wp.getPlane());
+            }
+            addRawLocalPoint(playerJson, player.getLocalLocation());
+            Shape hull = player.getConvexHull();
+            if (hull != null) {
+                addBounds(playerJson, "clickboxBounds", hull.getBounds());
+            }
+            response.add("player", playerJson);
+        }
+
+        return response;
     }
 
     class ApiIndexHandler implements HttpHandler {
@@ -334,14 +575,9 @@ public class ApiServer {
                 npcObj.addProperty("worldX", wp.getX());
                 npcObj.addProperty("worldY", wp.getY());
 
-                // Calculate screen coordinates
                 LocalPoint lp = npc.getLocalLocation();
-                if (lp != null) {
-                    Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
-                    if (screenPoint != null) {
-                        addCanvasAndScreenCoordinates(npcObj, screenPoint.getX(), screenPoint.getY());
-                    }
-                }
+                addRawLocalPoint(npcObj, lp);
+                addCanvasCoordinateFromShape(npcObj, npc.getConvexHull(), "convexHull");
                 response.add(npcObj);
             }
             return gson.toJson(response);
@@ -391,6 +627,8 @@ public class ApiServer {
                             opt.addProperty("text", child.getText());
                             Rectangle bounds = child.getBounds();
                             if (bounds != null) {
+                                addBounds(opt, "bounds", bounds);
+                                opt.addProperty("coordinateSource", "widgetBounds");
                                 addCanvasAndScreenCoordinates(opt, (int) bounds.getCenterX(), (int) bounds.getCenterY());
                             }
                             options.add(opt);
@@ -434,12 +672,8 @@ public class ApiServer {
                                     jsonObj.addProperty("worldY", wp.getY());
 
                                     LocalPoint lp = obj.getLocalLocation();
-                                    if (lp != null) {
-                                        Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
-                                        if (screenPoint != null) {
-                                            addCanvasAndScreenCoordinates(jsonObj, screenPoint.getX(), screenPoint.getY());
-                                        }
-                                    }
+                                    addRawLocalPoint(jsonObj, lp);
+                                    addCanvasCoordinateFromShape(jsonObj, obj.getClickbox(), "clickbox");
                                     response.add(jsonObj);
                                 }
                             }
@@ -477,12 +711,7 @@ public class ApiServer {
                             jsonObj.addProperty("worldY", wp.getY());
 
                             LocalPoint lp = tile.getLocalLocation();
-                            if (lp != null) {
-                                Point screenPoint = Perspective.localToCanvas(client, lp, client.getPlane());
-                                if (screenPoint != null) {
-                                    addCanvasAndScreenCoordinates(jsonObj, screenPoint.getX(), screenPoint.getY());
-                                }
-                            }
+                            addRawLocalPoint(jsonObj, lp);
                             response.add(jsonObj);
                         }
                     }
@@ -559,6 +788,13 @@ public class ApiServer {
             }
             return gson.toJson(response);
             });
+        }
+    }
+
+    class CoordinateDebugHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> gson.toJson(getCoordinateDebug()));
         }
     }
 }
