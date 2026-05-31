@@ -1,6 +1,7 @@
 param(
   [switch]$RestartRuneLite,
   [switch]$BuildOnly,
+  [switch]$InstallOnly,
   [int]$MaxMemoryMb = 512
 )
 
@@ -147,9 +148,14 @@ function Build-Plugin {
   } finally {
     $zip.Dispose()
   }
+}
 
+function Install-PluginJar {
+  Write-Step "Installing plugin jar to $RuneLitePluginJar..."
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RuneLitePluginJar) | Out-Null
   Copy-Item -LiteralPath $PluginJar -Destination $RuneLitePluginJar -Force
+  Write-Host "Plugin jar copied. Standard RuneLite may not load local development plugins from this folder on every launcher build."
+  Write-Host "If it does not appear in normal RuneLite, use Start-OSRS-MCP.bat or Restart-OSRS-MCP.bat to launch the dev plugin classpath."
 }
 
 function Build-Server {
@@ -231,7 +237,9 @@ Set-RuneLiteMemory
 Build-Plugin
 Build-Server
 
-if (-not $BuildOnly) {
+if ($InstallOnly) {
+  Install-PluginJar
+} elseif (-not $BuildOnly) {
   Stop-StaleMcpServers
   Start-RuneLiteWithPlugin
 }

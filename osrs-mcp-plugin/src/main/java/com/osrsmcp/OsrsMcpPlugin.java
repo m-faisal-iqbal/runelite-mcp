@@ -3,6 +3,10 @@ package com.osrsmcp;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.ClientTick;
+import net.runelite.api.events.GameTick;
+import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -44,6 +48,39 @@ public class OsrsMcpPlugin extends Plugin
 		if (apiServer != null)
 		{
 			apiServer.stop();
+		}
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick event)
+	{
+		if (apiServer != null)
+		{
+			apiServer.onGameTick();
+		}
+	}
+
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		if (apiServer != null)
+		{
+			apiServer.updateSnapshotFromClientTick();
+		}
+	}
+
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (apiServer != null)
+		{
+			apiServer.addChatMessage(
+				event.getType() != null ? event.getType().name() : "",
+				event.getName(),
+				event.getSender(),
+				event.getMessage(),
+				event.getTimestamp()
+			);
 		}
 	}
 }
