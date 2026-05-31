@@ -137,6 +137,7 @@ public class ApiServer {
         server.createContext("/api/grounditems", new GroundItemHandler());
         server.createContext("/api/players", new PlayersHandler());
         server.createContext("/api/bank", new BankHandler());
+        server.createContext("/api/bank_actions", new BankActionsHandler());
         server.createContext("/api/equipment", new EquipmentHandler());
         server.createContext("/api/skills", new SkillsHandler());
         server.createContext("/api/vars", new VarsHandler());
@@ -216,49 +217,6 @@ public class ApiServer {
     @FunctionalInterface
     private interface JsonResponseSupplier {
         String get() throws Exception;
-    }
-
-    private static class GameStateSnapshot {
-        final long capturedAt;
-        final String state;
-        final String npcs;
-        final String dialogue;
-        final String objects;
-        final String groundItems;
-        final String players;
-        final String inventory;
-        final String bank;
-        final String equipment;
-        final String skills;
-        final String snapshot;
-
-        GameStateSnapshot(
-            long capturedAt,
-            String state,
-            String npcs,
-            String dialogue,
-            String objects,
-            String groundItems,
-            String players,
-            String inventory,
-            String bank,
-            String equipment,
-            String skills,
-            String snapshot
-        ) {
-            this.capturedAt = capturedAt;
-            this.state = state;
-            this.npcs = npcs;
-            this.dialogue = dialogue;
-            this.objects = objects;
-            this.groundItems = groundItems;
-            this.players = players;
-            this.inventory = inventory;
-            this.bank = bank;
-            this.equipment = equipment;
-            this.skills = skills;
-            this.snapshot = snapshot;
-        }
     }
 
     public void onGameTick() {
@@ -411,6 +369,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/grounditems", "Visible ground item IDs, names, quantities, world coordinates, canvas coordinates, and absolute screen coordinates."));
         endpoints.add(endpoint("/api/players", "Visible players with combat level, world coordinates, animation/interacting state, and screen coordinates when available."));
         endpoints.add(endpoint("/api/bank", "Bank item IDs, names, quantities, and slots when the bank container is available."));
+        endpoints.add(endpoint("/api/bank_actions", "Visible bank and inventory widgets with Withdraw/Deposit actions and click coordinates."));
         endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
         endpoints.add(endpoint("/api/vars?varbits=1,2&varps=3,4", "Read selected varbit and varp values for quest/state tools without dumping every game variable."));
@@ -716,6 +675,7 @@ public class ApiServer {
         response.addProperty("coordinateContract", "canvasX/canvasY are RuneLite canvas-relative. screenX/screenY are intended for nut-js absolute desktop pixels.");
         response.addProperty("screenCoordinateFormula", "awtScreen = canvasOrigin + canvas; screen = graphicsConfigBounds.origin + ((awtScreen - graphicsConfigBounds.origin) * defaultTransformScale)");
         response.addProperty("canvasShowing", canvas != null && canvas.isShowing());
+        addWindowFocusState(response);
 
         if (canvas != null) {
             response.addProperty("canvasWidth", canvas.getWidth());
@@ -1205,6 +1165,16 @@ public class ApiServer {
         return SwingUtilities.getWindowAncestor(canvas);
     }
 
+    private void addWindowFocusState(JsonObject response) {
+        Component canvas = client.getCanvas();
+        Window window = getCanvasWindow();
+        response.addProperty("windowActive", window != null && window.isActive());
+        response.addProperty("windowFocused", window != null && window.isFocused());
+        response.addProperty("windowShowing", window != null && window.isShowing());
+        response.addProperty("canvasFocusOwner", canvas != null && canvas.isFocusOwner());
+        response.addProperty("canvasHasFocus", canvas != null && canvas.hasFocus());
+    }
+
     private String buildContextMenuJson(long capturedAt) {
         JsonObject response = new JsonObject();
         addCaptureMeta(response, capturedAt);
@@ -1506,6 +1476,20 @@ public class ApiServer {
         addWidgetControl(controls, "style4", WidgetInfo.COMBAT_STYLE_FOUR, capturedAt);
         addWidgetControl(controls, "autoRetaliate", WidgetInfo.COMBAT_AUTO_RETALIATE, capturedAt);
         response.add("controls", controls);
+
+        JsonArray specialAttackWidgets = new JsonArray();
+        Widget[] roots = client.getWidgetRoots();
+        if (roots != null) {
+            for (Widget root : roots) {
+                if (root == null || specialAttackWidgets.size() >= 20) {
+                    continue;
+                }
+                addSpecialAttackWidgets(specialAttackWidgets, root.getNestedChildren(), capturedAt, 20);
+                addSpecialAttackWidgets(specialAttackWidgets, root.getDynamicChildren(), capturedAt, 20);
+                addSpecialAttackWidgets(specialAttackWidgets, root.getStaticChildren(), capturedAt, 20);
+            }
+        }
+        response.add("specialAttackWidgets", specialAttackWidgets);
         return gson.toJson(response);
     }
 
@@ -1523,6 +1507,40 @@ public class ApiServer {
         return false;
     }
 
+    private boolean hasTextNameOrActionContaining(Widget widget, String needle) {
+        if (widget == null || needle == null) {
+            return false;
+        }
+        String lowerNeedle = needle.toLowerCase();
+        String text = widget.getText();
+        if (text != null && text.toLowerCase().contains(lowerNeedle)) {
+            return true;
+        }
+        String name = widget.getName();
+        if (name != null && name.toLowerCase().contains(lowerNeedle)) {
+            return true;
+        }
+        return hasActionContaining(widget, needle);
+    }
+
+    private void addSpecialAttackWidgets(JsonArray response, Widget[] widgets, long capturedAt, int limit) {
+        if (widgets == null || response.size() >= limit) {
+            return;
+        }
+
+        for (Widget widget : widgets) {
+            if (widget == null || response.size() >= limit) {
+                continue;
+            }
+            if (!widget.isHidden() && hasTextNameOrActionContaining(widget, "special")) {
+                response.add(buildWidgetJson("specialAttack", null, widget, capturedAt));
+            }
+            addSpecialAttackWidgets(response, widget.getNestedChildren(), capturedAt, limit);
+            addSpecialAttackWidgets(response, widget.getDynamicChildren(), capturedAt, limit);
+            addSpecialAttackWidgets(response, widget.getStaticChildren(), capturedAt, limit);
+        }
+    }
+
     private void addActionWidgets(JsonArray response, Widget[] widgets, long capturedAt, int limit) {
         if (widgets == null || response.size() >= limit) {
             return;
@@ -1536,6 +1554,51 @@ public class ApiServer {
                 response.add(buildWidgetJson("shopAction", null, widget, capturedAt));
             }
         }
+    }
+
+    private void addWidgetsWithAction(JsonArray response, Widget[] widgets, long capturedAt, int limit, String label, String actionNeedle) {
+        if (widgets == null || response.size() >= limit) {
+            return;
+        }
+
+        for (Widget widget : widgets) {
+            if (widget == null || response.size() >= limit) {
+                continue;
+            }
+            if (!widget.isHidden() && hasActionContaining(widget, actionNeedle)) {
+                response.add(buildWidgetJson(label, null, widget, capturedAt));
+            }
+            addWidgetsWithAction(response, widget.getNestedChildren(), capturedAt, limit, label, actionNeedle);
+            addWidgetsWithAction(response, widget.getDynamicChildren(), capturedAt, limit, label, actionNeedle);
+            addWidgetsWithAction(response, widget.getStaticChildren(), capturedAt, limit, label, actionNeedle);
+        }
+    }
+
+    private String buildBankActionsJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("topLevelInterfaceId", client.getTopLevelInterfaceId());
+        response.addProperty("bankContainerAvailable", client.getItemContainer(InventoryID.BANK) != null);
+
+        JsonArray withdrawWidgets = new JsonArray();
+        JsonArray depositWidgets = new JsonArray();
+        Widget[] roots = client.getWidgetRoots();
+        if (roots != null) {
+            for (Widget root : roots) {
+                if (root == null) {
+                    continue;
+                }
+                addWidgetsWithAction(withdrawWidgets, root.getNestedChildren(), capturedAt, 160, "bankWithdrawAction", "withdraw");
+                addWidgetsWithAction(withdrawWidgets, root.getDynamicChildren(), capturedAt, 160, "bankWithdrawAction", "withdraw");
+                addWidgetsWithAction(withdrawWidgets, root.getStaticChildren(), capturedAt, 160, "bankWithdrawAction", "withdraw");
+                addWidgetsWithAction(depositWidgets, root.getNestedChildren(), capturedAt, 160, "bankDepositAction", "deposit");
+                addWidgetsWithAction(depositWidgets, root.getDynamicChildren(), capturedAt, 160, "bankDepositAction", "deposit");
+                addWidgetsWithAction(depositWidgets, root.getStaticChildren(), capturedAt, 160, "bankDepositAction", "deposit");
+            }
+        }
+        response.add("withdrawWidgets", withdrawWidgets);
+        response.add("depositWidgets", depositWidgets);
+        return gson.toJson(response);
     }
 
     private String buildShopJson(long capturedAt) {
@@ -1565,6 +1628,8 @@ public class ApiServer {
     private String buildIdentityJson() {
         JsonObject response = new JsonObject();
         response.addProperty("instanceId", instanceId);
+        response.addProperty("apiVersion", 2);
+        response.addProperty("supportsConcurrentStreams", true);
         response.addProperty("port", port);
         response.addProperty("baseUrl", getBaseUrl());
         response.addProperty("lastSeen", System.currentTimeMillis());
@@ -1595,6 +1660,7 @@ public class ApiServer {
         }
 
         Window window = getCanvasWindow();
+        addWindowFocusState(response);
         if (window instanceof Frame) {
             Frame frame = (Frame) window;
             response.addProperty("windowTitle", frame.getTitle());
@@ -1709,6 +1775,13 @@ public class ApiServer {
                 return;
             }
             handleOnClientThread(t, () -> buildBankJson(System.currentTimeMillis()));
+        }
+    }
+
+    class BankActionsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> buildBankActionsJson(System.currentTimeMillis()));
         }
     }
 

@@ -16,6 +16,7 @@ type RuneLiteTarget = {
   screenY?: number;
   slotScreenX?: number;
   slotScreenY?: number;
+  slot?: number;
   ageMs?: number;
   distanceToPlayer?: number;
   coordinateWarning?: string;
@@ -45,6 +46,8 @@ type SnapshotCacheEntry = {
   fetchedAt: number;
   snapshot: RuneLiteSnapshot;
   inflight?: Promise<RuneLiteSnapshot>;
+  streamSupportChecked?: boolean;
+  streamSupported?: boolean;
   streamStarted?: boolean;
   streamActive?: boolean;
   streamLastEventAt?: number;
@@ -188,6 +191,8 @@ function snapshotStreamStatus(baseURL: string) {
     fetchedAt: entry?.fetchedAt ?? 0,
     cacheAgeMs: entry?.fetchedAt ? Date.now() - entry.fetchedAt : null,
     streamStarted: Boolean(entry?.streamStarted),
+    streamSupported: Boolean(entry?.streamSupported),
+    streamSupportChecked: Boolean(entry?.streamSupportChecked),
     streamActive: Boolean(entry?.streamActive),
     streamLastEventAt: entry?.streamLastEventAt ?? 0,
     streamAgeMs: entry?.streamLastEventAt ? Date.now() - entry.streamLastEventAt : null,
@@ -195,8 +200,27 @@ function snapshotStreamStatus(baseURL: string) {
   };
 }
 
+async function ensureSnapshotStreamSupported(baseURL: string): Promise<boolean> {
+  const entry = getOrCreateSnapshotCacheEntry(baseURL);
+  if (entry.streamSupportChecked) {
+    return Boolean(entry.streamSupported);
+  }
+
+  try {
+    const identity = (await axios.get(`${baseURL}/identity`, { timeout: Math.min(API_TIMEOUT_MS, 900) })).data;
+    entry.streamSupported = identity?.supportsConcurrentStreams === true;
+  } catch (error: any) {
+    entry.streamSupported = false;
+    entry.streamError = error?.message ?? String(error);
+  }
+  entry.streamSupportChecked = true;
+  return Boolean(entry.streamSupported);
+}
+
 async function getSnapshotForBase(baseURL: string, force = false): Promise<RuneLiteSnapshot> {
-  startSnapshotStream(baseURL);
+  if (!force && await ensureSnapshotStreamSupported(baseURL)) {
+    startSnapshotStream(baseURL);
+  }
   const now = Date.now();
   const cached = snapshotCache.get(baseURL);
   if (!force && cached && now - cached.fetchedAt <= SNAPSHOT_CACHE_TTL_MS) {
@@ -294,6 +318,9 @@ async function assertClientReady(baseURL: string) {
   if (identity?.canvasShowing === false) {
     throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} canvas is not visible`);
   }
+  if (identity?.windowActive === false) {
+    throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} window is not active; focus RuneLite before OS click tools`);
+  }
   return identity;
 }
 
@@ -334,6 +361,10 @@ async function clickPoint(x: number, y: number, rightClick?: boolean) {
   }
 }
 
+async function movePoint(x: number, y: number) {
+  await mouse.setPosition(new Point(x, y));
+}
+
 async function getPlayerLocation(target: ClientTarget = {}) {
   const { snapshot } = await getSnapshotForTarget(target);
   return snapshot.state?.location;
@@ -369,6 +400,50 @@ function hasScreenPoint(target: RuneLiteTarget): boolean {
   return Number.isFinite(target.screenX) && Number.isFinite(target.screenY);
 }
 
+function chebyshevDistance(a: any, b: any): number {
+  return Math.max(Math.abs((a?.x ?? 0) - (b?.x ?? 0)), Math.abs((a?.y ?? 0) - (b?.y ?? 0)));
+}
+
+function calculateStraightLineSteps(from: any, to: any, maxStepTiles = 18, maxSteps = 12) {
+  if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) {
+    throw new Error("Current player location is unavailable");
+  }
+  if (!Number.isFinite(to.worldX) || !Number.isFinite(to.worldY)) {
+    throw new Error("Target worldX/worldY are required");
+  }
+
+  const safeMaxStep = Math.max(1, Math.floor(maxStepTiles));
+  const totalDx = to.worldX - from.x;
+  const totalDy = to.worldY - from.y;
+  const distance = Math.max(Math.abs(totalDx), Math.abs(totalDy));
+  const stepsNeeded = Math.max(1, Math.ceil(distance / safeMaxStep));
+  const stepsToReturn = Math.min(stepsNeeded, Math.max(1, Math.floor(maxSteps)));
+  const steps = [];
+
+  for (let i = 1; i <= stepsToReturn; i += 1) {
+    const factor = Math.min(1, i / stepsNeeded);
+    steps.push({
+      worldX: Math.round(from.x + totalDx * factor),
+      worldY: Math.round(from.y + totalDy * factor),
+      plane: to.plane ?? from.plane ?? 0,
+      final: i === stepsNeeded,
+    });
+  }
+
+  return {
+    from,
+    target: { worldX: to.worldX, worldY: to.worldY, plane: to.plane ?? from.plane ?? 0 },
+    distance,
+    maxStepTiles: safeMaxStep,
+    stepsNeeded,
+    returnedSteps: steps.length,
+    truncated: stepsNeeded > steps.length,
+    collisionAware: false,
+    note: "Straight-line minimap steps only; obstacles and doors are not pathfound.",
+    steps,
+  };
+}
+
 function targetsForType(snapshot: RuneLiteSnapshot, entityType: string): RuneLiteTarget[] {
   switch (entityType.toLowerCase()) {
     case "npc":
@@ -390,12 +465,189 @@ function targetsForType(snapshot: RuneLiteSnapshot, entityType: string): RuneLit
   }
 }
 
+function defaultCoordinateSourceForType(entityType: string): string | undefined {
+  switch (entityType.toLowerCase()) {
+    case "npc":
+    case "npcs":
+    case "player":
+    case "players":
+      return "convexHull";
+    case "object":
+    case "objects":
+      return "clickbox";
+    default:
+      return undefined;
+  }
+}
+
+function selectLiveTarget(
+  snapshot: RuneLiteSnapshot,
+  entityType: string,
+  name?: string,
+  id?: number,
+  nearestToPlayer?: boolean,
+  coordinateSource?: string
+): RuneLiteTarget | undefined {
+  const playerLocation = nearestToPlayer ? snapshot.state?.location : null;
+  const matches = sortNearestToPlayer(
+    sortByDistance(targetsForType(snapshot, entityType).filter((target: any) => targetMatches(target, name, id))),
+    playerLocation
+  );
+
+  const expectedSource = coordinateSource ?? defaultCoordinateSourceForType(entityType);
+  if (expectedSource) {
+    return matches.find((target: any) => target.coordinateSource === expectedSource && hasScreenPoint(target));
+  }
+
+  return matches.find((target: any) => hasScreenPoint(target));
+}
+
 function clientTargetSchema() {
   return {
     instanceId: z.string().optional().describe("Optional RuneLite plugin instanceId to target"),
     playerName: z.string().optional().describe("Optional player name to target"),
     port: z.number().optional().describe("Optional RuneLite API port to target, for example 8081"),
   };
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+type OpenContextMenuArgs = ClientTarget & {
+  entityType: "npc" | "object" | "ground_item" | "player";
+  name?: string;
+  id?: number;
+  nearestToPlayer?: boolean;
+  coordinateSource?: string;
+  maxAgeMs?: number;
+  menuDelayMs?: number;
+};
+
+async function openContextMenuForTarget(args: OpenContextMenuArgs) {
+  const targetClient = { instanceId: args.instanceId, playerName: args.playerName, port: args.port };
+  const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+  await assertClientReady(baseURL);
+  const expectedSource = args.coordinateSource ?? defaultCoordinateSourceForType(args.entityType);
+  const target = selectLiveTarget(
+    snapshot,
+    args.entityType,
+    args.name,
+    args.id,
+    args.nearestToPlayer ?? true,
+    args.coordinateSource
+  );
+  requireFreshClickable(target, args.maxAgeMs ?? 600, expectedSource);
+  await clickPoint(target.screenX, target.screenY, true);
+  await sleep(Math.max(0, args.menuDelayMs ?? 150));
+  const menu = (await runeliteApi(baseURL).get("/context_menu")).data;
+  return {
+    rightClicked: {
+      entityType: args.entityType,
+      name: target.name,
+      id: target.id,
+      screenX: target.screenX,
+      screenY: target.screenY,
+      worldX: target.worldX,
+      worldY: target.worldY,
+      coordinateSource: target.coordinateSource,
+      distanceToPlayer: target.distanceToPlayer,
+      ageMs: target.ageMs,
+    },
+    menu,
+  };
+}
+
+async function clickMinimapProjection(worldX: number, worldY: number, plane: number | undefined, target: ClientTarget = {}, maxAgeMs = 1000) {
+  const api = await apiForTarget(target);
+  await assertClientReady(api.defaults.baseURL ?? selectedRuneliteApi);
+  const res = await api.get("/minimap", { params: { worldX, worldY, plane } });
+  const minimapTarget = res.data?.target as RuneLiteTarget | undefined;
+  requireFreshClickable(minimapTarget, maxAgeMs, "minimapProjection");
+  await clickPoint(minimapTarget.screenX, minimapTarget.screenY);
+  return minimapTarget;
+}
+
+async function clickShopAction(
+  actionText: string,
+  itemName?: string,
+  itemId?: number,
+  rightClick?: boolean,
+  target: ClientTarget = {}
+) {
+  const baseURL = await resolveRuneliteApi(target);
+  await assertClientReady(baseURL);
+  const res = await runeliteApi(baseURL).get("/shop");
+  const actionNeedle = actionText.toLowerCase();
+  const itemNeedle = itemName?.toLowerCase();
+  const shopTarget = (res.data?.actionWidgets ?? []).find((widget: any) => {
+    const actions = Array.isArray(widget.actions) ? widget.actions.join(" ").toLowerCase() : "";
+    const label = `${widget.name ?? ""} ${widget.text ?? ""}`.toLowerCase();
+    return actions.includes(actionNeedle) &&
+      (itemId === undefined || widget.itemId === itemId) &&
+      (!itemNeedle || label.includes(itemNeedle));
+  });
+  requireFreshClickable(shopTarget, 1000, "widgetBounds");
+  await clickPoint(shopTarget.screenX, shopTarget.screenY, rightClick);
+  return shopTarget;
+}
+
+async function clickBankAction(
+  actionText: string,
+  itemName?: string,
+  itemId?: number,
+  rightClick?: boolean,
+  target: ClientTarget = {}
+) {
+  const baseURL = await resolveRuneliteApi(target);
+  await assertClientReady(baseURL);
+  const res = await runeliteApi(baseURL).get("/bank_actions");
+  const actionNeedle = actionText.toLowerCase();
+  const itemNeedle = itemName?.toLowerCase();
+  const widgets = actionNeedle.includes("deposit")
+    ? res.data?.depositWidgets ?? []
+    : res.data?.withdrawWidgets ?? [];
+  const bankTarget = widgets.find((widget: any) => {
+    const actions = Array.isArray(widget.actions) ? widget.actions.join(" ").toLowerCase() : "";
+    const label = `${widget.name ?? ""} ${widget.text ?? ""}`.toLowerCase();
+    return actions.includes(actionNeedle) &&
+      (itemId === undefined || widget.itemId === itemId) &&
+      (!itemNeedle || label.includes(itemNeedle));
+  });
+  requireFreshClickable(bankTarget, 1000, "widgetBounds");
+  await clickPoint(bankTarget.screenX, bankTarget.screenY, rightClick);
+  return bankTarget;
+}
+
+function findInventoryItem(snapshot: RuneLiteSnapshot, name?: string, id?: number, slot?: number): RuneLiteTarget | undefined {
+  return (snapshot.inventory ?? []).find((item: any) =>
+    (slot === undefined || item.slot === slot) &&
+    targetMatches(item, name, id) &&
+    Number.isFinite(item.slotScreenX) &&
+    Number.isFinite(item.slotScreenY)
+  );
+}
+
+function requireFreshInventoryItem(item: RuneLiteTarget | undefined, maxAgeMs: number): asserts item is RuneLiteTarget & { slotScreenX: number; slotScreenY: number } {
+  if (!item) {
+    throw new Error("No matching inventory item with slot coordinates found");
+  }
+  if (!Number.isFinite(item.slotScreenX) || !Number.isFinite(item.slotScreenY)) {
+    throw new Error("Inventory item has no click-ready slotScreenX/slotScreenY");
+  }
+  if (item.ageMs !== undefined && item.ageMs > maxAgeMs) {
+    throw new Error(`Inventory item data is stale: ageMs=${item.ageMs}, maxAgeMs=${maxAgeMs}`);
+  }
+}
+
+async function selectInventoryItemForUse(item: RuneLiteTarget & { slotScreenX: number; slotScreenY: number }, target: ClientTarget, useRightClickMenu = true) {
+  if (useRightClickMenu) {
+    await clickPoint(item.slotScreenX, item.slotScreenY, true);
+    await sleep(150);
+    await selectContextMenuOption("Use", target, false);
+  } else {
+    await clickPoint(item.slotScreenX, item.slotScreenY);
+  }
 }
 
 async function selectContextMenuOption(text: string, target: ClientTarget = {}, exact?: boolean) {
@@ -416,6 +668,28 @@ async function selectContextMenuOption(text: string, target: ClientTarget = {}, 
   requireFreshClickable(match, 1000);
   await clickPoint(match.screenX, match.screenY);
   return match;
+}
+
+function isPlayerIdle(state: any): boolean {
+  return state?.isIdle === true || (state?.animation === -1 && !state?.interactingWith);
+}
+
+function tileDistance(location: any, worldX: number, worldY: number, plane?: number): number {
+  if (!location || !Number.isFinite(location.x) || !Number.isFinite(location.y)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  if (plane !== undefined && location.plane !== plane) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Math.max(Math.abs(location.x - worldX), Math.abs(location.y - worldY));
+}
+
+function matchesChatMessage(message: any, text: string, caseSensitive?: boolean, type?: string) {
+  if (type && String(message.type ?? "").toLowerCase() !== type.toLowerCase()) {
+    return false;
+  }
+  const haystack = String(message.message ?? "");
+  return caseSensitive ? haystack.includes(text) : haystack.toLowerCase().includes(text.toLowerCase());
 }
 
 // --- State Reading Tools ---
@@ -507,6 +781,22 @@ server.tool("get_bank", "Get all items currently in the player's bank (if the ba
     return { content: [{ type: "text", text: errorText("fetching bank", e) }] };
   }
 });
+
+server.tool(
+  "get_bank_actions",
+  "Read visible bank Withdraw and Deposit widgets with click-ready widget coordinates when the bank interface is open.",
+  {
+    ...clientTargetSchema(),
+  },
+  async ({ instanceId, playerName, port }) => {
+    try {
+      const res = await (await apiForTarget({ instanceId, playerName, port })).get("/bank_actions");
+      return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("fetching bank actions", e) }] };
+    }
+  }
+);
 
 server.tool("get_equipment", "Get all items currently equipped by the player", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
   try {
@@ -834,6 +1124,29 @@ server.tool(
 );
 
 server.tool(
+  "click_special_attack",
+  "Click the visible special-attack combat widget using fresh widget screen coordinates when available.",
+  {
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+  },
+  async ({ rightClick, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const baseURL = await resolveRuneliteApi(targetClient);
+      await assertClientReady(baseURL);
+      const res = await runeliteApi(baseURL).get("/combat");
+      const target = (res.data?.specialAttackWidgets ?? []).find((widget: any) => Number.isFinite(widget.screenX) && Number.isFinite(widget.screenY));
+      requireFreshClickable(target, 1000, "widgetBounds");
+      await clickPoint(target.screenX, target.screenY, rightClick);
+      return { content: [{ type: "text", text: `Clicked special attack at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error clicking special attack: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
   "get_shop",
   "Read visible shop/trade action widgets with Buy/Sell actions and click-ready widget coordinates.",
   {
@@ -861,24 +1174,52 @@ server.tool(
   },
   async ({ actionText, itemName, itemId, rightClick, instanceId, playerName, port }) => {
     try {
-      const targetClient = { instanceId, playerName, port };
-      const baseURL = await resolveRuneliteApi(targetClient);
-      await assertClientReady(baseURL);
-      const res = await runeliteApi(baseURL).get("/shop");
-      const actionNeedle = actionText.toLowerCase();
-      const itemNeedle = itemName?.toLowerCase();
-      const target = (res.data?.actionWidgets ?? []).find((widget: any) => {
-        const actions = Array.isArray(widget.actions) ? widget.actions.join(" ").toLowerCase() : "";
-        const label = `${widget.name ?? ""} ${widget.text ?? ""}`.toLowerCase();
-        return actions.includes(actionNeedle) &&
-          (itemId === undefined || widget.itemId === itemId) &&
-          (!itemNeedle || label.includes(itemNeedle));
-      });
-      requireFreshClickable(target, 1000, "widgetBounds");
-      await clickPoint(target.screenX, target.screenY, rightClick);
+      const target = await clickShopAction(actionText, itemName, itemId, rightClick, { instanceId, playerName, port });
       return { content: [{ type: "text", text: `Clicked shop action at ${target.screenX}, ${target.screenY}.` }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error clicking shop action: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "buy_item",
+  "Click a visible shop Buy action for an item, optionally filtered by item name or item id.",
+  {
+    quantity: z.string().optional().describe("Quantity suffix to prefer, for example 1, 5, 10, 50. Omit to match any Buy action."),
+    itemName: z.string().optional().describe("Optional item widget name/text substring"),
+    itemId: z.number().optional().describe("Optional item id"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+  },
+  async ({ quantity, itemName, itemId, rightClick, instanceId, playerName, port }) => {
+    try {
+      const actionText = quantity ? `Buy ${quantity}` : "Buy";
+      const target = await clickShopAction(actionText, itemName, itemId, rightClick, { instanceId, playerName, port });
+      return { content: [{ type: "text", text: `Clicked ${actionText} for shop item at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error buying shop item: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "sell_item",
+  "Click a visible shop Sell action for an item, optionally filtered by item name or item id.",
+  {
+    quantity: z.string().optional().describe("Quantity suffix to prefer, for example 1, 5, 10, 50. Omit to match any Sell action."),
+    itemName: z.string().optional().describe("Optional item widget name/text substring"),
+    itemId: z.number().optional().describe("Optional item id"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+  },
+  async ({ quantity, itemName, itemId, rightClick, instanceId, playerName, port }) => {
+    try {
+      const actionText = quantity ? `Sell ${quantity}` : "Sell";
+      const target = await clickShopAction(actionText, itemName, itemId, rightClick, { instanceId, playerName, port });
+      return { content: [{ type: "text", text: `Clicked ${actionText} for shop item at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error selling shop item: ${e.message}` }] };
     }
   }
 );
@@ -920,6 +1261,108 @@ server.tool(
 );
 
 server.tool(
+  "open_context_menu_for_target",
+  "Right-click a fresh NPC, object, player, or ground item target and return the resulting RuneLite context menu without selecting an option.",
+  {
+    entityType: z.enum(["npc", "object", "ground_item", "player"]).describe("Target type to right-click"),
+    name: z.string().optional().describe("Optional exact target name"),
+    id: z.number().optional().describe("Optional target ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching target to the player"),
+    coordinateSource: z.string().optional().describe("Required coordinate source. Defaults to clickbox for objects and convexHull for NPCs/players."),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    menuDelayMs: z.number().optional().describe("Delay after right-click before reading the menu, default 150"),
+    ...clientTargetSchema(),
+  },
+  async ({ entityType, name, id, nearestToPlayer, coordinateSource, maxAgeMs, menuDelayMs, instanceId, playerName, port }) => {
+    try {
+      const result = await openContextMenuForTarget({
+        entityType,
+        name,
+        id,
+        nearestToPlayer,
+        coordinateSource,
+        maxAgeMs,
+        menuDelayMs,
+        instanceId,
+        playerName,
+        port
+      });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error opening context menu for target: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "right_click_npc",
+  "Right-click a fresh NPC convexHull target and return the resulting RuneLite context menu.",
+  {
+    name: z.string().optional().describe("NPC name"),
+    id: z.number().optional().describe("NPC ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching NPC to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    menuDelayMs: z.number().optional().describe("Delay after right-click before reading the menu, default 150"),
+    ...clientTargetSchema(),
+  },
+  async ({ name, id, nearestToPlayer, maxAgeMs, menuDelayMs, instanceId, playerName, port }) => {
+    try {
+      const result = await openContextMenuForTarget({ entityType: "npc", name, id, nearestToPlayer, maxAgeMs, menuDelayMs, instanceId, playerName, port });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error right-clicking NPC: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "right_click_object",
+  "Right-click a fresh object clickbox target and return the resulting RuneLite context menu.",
+  {
+    name: z.string().optional().describe("Object name, for example Tree"),
+    id: z.number().optional().describe("Object ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching object to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    menuDelayMs: z.number().optional().describe("Delay after right-click before reading the menu, default 150"),
+    ...clientTargetSchema(),
+  },
+  async ({ name, id, nearestToPlayer, maxAgeMs, menuDelayMs, instanceId, playerName, port }) => {
+    try {
+      const result = await openContextMenuForTarget({ entityType: "object", name, id, nearestToPlayer, maxAgeMs, menuDelayMs, instanceId, playerName, port });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error right-clicking object: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "right_click_ground_item",
+  "Right-click a fresh ground item target and return the resulting RuneLite context menu.",
+  {
+    name: z.string().optional().describe("Ground item name"),
+    id: z.number().optional().describe("Item ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching item to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    menuDelayMs: z.number().optional().describe("Delay after right-click before reading the menu, default 150"),
+    ...clientTargetSchema(),
+  },
+  async ({ name, id, nearestToPlayer, maxAgeMs, menuDelayMs, instanceId, playerName, port }) => {
+    try {
+      const result = await openContextMenuForTarget({ entityType: "ground_item", name, id, nearestToPlayer, maxAgeMs, menuDelayMs, instanceId, playerName, port });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error right-clicking ground item: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
   "select_option",
   "Select an option from the currently open RuneLite right-click/context menu by visible option text.",
   {
@@ -948,15 +1391,96 @@ server.tool(
   },
   async ({ worldX, worldY, plane, instanceId, playerName, port }) => {
     try {
-      const api = await apiForTarget({ instanceId, playerName, port });
-      await assertClientReady(api.defaults.baseURL ?? selectedRuneliteApi);
-      const res = await api.get("/minimap", { params: { worldX, worldY, plane } });
-      const target = res.data?.target as RuneLiteTarget | undefined;
-      requireFreshClickable(target, 1000, "minimapProjection");
-      await clickPoint(target.screenX, target.screenY);
+      const target = await clickMinimapProjection(worldX, worldY, plane, { instanceId, playerName, port });
       return { content: [{ type: "text", text: `Clicked minimap projection for ${worldX}, ${worldY}, ${plane ?? 0} at ${target.screenX}, ${target.screenY}.` }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error walking to tile: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "calculate_path_to",
+  "Calculate bounded straight-line minimap steps from the current player tile to a target world tile without clicking.",
+  {
+    worldX: z.number().describe("Target world X tile"),
+    worldY: z.number().describe("Target world Y tile"),
+    plane: z.number().optional().describe("Target plane, defaults to the player's current plane"),
+    maxStepTiles: z.number().optional().describe("Maximum tiles per minimap step, default 18"),
+    maxSteps: z.number().optional().describe("Maximum steps to return, default 12"),
+    ...clientTargetSchema(),
+  },
+  async ({ worldX, worldY, plane, maxStepTiles, maxSteps, instanceId, playerName, port }) => {
+    try {
+      const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port }, true);
+      const path = calculateStraightLineSteps(
+        snapshot.state?.location,
+        { worldX, worldY, plane },
+        maxStepTiles ?? 18,
+        maxSteps ?? 12
+      );
+      return { content: [{ type: "text", text: JSON.stringify(path, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error calculating path: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "walk_path_to",
+  "Calculate a bounded path and click only the next minimap step toward the target world tile.",
+  {
+    worldX: z.number().describe("Target world X tile"),
+    worldY: z.number().describe("Target world Y tile"),
+    plane: z.number().optional().describe("Target plane, defaults to the player's current plane"),
+    maxStepTiles: z.number().optional().describe("Maximum tiles per minimap step, default 18"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age in milliseconds, default 1000"),
+    ...clientTargetSchema(),
+  },
+  async ({ worldX, worldY, plane, maxStepTiles, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { snapshot } = await getSnapshotForTarget(targetClient, true);
+      const path = calculateStraightLineSteps(
+        snapshot.state?.location,
+        { worldX, worldY, plane },
+        maxStepTiles ?? 18,
+        1
+      );
+      const step = path.steps[0];
+      const clicked = await clickMinimapProjection(step.worldX, step.worldY, step.plane, targetClient, maxAgeMs ?? 1000);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            clickedStep: step,
+            clickedAt: { screenX: clicked.screenX, screenY: clicked.screenY },
+            path,
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error walking path step: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "click_minimap_tile",
+  "Project a nearby world tile onto the minimap and click the resulting minimapProjection point.",
+  {
+    worldX: z.number().describe("Target world X tile"),
+    worldY: z.number().describe("Target world Y tile"),
+    plane: z.number().optional().describe("Target plane, defaults to 0 if omitted"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age in milliseconds, default 1000"),
+    ...clientTargetSchema(),
+  },
+  async ({ worldX, worldY, plane, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+      const target = await clickMinimapProjection(worldX, worldY, plane, { instanceId, playerName, port }, maxAgeMs ?? 1000);
+      return { content: [{ type: "text", text: `Clicked minimap tile ${worldX}, ${worldY}, ${plane ?? 0} at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error clicking minimap tile: ${e.message}` }] };
     }
   }
 );
@@ -1004,18 +1528,158 @@ server.tool(
       const targetClient = { instanceId, playerName, port };
       const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
       await assertClientReady(baseURL);
-      const inventory = snapshot.inventory ?? [];
-      const item = inventory.find((candidate: any) => targetMatches(candidate, name, id) && Number.isFinite(candidate.slotScreenX) && Number.isFinite(candidate.slotScreenY));
-      if (!item) {
-        throw new Error("No matching inventory item with slot coordinates found");
-      }
-      if (item.ageMs !== undefined && item.ageMs > 1000) {
-        throw new Error(`Inventory item data is stale: ageMs=${item.ageMs}`);
-      }
+      const item = findInventoryItem(snapshot, name, id);
+      requireFreshInventoryItem(item, 1000);
       await clickPoint(item.slotScreenX!, item.slotScreenY!);
       return { content: [{ type: "text", text: `Used inventory item ${item.name ?? item.id} in slot ${(item as any).slot}.` }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error using inventory item: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "use_inventory_item_on_object",
+  "Select Use on a fresh inventory item, then click a fresh object clickbox target.",
+  {
+    itemName: z.string().optional().describe("Inventory item name"),
+    itemId: z.number().optional().describe("Inventory item ID"),
+    slot: z.number().optional().describe("Inventory slot index 0-27"),
+    objectName: z.string().optional().describe("Object name, for example Door"),
+    objectId: z.number().optional().describe("Object ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching object to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    itemMaxAgeMs: z.number().optional().describe("Maximum accepted inventory item age in milliseconds, default 1000"),
+    useRightClickMenu: z.boolean().optional().describe("Right-click the item and select Use first. Defaults to true."),
+    ...clientTargetSchema(),
+  },
+  async ({ itemName, itemId, slot, objectName, objectId, nearestToPlayer, maxAgeMs, itemMaxAgeMs, useRightClickMenu, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const item = findInventoryItem(snapshot, itemName, itemId, slot);
+      requireFreshInventoryItem(item, itemMaxAgeMs ?? 1000);
+      await selectInventoryItemForUse(item, targetClient, useRightClickMenu ?? true);
+
+      const freshSnapshot = await getSnapshotForBase(baseURL, true);
+      const target = selectLiveTarget(freshSnapshot, "object", objectName, objectId, nearestToPlayer ?? true, "clickbox");
+      requireFreshClickable(target, maxAgeMs ?? 600, "clickbox");
+      await clickPoint(target.screenX, target.screenY);
+      return { content: [{ type: "text", text: `Used ${item.name ?? item.id} on object ${target.name ?? target.id} at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error using inventory item on object: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "withdraw_bank_item",
+  "Click a visible bank Withdraw action for an item, optionally filtered by item name or item id.",
+  {
+    quantity: z.string().optional().describe("Quantity suffix to prefer, for example 1, 5, 10, X, All. Omit to match any Withdraw action."),
+    itemName: z.string().optional().describe("Optional bank item widget name/text substring"),
+    itemId: z.number().optional().describe("Optional item id"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+  },
+  async ({ quantity, itemName, itemId, rightClick, instanceId, playerName, port }) => {
+    try {
+      const actionText = quantity ? `Withdraw-${quantity}` : "Withdraw";
+      const target = await clickBankAction(actionText, itemName, itemId, rightClick, { instanceId, playerName, port });
+      return { content: [{ type: "text", text: `Clicked ${actionText} for bank item at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error withdrawing bank item: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "deposit_inventory_item",
+  "Click a visible bank Deposit action for an inventory item, optionally filtered by item name or item id.",
+  {
+    quantity: z.string().optional().describe("Quantity suffix to prefer, for example 1, 5, 10, X, All. Omit to match any Deposit action."),
+    itemName: z.string().optional().describe("Optional inventory item widget name/text substring"),
+    itemId: z.number().optional().describe("Optional item id"),
+    rightClick: z.boolean().optional().describe("Whether to right click instead of left click"),
+    ...clientTargetSchema(),
+  },
+  async ({ quantity, itemName, itemId, rightClick, instanceId, playerName, port }) => {
+    try {
+      const actionText = quantity ? `Deposit-${quantity}` : "Deposit";
+      const target = await clickBankAction(actionText, itemName, itemId, rightClick, { instanceId, playerName, port });
+      return { content: [{ type: "text", text: `Clicked ${actionText} for inventory item at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error depositing inventory item: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "use_inventory_item_on_npc",
+  "Select Use on a fresh inventory item, then click a fresh NPC convexHull target.",
+  {
+    itemName: z.string().optional().describe("Inventory item name"),
+    itemId: z.number().optional().describe("Inventory item ID"),
+    slot: z.number().optional().describe("Inventory slot index 0-27"),
+    npcName: z.string().optional().describe("NPC name"),
+    npcId: z.number().optional().describe("NPC ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching NPC to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    itemMaxAgeMs: z.number().optional().describe("Maximum accepted inventory item age in milliseconds, default 1000"),
+    useRightClickMenu: z.boolean().optional().describe("Right-click the item and select Use first. Defaults to true."),
+    ...clientTargetSchema(),
+  },
+  async ({ itemName, itemId, slot, npcName, npcId, nearestToPlayer, maxAgeMs, itemMaxAgeMs, useRightClickMenu, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const item = findInventoryItem(snapshot, itemName, itemId, slot);
+      requireFreshInventoryItem(item, itemMaxAgeMs ?? 1000);
+      await selectInventoryItemForUse(item, targetClient, useRightClickMenu ?? true);
+
+      const freshSnapshot = await getSnapshotForBase(baseURL, true);
+      const target = selectLiveTarget(freshSnapshot, "npc", npcName, npcId, nearestToPlayer ?? true, "convexHull");
+      requireFreshClickable(target, maxAgeMs ?? 600, "convexHull");
+      await clickPoint(target.screenX, target.screenY);
+      return { content: [{ type: "text", text: `Used ${item.name ?? item.id} on NPC ${target.name ?? target.id} at ${target.screenX}, ${target.screenY}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error using inventory item on NPC: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "use_inventory_item_on_inventory_item",
+  "Select Use on one fresh inventory item, then click another fresh inventory item slot.",
+  {
+    itemName: z.string().optional().describe("Source inventory item name"),
+    itemId: z.number().optional().describe("Source inventory item ID"),
+    slot: z.number().optional().describe("Source inventory slot index 0-27"),
+    targetItemName: z.string().optional().describe("Target inventory item name"),
+    targetItemId: z.number().optional().describe("Target inventory item ID"),
+    targetSlot: z.number().optional().describe("Target inventory slot index 0-27"),
+    itemMaxAgeMs: z.number().optional().describe("Maximum accepted inventory item age in milliseconds, default 1000"),
+    useRightClickMenu: z.boolean().optional().describe("Right-click the source item and select Use first. Defaults to true."),
+    ...clientTargetSchema(),
+  },
+  async ({ itemName, itemId, slot, targetItemName, targetItemId, targetSlot, itemMaxAgeMs, useRightClickMenu, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const item = findInventoryItem(snapshot, itemName, itemId, slot);
+      requireFreshInventoryItem(item, itemMaxAgeMs ?? 1000);
+      await selectInventoryItemForUse(item, targetClient, useRightClickMenu ?? true);
+
+      const freshSnapshot = await getSnapshotForBase(baseURL, true);
+      const target = findInventoryItem(freshSnapshot, targetItemName, targetItemId, targetSlot);
+      requireFreshInventoryItem(target, itemMaxAgeMs ?? 1000);
+      await clickPoint(target.slotScreenX, target.slotScreenY);
+      return { content: [{ type: "text", text: `Used ${item.name ?? item.id} on inventory item ${target.name ?? target.id} in slot ${target.slot}.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error using inventory item on inventory item: ${e.message}` }] };
     }
   }
 );
@@ -1066,6 +1730,152 @@ server.tool(
 );
 
 server.tool(
+  "wait_until_idle",
+  "Poll fresh snapshots until the player is idle or the timeout elapses.",
+  {
+    timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 10000"),
+    pollMs: z.number().optional().describe("Polling interval in milliseconds, default 500"),
+    stablePolls: z.number().optional().describe("How many consecutive idle polls are required, default 2"),
+    ...clientTargetSchema(),
+  },
+  async ({ timeoutMs, pollMs, stablePolls, instanceId, playerName, port }) => {
+    const startedAt = Date.now();
+    const timeout = Math.max(1, timeoutMs ?? 10000);
+    const interval = Math.max(100, pollMs ?? 500);
+    const requiredStablePolls = Math.max(1, stablePolls ?? 2);
+    let idlePolls = 0;
+    let lastState: any = {};
+
+    try {
+      while (Date.now() - startedAt <= timeout) {
+        const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port }, true);
+        lastState = snapshot.state ?? {};
+        if (isPlayerIdle(lastState)) {
+          idlePolls += 1;
+          if (idlePolls >= requiredStablePolls) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ idle: true, waitedMs: Date.now() - startedAt, stablePolls: idlePolls, state: lastState }, null, 2)
+              }]
+            };
+          }
+        } else {
+          idlePolls = 0;
+        }
+        await sleep(interval);
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ idle: false, waitedMs: Date.now() - startedAt, stablePolls: idlePolls, state: lastState }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error waiting for idle: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "wait_until_location",
+  "Poll fresh snapshots until the player is within a Chebyshev tile radius of a world location.",
+  {
+    worldX: z.number().describe("Target world X tile"),
+    worldY: z.number().describe("Target world Y tile"),
+    plane: z.number().optional().describe("Required plane, omitted means any plane"),
+    radius: z.number().optional().describe("Accepted tile radius, default 1"),
+    timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 15000"),
+    pollMs: z.number().optional().describe("Polling interval in milliseconds, default 500"),
+    ...clientTargetSchema(),
+  },
+  async ({ worldX, worldY, plane, radius, timeoutMs, pollMs, instanceId, playerName, port }) => {
+    const startedAt = Date.now();
+    const timeout = Math.max(1, timeoutMs ?? 15000);
+    const interval = Math.max(100, pollMs ?? 500);
+    const acceptedRadius = Math.max(0, radius ?? 1);
+    let lastLocation: any = null;
+    let lastDistance = Number.MAX_SAFE_INTEGER;
+
+    try {
+      while (Date.now() - startedAt <= timeout) {
+        const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port }, true);
+        lastLocation = snapshot.state?.location;
+        lastDistance = tileDistance(lastLocation, worldX, worldY, plane);
+        if (lastDistance <= acceptedRadius) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ reached: true, waitedMs: Date.now() - startedAt, distance: lastDistance, location: lastLocation }, null, 2)
+            }]
+          };
+        }
+        await sleep(interval);
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ reached: false, waitedMs: Date.now() - startedAt, distance: lastDistance, location: lastLocation }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error waiting for location: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "wait_for_chat_message",
+  "Poll recent chat/game messages until a fresh message contains the requested text.",
+  {
+    text: z.string().describe("Message substring to wait for"),
+    type: z.string().optional().describe("Optional RuneLite chat message type filter, for example GAMEMESSAGE or SPAM"),
+    caseSensitive: z.boolean().optional().describe("Whether matching is case-sensitive"),
+    sinceNow: z.boolean().optional().describe("Ignore old buffered messages and only match messages captured after the tool starts, default true"),
+    timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 10000"),
+    pollMs: z.number().optional().describe("Polling interval in milliseconds, default 500"),
+    limit: z.number().optional().describe("Recent message count to scan per poll, default 50"),
+    ...clientTargetSchema(),
+  },
+  async ({ text, type, caseSensitive, sinceNow, timeoutMs, pollMs, limit, instanceId, playerName, port }) => {
+    const startedAt = Date.now();
+    const timeout = Math.max(1, timeoutMs ?? 10000);
+    const interval = Math.max(100, pollMs ?? 500);
+    const onlyFresh = sinceNow ?? true;
+    let lastMessages: any[] = [];
+
+    try {
+      const api = await apiForTarget({ instanceId, playerName, port });
+      while (Date.now() - startedAt <= timeout) {
+        const res = await api.get("/chat", { params: { limit: limit ?? 50 } });
+        lastMessages = res.data?.messages ?? [];
+        const match = lastMessages.find((message: any) =>
+          (!onlyFresh || Number(message.capturedAt ?? 0) >= startedAt) &&
+          matchesChatMessage(message, text, caseSensitive, type)
+        );
+        if (match) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ matched: true, waitedMs: Date.now() - startedAt, message: match }, null, 2)
+            }]
+          };
+        }
+        await sleep(interval);
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ matched: false, waitedMs: Date.now() - startedAt, scanned: lastMessages.length, lastMessages }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error waiting for chat message: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
   "get_stream_status",
   "Inspect the MCP server's live /api/stream snapshot cache status for a RuneLite client.",
   {
@@ -1074,7 +1884,9 @@ server.tool(
   async ({ instanceId, playerName, port }) => {
     try {
       const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
-      startSnapshotStream(baseURL);
+      if (await ensureSnapshotStreamSupported(baseURL)) {
+        startSnapshotStream(baseURL);
+      }
       return { content: [{ type: "text", text: JSON.stringify(snapshotStreamStatus(baseURL), null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("checking stream status", e) }] };
@@ -1163,6 +1975,37 @@ server.tool(
 );
 
 server.tool(
+  "hover_object",
+  "Refresh the newest object snapshot, find a matching object, and move the mouse to its fresh clickbox-backed screenX/screenY without clicking.",
+  {
+    name: z.string().optional().describe("Object name, for example Tree"),
+    id: z.number().optional().describe("Object ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching object to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    ...clientTargetSchema(),
+  },
+  async ({ name, id, nearestToPlayer, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const objects = snapshot.objects ?? [];
+      const playerLocation = nearestToPlayer ? snapshot.state?.location : null;
+      const matches = sortNearestToPlayer(
+        sortByDistance(objects.filter((object: any) => targetMatches(object, name, id))),
+        playerLocation
+      );
+      const target = matches.find((object: any) => object.coordinateSource === "clickbox" && Number.isFinite(object.screenX) && Number.isFinite(object.screenY));
+      requireFreshClickable(target, maxAgeMs ?? 600, "clickbox");
+      await movePoint(target.screenX, target.screenY);
+      return { content: [{ type: "text", text: `Moved mouse to object ${target.name} (${target.id}) at ${target.screenX}, ${target.screenY} without clicking.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error hovering object: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
   "click_npc",
   "Refresh the newest NPC snapshot, find a matching NPC, and click its fresh convexHull-backed screenX/screenY.",
   {
@@ -1190,6 +2033,37 @@ server.tool(
       return { content: [{ type: "text", text: `Clicked NPC ${target.name} (${target.id}) at ${target.screenX}, ${target.screenY}.` }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error clicking NPC: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "hover_npc",
+  "Refresh the newest NPC snapshot, find a matching NPC, and move the mouse to its fresh convexHull-backed screenX/screenY without clicking.",
+  {
+    name: z.string().optional().describe("NPC name"),
+    id: z.number().optional().describe("NPC ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching NPC to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    ...clientTargetSchema(),
+  },
+  async ({ name, id, nearestToPlayer, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const npcs = snapshot.npcs ?? [];
+      const playerLocation = nearestToPlayer ? snapshot.state?.location : null;
+      const matches = sortNearestToPlayer(
+        sortByDistance(npcs.filter((npc: any) => targetMatches(npc, name, id))),
+        playerLocation
+      );
+      const target = matches.find((npc: any) => npc.coordinateSource === "convexHull" && Number.isFinite(npc.screenX) && Number.isFinite(npc.screenY));
+      requireFreshClickable(target, maxAgeMs ?? 600, "convexHull");
+      await movePoint(target.screenX, target.screenY);
+      return { content: [{ type: "text", text: `Moved mouse to NPC ${target.name} (${target.id}) at ${target.screenX}, ${target.screenY} without clicking.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error hovering NPC: ${e.message}` }] };
     }
   }
 );
@@ -1226,7 +2100,57 @@ server.tool(
   }
 );
 
+server.tool(
+  "hover_ground_item",
+  "Refresh the newest ground-item snapshot, find a matching item, and move the mouse to its fresh screenX/screenY without clicking.",
+  {
+    name: z.string().optional().describe("Ground item name"),
+    id: z.number().optional().describe("Item ID"),
+    nearestToPlayer: z.boolean().optional().describe("Prefer the nearest matching item to the player"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted target age in milliseconds, default 600"),
+    ...clientTargetSchema(),
+  },
+  async ({ name, id, nearestToPlayer, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+      const targetClient = { instanceId, playerName, port };
+      const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+      await assertClientReady(baseURL);
+      const items = snapshot.groundItems ?? [];
+      const playerLocation = nearestToPlayer ? snapshot.state?.location : null;
+      const matches = sortNearestToPlayer(
+        sortByDistance(items.filter((item: any) => targetMatches(item, name, id))),
+        playerLocation
+      );
+      const target = matches.find((item: any) => Number.isFinite(item.screenX) && Number.isFinite(item.screenY));
+      requireFreshClickable(target, maxAgeMs ?? 600);
+      await movePoint(target.screenX, target.screenY);
+      return { content: [{ type: "text", text: `Moved mouse to ground item ${target.name} (${target.id}) at ${target.screenX}, ${target.screenY} without clicking.` }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error hovering ground item: ${e.message}` }] };
+    }
+  }
+);
+
 // --- Action Tools (OS-Level) ---
+
+server.tool(
+  "move_mouse",
+  "Moves the hardware mouse to an absolute desktop screen X/Y coordinate without clicking. Use this to verify RuneLite screenX/screenY safely.",
+  {
+    x: z.number().describe("The absolute desktop screen X coordinate, usually a screenX value from the RuneLite API"),
+    y: z.number().describe("The absolute desktop screen Y coordinate, usually a screenY value from the RuneLite API")
+  },
+  async ({ x, y }) => {
+    try {
+      await movePoint(x, y);
+      return {
+        content: [{ type: "text", text: `Successfully moved mouse to ${x}, ${y} without clicking.` }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error moving mouse: ${e.message}` }] };
+    }
+  }
+);
 
 server.tool(
   "move_mouse_and_click",
@@ -1325,7 +2249,7 @@ server.tool(
         "9": Key.Num9,
       };
       const k = keyMap[normalized];
-      if (!k) {
+      if (k === undefined) {
         return { content: [{ type: "text", text: `Unsupported key: ${keyName}` }] };
       }
       await keyboard.type(k);

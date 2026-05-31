@@ -129,9 +129,22 @@ function Build-Plugin {
   New-Item -ItemType Directory -Force -Path $PluginClasses | Out-Null
 
   Write-Step "Compiling RuneLite plugin..."
-  & $RuneLiteJre -jar $EcjJar -11 -encoding UTF-8 -cp $classPath -d $PluginClasses `
-    (Join-Path $PluginRoot "src\main\java\com\osrsmcp\OsrsMcpPlugin.java") `
-    (Join-Path $PluginRoot "src\main\java\com\osrsmcp\ApiServer.java") | Out-String | Write-Host
+  $pluginSources = @(Get-ChildItem -LiteralPath (Join-Path $PluginRoot "src\main\java") -Recurse -Filter "*.java" | ForEach-Object { $_.FullName })
+  $pluginCompilerErrors = [System.IO.Path]::GetTempFileName()
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $pluginCompileOutput = & $RuneLiteJre -jar $EcjJar -11 -encoding UTF-8 -cp $classPath -d $PluginClasses @pluginSources 2> $pluginCompilerErrors
+    $pluginCompileExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $pluginCompileErrorOutput = Get-Content -LiteralPath $pluginCompilerErrors -Raw -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $pluginCompilerErrors -Force -ErrorAction SilentlyContinue
+  }
+  @($pluginCompileOutput, $pluginCompileErrorOutput) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Out-String | Write-Host
+  if ($pluginCompileExitCode -ne 0) {
+    throw "RuneLite plugin compilation failed with exit code $pluginCompileExitCode"
+  }
 
   if (Test-Path -LiteralPath $HelperClasses) {
     Remove-Item -LiteralPath $HelperClasses -Recurse -Force
@@ -139,8 +152,22 @@ function Build-Plugin {
   New-Item -ItemType Directory -Force -Path $HelperClasses | Out-Null
 
   Write-Step "Compiling local RuneLite dev launcher..."
-  & $RuneLiteJre -jar $EcjJar -11 -encoding UTF-8 -cp "$PluginClasses;$classPath" -d $HelperClasses `
-    (Join-Path $PSScriptRoot "RunOsrsMcpPlugin.java") | Out-String | Write-Host
+  $launcherCompilerErrors = [System.IO.Path]::GetTempFileName()
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $launcherCompileOutput = & $RuneLiteJre -jar $EcjJar -11 -encoding UTF-8 -cp "$PluginClasses;$classPath" -d $HelperClasses `
+      (Join-Path $PSScriptRoot "RunOsrsMcpPlugin.java") 2> $launcherCompilerErrors
+    $launcherCompileExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $launcherCompileErrorOutput = Get-Content -LiteralPath $launcherCompilerErrors -Raw -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $launcherCompilerErrors -Force -ErrorAction SilentlyContinue
+  }
+  @($launcherCompileOutput, $launcherCompileErrorOutput) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Out-String | Write-Host
+  if ($launcherCompileExitCode -ne 0) {
+    throw "RuneLite dev launcher compilation failed with exit code $launcherCompileExitCode"
+  }
 
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -191,6 +218,9 @@ function Build-Server {
   Push-Location $ServerRoot
   try {
     cmd /c npm run build
+    if ($LASTEXITCODE -ne 0) {
+      throw "TypeScript MCP server build failed with exit code $LASTEXITCODE"
+    }
   } finally {
     Pop-Location
   }

@@ -41,4 +41,11 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 
 - The scripts do not unexpectedly close RuneLite unless `Restart-OSRS-MCP.bat` or `-RestartRuneLite` is used.
 - Click tools refuse stale coordinates and hidden/minimized canvases.
-- Prefer `click_object`, `click_npc`, `click_ground_item`, `click_inventory_slot`, and `walk_to` over raw `move_mouse_and_click`.
+- Prefer `click_object`, `click_npc`, `click_ground_item`, `click_inventory_slot`, `walk_to`, and `click_minimap_tile` over raw `move_mouse_and_click`.
+- Use `calculate_path_to` to inspect bounded straight-line minimap steps before navigation, then `walk_path_to` to click only the next step.
+- After any click or walk, use `wait_until_idle`, `wait_until_location`, or `wait_for_chat_message` to verify what happened before choosing the next action.
+- Prefer `use_inventory_item_on_object`, `use_inventory_item_on_npc`, and `use_inventory_item_on_inventory_item` for item-use flows instead of manually chaining raw item and target clicks.
+- Prefer `right_click_npc`, `right_click_object`, `right_click_ground_item`, then `select_option` for actions that need a RuneLite context menu.
+- Use `get_combat`/`click_special_attack` for combat controls and `get_shop`/`buy_item`/`sell_item` for shop interactions.
+- Use `get_bank_actions`, then `withdraw_bank_item` or `deposit_inventory_item` while the bank UI is open so item actions use visible bank/inventory widget coordinates.
+- Use the hover tools or `npm run verify:coords -- --port 8081 --type npc --name "Sir Prysin" --source convexHull --hover` to verify coordinates without clicking.
