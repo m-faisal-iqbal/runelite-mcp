@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { buildNextActionPlan, actionStep } from "../build/planner.js";
+import { buildAgentStepPackage, buildNextActionPlan, actionStep } from "../build/planner.js";
 
 function assert(condition, message) {
   if (!condition) {
@@ -95,6 +95,13 @@ const combat = buildNextActionPlan(baseContext(), loggedInSnapshot({
 assert(combat.mode === "combat", "combat objective should create combat plan");
 assert(toolNames(combat).includes("wait_until_idle"), "combat plan should wait for idle after attacking");
 
+const woodcutPackage = buildAgentStepPackage({ status: "READY", readiness: { risks: [] } }, woodcutting, "chop 5 normal trees");
+assert(woodcutPackage.willExecute === false, "agent step package must never execute");
+assert(woodcutPackage.firstAction.tool === "perform_until", "woodcut package should identify first real action");
+assert(woodcutPackage.verificationStep.tool === "mark_action_baseline" || woodcutPackage.verificationStep.tool === "verify_last_action", "woodcut package should expose verification guidance");
+assert(woodcutPackage.safety.baselineRecommended === true, "woodcut package should recommend baseline");
+assert(woodcutPackage.guidance.some((line) => line.includes("mark_action_baseline")), "woodcut guidance should mention baseline");
+
 const lowHp = buildNextActionPlan(baseContext(), loggedInSnapshot({
   state: { status: "LOGGED_IN", health: 2 },
   skills: { Hitpoints: { level: 10 } },
@@ -104,6 +111,9 @@ assert(lowHp.steps[0].tool === "eat_food_when", "low hp with food should add foo
 
 const staleRuntime = buildNextActionPlan(baseContext("needs_reload"), loggedInSnapshot(), "look around");
 assert(staleRuntime.steps[0].tool === "diagnose_runtime", "stale runtime should diagnose first");
+const blockedPackage = buildAgentStepPackage({ status: "ATTENTION_NEEDED", readiness: { risks: ["runtime_not_current"] } }, staleRuntime, "look around");
+assert(blockedPackage.status === "BLOCKED_BY_PREFLIGHT", "blocker priority should mark package blocked by preflight");
+assert(blockedPackage.nextStep.tool === "diagnose_runtime", "blocked package should point to diagnose_runtime");
 
 const step = actionStep("test_tool", "test reason", { ok: true }, { priority: "test" });
 assert(step.tool === "test_tool" && step.priority === "test" && step.arguments.ok === true, "actionStep should preserve fields");
@@ -119,6 +129,8 @@ console.log(JSON.stringify({
     mining: mining.mode,
     fishing: fishing.mode,
     combat: combat.mode,
+    woodcutPackageFirstAction: woodcutPackage.firstAction.tool,
+    blockedPackageStatus: blockedPackage.status,
     lowHpFirstTool: lowHp.steps[0].tool,
     staleRuntimeFirstTool: staleRuntime.steps[0].tool,
   },

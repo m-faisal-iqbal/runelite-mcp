@@ -11,13 +11,16 @@ This project has two parts:
   Builds the RuneLite plugin jar and TypeScript MCP server. It does not start or close RuneLite.
 
 - `cd osrs-mcp-server && npm run smoke:mcp`
-  Starts the built MCP server over stdio, verifies the expected tools/resources/prompts, calls `get_agent_context` and `diagnose_runtime`, then closes the child process. This does not start or close RuneLite. Add `-- --live` only when a plugin-loaded RuneLite client is already open and should be required.
+  Starts the built MCP server over stdio, verifies the expected tools/resources/prompts, calls `observe_game`, `run_agent_cycle`, `get_agent_context`, and `diagnose_runtime`, then closes the child process. This does not start or close RuneLite. Add `-- --live` only when a plugin-loaded RuneLite client is already open and should be required.
 
 - `cd osrs-mcp-server && npm run smoke:plugin`
   Checks a running RuneLite plugin over safe HTTP calls: API index, identity feature flags, `/state`, `/snapshot`, `/events`, coordinate diagnostics, and `dryRun: true` action validation. It does not click or invoke actions.
 
 - `cd osrs-mcp-server && npm run smoke:planner`
   Runs synthetic snapshot checks for the pure action planner, including login, woodcutting, dialogue, full-inventory banking, low-HP food safety, and stale-runtime handling.
+
+- `cd osrs-mcp-server && npm run smoke:agent-context`
+  Runs synthetic checks for the compact observation bundle returned by `get_agent_context`, `observe_game`, and `run_agent_cycle`.
 
 - `Install-OSRS-MCP-Plugin.bat`
   Builds, then copies the plugin jar to `%USERPROFILE%\.runelite\plugins\osrs-mcp-plugin.jar`.
@@ -51,8 +54,12 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - The scripts do not unexpectedly close RuneLite unless `Restart-OSRS-MCP.bat` or `-RestartRuneLite` is used.
 - The Phase 1 action API exposes `/api/action/menu`, `/api/action/walk`, and `/api/action/widget`; all three run on RuneLite's ClientThread.
 - Use `diagnose_runtime` after a rebuild/install or after a 404 from a newer endpoint. It reports stale running plugin copies and missing feature endpoints without restarting RuneLite.
+- Use `observe_game` for a single read-only perception packet before deciding: compact context, optional conservative plan/package, and optional screenshot metadata/image. It never executes gameplay actions.
+- Use `run_agent_cycle` for a single safe control-loop pass: observe, plan, select the next step, and validate it. It returns `willExecute: false` and does not click or invoke actions.
 - Use `get_agent_context` before planning a gameplay action. It returns one compact orientation bundle with runtime readiness, player state, risks, inventory, nearby targets, dialogue, chat, and recommended next checks.
 - Use `plan_next_action` when you want a conservative ordered list of MCP tool calls for the current objective without executing anything. It currently plans common routines for woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
+- Use `prepare_agent_step` when you want the current context plus the next action packaged with safety flags, baseline guidance, and verification guidance. It never executes the action.
+- Use `validate_prepared_step` immediately before acting when you need a fresh target check or a plugin `dryRun:true` validation for raw `invoke_*` params. It never executes real gameplay actions.
 - MCP resources are available for low-overhead context:
   - `osrs://snapshot/latest`
   - `osrs://events/recent`
@@ -72,7 +79,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - Use `get_widgets` with a focused `filter` such as `withdraw`, `deposit`, `exchange`, `quest`, or `continue` when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
 - Use `walk_route_to` for multi-step movement to a known tile. Use `calculate_path_to` to inspect local collision-aware path data before navigation, and `walk_path_to` when you want one bounded step.
 - After any click or walk, use `verify_after_action` for combined checks, or `wait_until_idle`, `wait_until_location`, and `wait_for_chat_message` for single-condition waits.
-- Use `capture_canvas_screenshot` before/after risky actions, or pass `canvasX`/`canvasY` from a target to capture a focused crop around the clickable area.
+- Use `get_screenshot` or `capture_canvas_screenshot` before/after risky actions, or pass `canvasX`/`canvasY` from a target to capture a focused crop around the clickable area.
 - OS fallback mouse movement is humanized by default; inspect it with `get_input_profile` and disable with `OSRS_HUMANIZE_MOUSE=false` if coordinate testing needs instant movement.
 - Prefer `use_inventory_item_on_object`, `use_inventory_item_on_npc`, and `use_inventory_item_on_inventory_item` for item-use flows instead of manually chaining raw item and target clicks.
 - Prefer `right_click_npc`, `right_click_object`, `right_click_ground_item`, then `select_option` for actions that need a RuneLite context menu; `select_option` uses in-client action params when RuneLite exposes them.

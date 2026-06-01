@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree-fork/nut-js";
 import { apiBaseFromPort, StateCache, type ClientTarget, type LocalPathResult, type PathStep, type RuneLiteSnapshot, type RuneLiteTarget } from "./client.js";
-import { actionStep, buildNextActionPlan } from "./planner.js";
+import { actionStep, buildAgentStepPackage, buildNextActionPlan } from "./planner.js";
+import { buildAgentContext } from "./agent-context.js";
 
 type ActionBaseline = {
   baseURL: string;
@@ -111,6 +112,23 @@ async function discoverClients() {
     }
   }));
   return results.filter(Boolean);
+}
+
+function selectDiscoveredClient(clients: any[], target: ClientTarget = {}) {
+  const matches = clients.filter((client: any) =>
+    (target.port !== undefined && client.port === target.port) ||
+    (target.instanceId && client.instanceId === target.instanceId) ||
+    (target.playerName && String(client.playerName ?? "").toLowerCase() === target.playerName.toLowerCase())
+  );
+
+  if (target.port !== undefined || target.instanceId || target.playerName) {
+    return matches[0];
+  }
+
+  return clients.find((candidate: any) =>
+    candidate.baseUrl === selectedRuneliteApi ||
+    candidate.instanceId === selectedClientInstanceId
+  ) ?? (clients.length === 1 ? clients[0] : undefined);
 }
 
 async function diagnoseClientRuntime(client: any) {
@@ -1462,135 +1480,6 @@ function buildSnapshotDiffVerification(before: RuneLiteSnapshot, after: RuneLite
   };
 }
 
-function summarizeTargets(targets: RuneLiteTarget[] | undefined, limit: number) {
-  return sortByDistance(targets ?? [])
-    .slice(0, Math.max(0, limit))
-    .map((target: any) => ({
-      id: target.id,
-      name: target.name,
-      option: target.option,
-      worldX: target.worldX,
-      worldY: target.worldY,
-      plane: target.plane,
-      distanceToPlayer: target.distanceToPlayer,
-      coordinateSource: target.coordinateSource,
-      clickable: hasScreenPoint(target) && !target.coordinateWarning,
-      ageMs: target.ageMs,
-    }));
-}
-
-function inventorySummary(snapshot: RuneLiteSnapshot, limit: number) {
-  const items = (snapshot.inventory ?? [])
-    .filter((item: any) => item && item.id && item.id !== -1)
-    .slice(0, Math.max(0, limit))
-    .map((item: any) => ({
-      slot: item.slot,
-      id: item.id,
-      name: item.name,
-      quantity: item.quantity,
-    }));
-  return {
-    slotsUsed: inventorySlotsUsed(snapshot),
-    freeSlots: Math.max(0, 28 - inventorySlotsUsed(snapshot)),
-    items,
-  };
-}
-
-function buildAgentContext(baseURL: string, client: any, snapshot: RuneLiteSnapshot, runtime: any, args: {
-  objective?: string;
-  includeNearbyLimit?: number;
-  includeInventoryLimit?: number;
-}) {
-  const nearbyLimit = Math.max(0, Math.min(args.includeNearbyLimit ?? 8, 30));
-  const inventoryLimit = Math.max(0, Math.min(args.includeInventoryLimit ?? 28, 28));
-  const state = snapshot.state ?? {};
-  const hpPercent = healthPercent(snapshot);
-  const dialogueType = snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type ?? "NONE";
-  const hasFood = Boolean(findFoodItem(snapshot));
-  const risks = [];
-  if (runtime?.status && runtime.status !== "ok" && runtime.status !== "not_checked") {
-    risks.push("runtime_not_current");
-  }
-  if (state.status !== "LOGGED_IN") {
-    risks.push("not_logged_in");
-  }
-  if (hpPercent !== undefined && hpPercent <= 35) {
-    risks.push("low_hitpoints");
-  }
-  if (dialogueType && dialogueType !== "NONE") {
-    risks.push("interface_or_dialogue_open");
-  }
-  if (inventorySlotsUsed(snapshot) >= 28) {
-    risks.push("inventory_full");
-  }
-
-  const recommendedNext = [];
-  if (runtime?.status && runtime.status !== "ok" && runtime.status !== "not_checked") {
-    recommendedNext.push("Run diagnose_runtime and reload RuneLite plugin if endpoints/features are stale.");
-  }
-  if (state.status !== "LOGGED_IN") {
-    recommendedNext.push("Wait for login before gameplay actions.");
-  }
-  if (hpPercent !== undefined && hpPercent <= 35 && hasFood) {
-    recommendedNext.push("Use eat_food_when before risky combat or travel.");
-  }
-  if (dialogueType && dialogueType !== "NONE") {
-    recommendedNext.push("Use handle_dialogue or get_widgets with a focused filter before other actions.");
-  }
-  recommendedNext.push("Before the next risky action, call mark_action_baseline; afterward call verify_last_action.");
-  recommendedNext.push("Prefer interact_with/click_* with option for in-client menu actions.");
-
-  return {
-    objective: args.objective,
-    status: risks.length === 0 ? "READY" : "ATTENTION_NEEDED",
-    baseURL,
-    runtime,
-    client: {
-      instanceId: client?.instanceId,
-      playerName: client?.playerName ?? state.name,
-      port: client?.port,
-      apiVersion: client?.apiVersion,
-      world: client?.world ?? state.world,
-      focused: client?.windowActive,
-      canvasShowing: client?.canvasShowing,
-    },
-    readiness: {
-      loggedIn: state.status === "LOGGED_IN",
-      stateStatus: state.status,
-      canUseInClientActions: state.status === "LOGGED_IN" && runtime?.status === "ok",
-      osClickFallbackReady: state.status === "LOGGED_IN" && client?.canvasShowing !== false && client?.windowActive !== false && client?.windowMinimized !== true,
-      risks,
-      recommendedNext,
-    },
-    player: {
-      name: state.name,
-      location: state.location,
-      health: state.health,
-      healthPercent: hpPercent,
-      runEnergy: state.runEnergy,
-      animation: state.animation,
-      idle: isPlayerIdle(state),
-      interactingWith: state.interactingWith,
-    },
-    inventory: inventorySummary(snapshot, inventoryLimit),
-    interface: {
-      dialogueType,
-      dialogueText: cleanUiText(snapshot.dialogue?.text),
-      options: (snapshot.dialogue?.options ?? []).map((option: any, index: number) => ({ index: index + 1, text: cleanUiText(option.text) })),
-      contextMenuOpen: snapshot.interfaceSummary?.contextMenuOpen,
-      bankContainerAvailable: snapshot.interfaceSummary?.bankContainerAvailable,
-    },
-    nearby: {
-      npcs: summarizeTargets(snapshot.npcs, nearbyLimit),
-      objects: summarizeTargets(snapshot.objects, nearbyLimit),
-      groundItems: summarizeTargets(snapshot.groundItems, nearbyLimit),
-      players: summarizeTargets(snapshot.players, Math.min(nearbyLimit, 5)),
-    },
-    recentChat: recentMessages(snapshot).slice(-8),
-    stream: snapshotStreamStatus(baseURL),
-  };
-}
-
 function inventorySlotsUsed(snapshot: RuneLiteSnapshot): number {
   return (snapshot.inventory ?? []).filter((item: any) => item && item.id && item.id !== -1).length;
 }
@@ -1684,6 +1573,174 @@ function cleanUiText(value: unknown): string {
   return String(value ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function compactTarget(target: any) {
+  if (!target) {
+    return null;
+  }
+  return {
+    id: target.id,
+    name: target.name,
+    option: target.option,
+    worldX: target.worldX,
+    worldY: target.worldY,
+    plane: target.plane,
+    distanceToPlayer: target.distanceToPlayer,
+    coordinateSource: target.coordinateSource,
+    screenX: target.screenX,
+    screenY: target.screenY,
+    ageMs: target.ageMs,
+  };
+}
+
+async function validatePreparedStep(baseURL: string, snapshot: RuneLiteSnapshot, step: any, args: {
+  dryRunRawActions?: boolean;
+  maxAgeMs?: number;
+}) {
+  const maxAgeMs = Math.max(100, args.maxAgeMs ?? 1200);
+  if (!step || typeof step.tool !== "string") {
+    return {
+      valid: false,
+      willExecute: false,
+      reason: "Step is missing a tool name.",
+    };
+  }
+
+  const tool = step.tool;
+  const stepArgs = step.arguments ?? {};
+  const base = {
+    tool,
+    willExecute: false,
+    step,
+  };
+
+  if (["get_agent_context", "diagnose_runtime", "mark_action_baseline", "verify_last_action", "verify_after_action", "wait_until_idle", "wait_for_game_tick"].includes(tool)) {
+    return {
+      ...base,
+      valid: true,
+      validationMode: "non_gameplay_or_verification_step",
+      reason: "This step is safe to run as a read, wait, baseline, or verification helper.",
+    };
+  }
+
+  if (tool === "invoke_menu_action") {
+    if (args.dryRunRawActions === false) {
+      return { ...base, valid: false, validationMode: "raw_action_requires_dry_run", reason: "Raw menu action validation requires dryRunRawActions=true." };
+    }
+    const dryRun = await invokeMenuAction(baseURL, { ...stepArgs, dryRun: true, tickAligned: false });
+    return { ...base, valid: dryRun?.success === true && dryRun?.dryRun === true, validationMode: "client_thread_dry_run", dryRun };
+  }
+
+  if (tool === "invoke_walk_action") {
+    if (args.dryRunRawActions === false) {
+      return { ...base, valid: false, validationMode: "raw_action_requires_dry_run", reason: "Raw walk action validation requires dryRunRawActions=true." };
+    }
+    const dryRun = await invokeWalkAction(baseURL, { ...stepArgs, dryRun: true, tickAligned: false });
+    return { ...base, valid: dryRun?.success === true && dryRun?.dryRun === true, validationMode: "client_thread_dry_run", dryRun };
+  }
+
+  if (tool === "invoke_widget_action") {
+    if (args.dryRunRawActions === false) {
+      return { ...base, valid: false, validationMode: "raw_action_requires_dry_run", reason: "Raw widget action validation requires dryRunRawActions=true." };
+    }
+    const dryRun = await invokeWidgetAction(baseURL, { ...stepArgs, dryRun: true, tickAligned: false });
+    return { ...base, valid: dryRun?.success === true && dryRun?.dryRun === true, validationMode: "client_thread_dry_run", dryRun };
+  }
+
+  if (tool === "interact_with" || tool === "click_object" || tool === "click_npc" || tool === "click_ground_item") {
+    const entityType = stepArgs.entityType ??
+      (tool === "click_object" ? "object" : tool === "click_npc" ? "npc" : tool === "click_ground_item" ? "ground_item" : undefined);
+    const target = entityType
+      ? selectLiveTarget(snapshot, entityType, stepArgs.name, stepArgs.id, stepArgs.nearestToPlayer ?? true)
+      : undefined;
+    const fresh = Boolean(target && (!target.ageMs || target.ageMs <= maxAgeMs));
+    return {
+      ...base,
+      valid: Boolean(target) && fresh,
+      validationMode: "fresh_target_snapshot",
+      reason: target ? (fresh ? "Matching live target is present and fresh." : "Matching target exists but is stale.") : "No matching target is currently visible in the snapshot.",
+      target: compactTarget(target),
+    };
+  }
+
+  if (tool === "perform_until") {
+    const target = selectLiveTarget(snapshot, stepArgs.actionEntityType, stepArgs.actionName, stepArgs.actionId, stepArgs.nearestToPlayer ?? true);
+    const fresh = Boolean(target && (!target.ageMs || target.ageMs <= maxAgeMs));
+    const currentCondition = conditionMet(snapshot, {
+      condition: stepArgs.condition,
+      startedAt: Date.now(),
+      inventoryItemName: stepArgs.inventoryItemName,
+      inventoryItemId: stepArgs.inventoryItemId,
+      inventoryQuantityAtLeast: stepArgs.inventoryQuantityAtLeast,
+      chatContains: stepArgs.chatContains,
+      chatType: stepArgs.chatType,
+      caseSensitive: stepArgs.caseSensitive,
+      entityType: stepArgs.entityType,
+      entityName: stepArgs.entityName,
+      entityId: stepArgs.entityId,
+      worldX: stepArgs.worldX,
+      worldY: stepArgs.worldY,
+      plane: stepArgs.plane,
+      radius: stepArgs.radius,
+    });
+    return {
+      ...base,
+      valid: Boolean(target) && fresh,
+      validationMode: "loop_target_and_condition_snapshot",
+      reason: target ? (fresh ? "Loop target is present and fresh." : "Loop target exists but is stale.") : "No matching loop action target is currently visible.",
+      target: compactTarget(target),
+      currentCondition,
+    };
+  }
+
+  if (tool === "handle_dialogue") {
+    const dialogueType = snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type ?? "NONE";
+    return {
+      ...base,
+      valid: Boolean(dialogueType && dialogueType !== "NONE"),
+      validationMode: "dialogue_snapshot",
+      dialogueType,
+      reason: dialogueType && dialogueType !== "NONE" ? "Dialogue/interface is currently open." : "No dialogue is currently open.",
+    };
+  }
+
+  if (tool === "eat_food_when") {
+    const item = findFoodItem(snapshot, stepArgs.foodNames, stepArgs.foodName, stepArgs.foodId, stepArgs.slot);
+    const foodItem: any = item;
+    return {
+      ...base,
+      valid: Boolean(item),
+      validationMode: "inventory_food_snapshot",
+      item: foodItem ? { id: foodItem.id, name: foodItem.name, slot: foodItem.slot, quantity: foodItem.quantity } : null,
+      reason: item ? "Food is available in inventory." : "No matching food item is available in inventory.",
+    };
+  }
+
+  if (tool === "deposit_inventory_item" || tool === "withdraw_bank_item") {
+    const bankOpen = snapshot.interfaceSummary?.bankContainerAvailable === true;
+    const collection = tool === "deposit_inventory_item" ? snapshot.inventory ?? [] : snapshot.bank ?? [];
+    const itemNeedle = String(stepArgs.itemName ?? "").toLowerCase();
+    const match = collection.find((item: any) =>
+      (stepArgs.itemId === undefined || item.id === stepArgs.itemId) &&
+      (!itemNeedle || String(item.name ?? "").toLowerCase().includes(itemNeedle))
+    ) as any;
+    return {
+      ...base,
+      valid: bankOpen && Boolean(match),
+      validationMode: "bank_interface_snapshot",
+      bankOpen,
+      item: match ? { id: match.id, name: match.name, slot: match.slot, quantity: match.quantity } : null,
+      reason: !bankOpen ? "Bank interface is not open." : match ? "Matching bank/inventory item is present." : "No matching item is present for the bank action.",
+    };
+  }
+
+  return {
+    ...base,
+    valid: false,
+    validationMode: "unsupported_step_validation",
+    reason: `No safe validator is registered for tool ${tool}.`,
+  };
+}
+
 // --- State Reading Tools ---
 
 server.tool(
@@ -1743,10 +1800,184 @@ server.tool(
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
       const snapshot = await getSnapshotForBase(baseURL, true);
-      const context = buildAgentContext(baseURL, client, snapshot, runtime, { objective, includeNearbyLimit, includeInventoryLimit });
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+        objective,
+        includeNearbyLimit,
+        includeInventoryLimit,
+        streamStatus: snapshotStreamStatus(baseURL),
+      });
       return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("building agent context", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "observe_game",
+  "Gather a read-only agent observation bundle: compact state, runtime health, optional plan/package, and optional screenshot metadata/image. Never executes gameplay actions.",
+  {
+    objective: z.string().optional().describe("Optional current gameplay objective to include in the observation and plan"),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics, default true"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby entries per category, default 8"),
+    includeInventoryLimit: z.number().optional().describe("Maximum inventory entries to include, default 28"),
+    includePlan: z.boolean().optional().describe("Include plan_next_action and prepare_agent_step style output, default true when objective is provided"),
+    maxPreviewSteps: z.number().optional().describe("Maximum prepared package plan steps to preview, default 5"),
+    includeScreenshot: z.boolean().optional().describe("Capture RuneLite canvas metadata/image for visual perception, default false"),
+    includeImage: z.boolean().optional().describe("Include image content when includeScreenshot is true. Defaults to false for lightweight observation."),
+    canvasX: z.number().optional().describe("Optional RuneLite canvas-relative X coordinate for a focused screenshot crop"),
+    canvasY: z.number().optional().describe("Optional RuneLite canvas-relative Y coordinate for a focused screenshot crop"),
+    width: z.number().optional().describe("Optional screenshot crop width, or full canvas when omitted"),
+    height: z.number().optional().describe("Optional screenshot crop height, or full canvas when omitted"),
+    radius: z.number().optional().describe("Optional screenshot crop radius around canvasX/canvasY, default 140 canvas pixels"),
+    forceRefresh: z.boolean().optional().describe("Force a fresh plugin snapshot, default true"),
+    ...clientTargetSchema(),
+  },
+  async ({
+    objective,
+    includeDiagnostics,
+    includeNearbyLimit,
+    includeInventoryLimit,
+    includePlan,
+    maxPreviewSteps,
+    includeScreenshot,
+    includeImage,
+    canvasX,
+    canvasY,
+    width,
+    height,
+    radius,
+    forceRefresh,
+    instanceId,
+    playerName,
+    port,
+  }) => {
+    try {
+      const clients = await discoverClients();
+      if (clients.length === 0) {
+        const plan = {
+          mode: "start_runtime",
+          steps: [actionStep("diagnose_runtime", "No RuneLite MCP plugin client was discovered; start/load RuneLite before gameplay observation.", {}, { priority: "blocker" })],
+          notes: ["observe_game is read-only and does not start, close, restart, click, or invoke RuneLite actions."],
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NO_CLIENT",
+              willExecute: false,
+              selectedBaseUrl: selectedRuneliteApi,
+              clients: [],
+              plan: includePlan === false ? undefined : plan,
+              package: includePlan === false
+                ? undefined
+                : buildAgentStepPackage({ status: "NO_CLIENT", readiness: { risks: ["no_client"] } }, plan, objective, maxPreviewSteps ?? 5),
+              recommendedNext: ["Start RuneLite with the OSRS MCP plugin loaded, then run diagnose_runtime."],
+            }, null, 2)
+          }]
+        };
+      }
+
+      const client = selectDiscoveredClient(clients, { instanceId, playerName, port });
+      if (!client) {
+        const plan = {
+          mode: "select_client",
+          steps: [actionStep("select_client", "Multiple RuneLite clients are active; select the intended account/window before acting.", {}, { priority: "blocker" })],
+          notes: ["Pass port, instanceId, or playerName to observe_game when multiple clients are open."],
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NEEDS_CLIENT_SELECTION",
+              willExecute: false,
+              clients,
+              plan: includePlan === false ? undefined : plan,
+              package: includePlan === false
+                ? undefined
+                : buildAgentStepPackage({ status: "NEEDS_CLIENT_SELECTION", readiness: { risks: ["needs_client_selection"] } }, plan, objective, maxPreviewSteps ?? 5),
+              recommendedNext: ["Use select_client or pass port/instanceId/playerName before observing for action."],
+            }, null, 2)
+          }]
+        };
+      }
+
+      const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+      const runtime = includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(client);
+      const snapshot = await getSnapshotForBase(baseURL, forceRefresh !== false);
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+        objective,
+        includeNearbyLimit,
+        includeInventoryLimit,
+        streamStatus: snapshotStreamStatus(baseURL),
+      });
+
+      const shouldPlan = includePlan ?? Boolean(objective);
+      const plan = shouldPlan ? buildNextActionPlan(context, snapshot, objective) : undefined;
+      const stepPackage = shouldPlan
+        ? buildAgentStepPackage(context, plan, objective, maxPreviewSteps ?? 5)
+        : undefined;
+
+      let screenshot: any;
+      if (includeScreenshot) {
+        try {
+          const capture = await captureCanvasImage(baseURL, {
+            canvasX,
+            canvasY,
+            width,
+            height,
+            radius,
+            includeImage: includeImage ?? false,
+          });
+          const { base64, ...metadata } = capture;
+          screenshot = {
+            ...metadata,
+            imageIncluded: Boolean(base64),
+          };
+          const response = {
+            objective,
+            status: "OBSERVED",
+            willExecute: false,
+            context,
+            plan,
+            package: stepPackage,
+            screenshot,
+            observationRule: "This tool only reads state and optionally captures the visible canvas. Execute any proposed action with a separate tool, then verify afterward.",
+          };
+          const content: any[] = [{ type: "text", text: JSON.stringify(response, null, 2) }];
+          if (base64) {
+            content.push({ type: "image", data: base64, mimeType: "image/png" });
+          }
+          return { content };
+        } catch (error: any) {
+          screenshot = {
+            status: "SCREENSHOT_FAILED",
+            error: error?.message ?? String(error),
+          };
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            objective,
+            status: "OBSERVED",
+            willExecute: false,
+            context,
+            plan,
+            package: stepPackage,
+            screenshot,
+            observationRule: "This tool only reads state. Execute any proposed action with a separate tool, then verify afterward.",
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("observing game", e) }] };
     }
   }
 );
@@ -1816,6 +2047,7 @@ server.tool(
         objective,
         includeNearbyLimit: includeNearbyLimit ?? 6,
         includeInventoryLimit: 12,
+        streamStatus: snapshotStreamStatus(baseURL),
       });
       const plan = buildNextActionPlan(context, snapshot, objective);
       return {
@@ -1832,6 +2064,370 @@ server.tool(
       };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("planning next action", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "prepare_agent_step",
+  "Prepare the next observe-plan-act-verify step package for an objective without executing anything. Returns context, plan preview, first action, safety flags, and verification guidance.",
+  {
+    objective: z.string().describe("Current gameplay objective, for example 'mine 3 iron ore' or 'deposit logs in bank'"),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics before preparing the step package, default true"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby entries to include in context, default 6"),
+    maxPreviewSteps: z.number().optional().describe("Maximum plan steps to preview, default 5"),
+    ...clientTargetSchema(),
+  },
+  async ({ objective, includeDiagnostics, includeNearbyLimit, maxPreviewSteps, instanceId, playerName, port }) => {
+    try {
+      const clients = await discoverClients();
+      if (clients.length === 0) {
+        const plan = {
+          mode: "start_runtime",
+          steps: [actionStep("diagnose_runtime", "No RuneLite MCP plugin client was discovered; start/load RuneLite before gameplay preparation.", {}, { priority: "blocker" })],
+          notes: ["This tool does not start, close, restart, click, or invoke RuneLite actions."],
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NO_CLIENT",
+              package: buildAgentStepPackage({ status: "NO_CLIENT", readiness: { risks: ["no_client"] } }, plan, objective, maxPreviewSteps ?? 5),
+            }, null, 2)
+          }]
+        };
+      }
+
+      const matches = clients.filter((client: any) =>
+        (port !== undefined && client.port === port) ||
+        (instanceId && client.instanceId === instanceId) ||
+        (playerName && String(client.playerName ?? "").toLowerCase() === playerName.toLowerCase())
+      );
+      const client = (port !== undefined || instanceId || playerName)
+        ? matches[0]
+        : clients.find((candidate: any) => candidate.baseUrl === selectedRuneliteApi || candidate.instanceId === selectedClientInstanceId) ?? (clients.length === 1 ? clients[0] : undefined);
+
+      if (!client) {
+        const plan = {
+          mode: "select_client",
+          steps: [actionStep("select_client", "Multiple RuneLite clients are active; select the intended account/window before acting.", {}, { priority: "blocker" })],
+          notes: ["Pass port, instanceId, or playerName to prepare_agent_step when multiple clients are open."],
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NEEDS_CLIENT_SELECTION",
+              clients,
+              package: buildAgentStepPackage({ status: "NEEDS_CLIENT_SELECTION", readiness: { risks: ["needs_client_selection"] } }, plan, objective, maxPreviewSteps ?? 5),
+            }, null, 2)
+          }]
+        };
+      }
+
+      const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+      const runtime = includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(client);
+      const snapshot = await getSnapshotForBase(baseURL, true);
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+        objective,
+        includeNearbyLimit: includeNearbyLimit ?? 6,
+        includeInventoryLimit: 12,
+        streamStatus: snapshotStreamStatus(baseURL),
+      });
+      const plan = buildNextActionPlan(context, snapshot, objective);
+      const stepPackage = buildAgentStepPackage(context, plan, objective, maxPreviewSteps ?? 5);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            objective,
+            status: "PREPARED",
+            context,
+            plan,
+            package: stepPackage,
+            executionRule: "This tool never executes. Before any real action, confirm the context is still current, baseline when recommended, prefer dry-run for raw invoke_* params, then verify afterward.",
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("preparing agent step", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "validate_prepared_step",
+  "Validate a prepared next step against the current RuneLite state without executing it. Raw invoke_* actions are validated with dryRun by default.",
+  {
+    objective: z.string().optional().describe("Optional objective used to prepare a step when step is omitted"),
+    step: z.any().optional().describe("A step object from prepare_agent_step.package.nextStep/firstAction or plan_next_action.plan.steps[]"),
+    useFirstActionWhenPreparing: z.boolean().optional().describe("When step is omitted, validate the first real action from the prepared package instead of the next step, default true"),
+    dryRunRawActions: z.boolean().optional().describe("Validate raw invoke_* actions by posting dryRun:true to the plugin, default true"),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime diagnostics when preparing from objective, default true"),
+    includeNearbyLimit: z.number().optional().describe("Nearby entries to include when preparing from objective, default 6"),
+    maxAgeMs: z.number().optional().describe("Maximum target age accepted for snapshot target validators, default 1200"),
+    ...clientTargetSchema(),
+  },
+  async ({ objective, step, useFirstActionWhenPreparing, dryRunRawActions, includeDiagnostics, includeNearbyLimit, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+      const clients = await discoverClients();
+      if (clients.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NO_CLIENT",
+              valid: false,
+              willExecute: false,
+              reason: "No active RuneLite MCP plugin clients were discovered on ports 8080-8090.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      const matches = clients.filter((client: any) =>
+        (port !== undefined && client.port === port) ||
+        (instanceId && client.instanceId === instanceId) ||
+        (playerName && String(client.playerName ?? "").toLowerCase() === playerName.toLowerCase())
+      );
+      const client = (port !== undefined || instanceId || playerName)
+        ? matches[0]
+        : clients.find((candidate: any) => candidate.baseUrl === selectedRuneliteApi || candidate.instanceId === selectedClientInstanceId) ?? (clients.length === 1 ? clients[0] : undefined);
+
+      if (!client) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NEEDS_CLIENT_SELECTION",
+              valid: false,
+              willExecute: false,
+              clients,
+              reason: "Use select_client or pass port/instanceId/playerName before validating a step.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+      const runtime = includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(client);
+      const snapshot = await getSnapshotForBase(baseURL, true);
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+        objective,
+        includeNearbyLimit: includeNearbyLimit ?? 6,
+        includeInventoryLimit: 12,
+        streamStatus: snapshotStreamStatus(baseURL),
+      });
+
+      let stepToValidate = step;
+      let preparedPackage: any = null;
+      let plan: any = null;
+      if (!stepToValidate) {
+        plan = buildNextActionPlan(context, snapshot, objective);
+        preparedPackage = buildAgentStepPackage(context, plan, objective, 5);
+        stepToValidate = (useFirstActionWhenPreparing ?? true)
+          ? preparedPackage.firstAction ?? preparedPackage.nextStep
+          : preparedPackage.nextStep;
+      }
+
+      const validation = await validatePreparedStep(baseURL, snapshot, stepToValidate, {
+        dryRunRawActions: dryRunRawActions ?? true,
+        maxAgeMs,
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            objective,
+            status: "VALIDATED",
+            context,
+            preparedPackage,
+            plan,
+            validation,
+            executionRule: "This tool never executes real gameplay actions. A valid result only means the step is current enough to consider; execute separately and verify afterward.",
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("validating prepared step", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "run_agent_cycle",
+  "Run one safe observe-plan-validate cycle for an objective without executing the chosen action. This is the control-loop primitive to call before any real play step.",
+  {
+    objective: z.string().describe("Current gameplay objective, for example 'chop 5 normal trees' or 'deposit logs in bank'"),
+    stepChoice: z.enum(["firstAction", "nextStep"]).optional().describe("Which prepared step to validate. Defaults to firstAction when available."),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics, default true"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby entries to include in context, default 8"),
+    includeInventoryLimit: z.number().optional().describe("Maximum inventory entries to include, default 28"),
+    maxPreviewSteps: z.number().optional().describe("Maximum prepared package plan steps to preview, default 5"),
+    dryRunRawActions: z.boolean().optional().describe("Validate raw invoke_* actions with plugin dryRun, default true"),
+    maxAgeMs: z.number().optional().describe("Maximum target age accepted by snapshot target validators, default 1200"),
+    includeScreenshot: z.boolean().optional().describe("Capture RuneLite canvas metadata/image with the cycle, default false"),
+    includeImage: z.boolean().optional().describe("Include image content when includeScreenshot is true. Defaults to false."),
+    canvasX: z.number().optional().describe("Optional RuneLite canvas-relative X coordinate for a focused screenshot crop"),
+    canvasY: z.number().optional().describe("Optional RuneLite canvas-relative Y coordinate for a focused screenshot crop"),
+    width: z.number().optional().describe("Optional screenshot crop width, or full canvas when omitted"),
+    height: z.number().optional().describe("Optional screenshot crop height, or full canvas when omitted"),
+    radius: z.number().optional().describe("Optional screenshot crop radius around canvasX/canvasY, default 140 canvas pixels"),
+    ...clientTargetSchema(),
+  },
+  async ({
+    objective,
+    stepChoice,
+    includeDiagnostics,
+    includeNearbyLimit,
+    includeInventoryLimit,
+    maxPreviewSteps,
+    dryRunRawActions,
+    maxAgeMs,
+    includeScreenshot,
+    includeImage,
+    canvasX,
+    canvasY,
+    width,
+    height,
+    radius,
+    instanceId,
+    playerName,
+    port,
+  }) => {
+    try {
+      const clients = await discoverClients();
+      if (clients.length === 0) {
+        const plan = {
+          mode: "start_runtime",
+          steps: [actionStep("diagnose_runtime", "No RuneLite MCP plugin client was discovered; start/load RuneLite before running an agent cycle.", {}, { priority: "blocker" })],
+          notes: ["run_agent_cycle is read-only and does not start, close, restart, click, or invoke RuneLite actions."],
+        };
+        const stepPackage = buildAgentStepPackage({ status: "NO_CLIENT", readiness: { risks: ["no_client"] } }, plan, objective, maxPreviewSteps ?? 5);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NO_CLIENT",
+              willExecute: false,
+              plan,
+              package: stepPackage,
+              selectedStep: null,
+              validation: { valid: false, willExecute: false, reason: "No active RuneLite MCP plugin client was discovered." },
+              nextInstruction: "Start/load RuneLite with the OSRS MCP plugin, then run diagnose_runtime.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      const client = selectDiscoveredClient(clients, { instanceId, playerName, port });
+      if (!client) {
+        const plan = {
+          mode: "select_client",
+          steps: [actionStep("select_client", "Multiple RuneLite clients are active; select the intended account/window before acting.", {}, { priority: "blocker" })],
+          notes: ["Pass port, instanceId, or playerName to run_agent_cycle when multiple clients are open."],
+        };
+        const stepPackage = buildAgentStepPackage({ status: "NEEDS_CLIENT_SELECTION", readiness: { risks: ["needs_client_selection"] } }, plan, objective, maxPreviewSteps ?? 5);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NEEDS_CLIENT_SELECTION",
+              willExecute: false,
+              clients,
+              plan,
+              package: stepPackage,
+              selectedStep: null,
+              validation: { valid: false, willExecute: false, reason: "Select the intended RuneLite client before validating a gameplay step." },
+              nextInstruction: "Use select_client or pass port/instanceId/playerName.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+      const runtime = includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(client);
+      const snapshot = await getSnapshotForBase(baseURL, true);
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+        objective,
+        includeNearbyLimit,
+        includeInventoryLimit,
+        streamStatus: snapshotStreamStatus(baseURL),
+      });
+      const plan = buildNextActionPlan(context, snapshot, objective);
+      const stepPackage = buildAgentStepPackage(context, plan, objective, maxPreviewSteps ?? 5);
+      const selectedStep = stepChoice === "nextStep"
+        ? stepPackage.nextStep
+        : stepPackage.firstAction ?? stepPackage.nextStep;
+      const validation = selectedStep
+        ? await validatePreparedStep(baseURL, snapshot, selectedStep, {
+          dryRunRawActions: dryRunRawActions ?? true,
+          maxAgeMs,
+        })
+        : {
+          valid: false,
+          willExecute: false,
+          reason: "No step was selected by the planner.",
+        };
+
+      let screenshot: any;
+      let screenshotBase64: string | undefined;
+      if (includeScreenshot) {
+        try {
+          const capture = await captureCanvasImage(baseURL, {
+            canvasX,
+            canvasY,
+            width,
+            height,
+            radius,
+            includeImage: includeImage ?? false,
+          });
+          const { base64, ...metadata } = capture;
+          screenshotBase64 = base64;
+          screenshot = { ...metadata, imageIncluded: Boolean(base64) };
+        } catch (error: any) {
+          screenshot = {
+            status: "SCREENSHOT_FAILED",
+            error: error?.message ?? String(error),
+          };
+        }
+      }
+
+      const response = {
+        objective,
+        status: validation.valid ? "CYCLE_READY" : "CYCLE_BLOCKED",
+        willExecute: false,
+        context,
+        plan,
+        package: stepPackage,
+        selectedStep,
+        validation,
+        screenshot,
+        nextInstruction: validation.valid
+          ? "If the user explicitly approves execution, run the selectedStep with its normal MCP tool and verify afterward."
+          : "Do not execute. Refresh observation or resolve the validation reason first.",
+        executionRule: "run_agent_cycle never executes gameplay actions. It only observes, plans, and validates the selected step.",
+      };
+      const content: any[] = [{ type: "text", text: JSON.stringify(response, null, 2) }];
+      if (screenshotBase64) {
+        content.push({ type: "image", data: screenshotBase64, mimeType: "image/png" });
+      }
+      return { content };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("running agent cycle", e) }] };
     }
   }
 );
@@ -2032,6 +2628,36 @@ server.tool(
       return { content };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("capturing RuneLite canvas", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "get_screenshot",
+  "Capture the current RuneLite canvas as a PNG image or metadata-only screenshot result. Alias-friendly perception tool for agents.",
+  {
+    ...clientTargetSchema(),
+    canvasX: z.number().optional().describe("Optional RuneLite canvas-relative X coordinate. With canvasY, captures a crop around this point."),
+    canvasY: z.number().optional().describe("Optional RuneLite canvas-relative Y coordinate. With canvasX, captures a crop around this point."),
+    width: z.number().optional().describe("Optional canvas-relative crop width. Used with canvasX/canvasY as the top-left if radius is omitted."),
+    height: z.number().optional().describe("Optional canvas-relative crop height. Used with canvasX/canvasY as the top-left if radius is omitted."),
+    radius: z.number().optional().describe("Optional crop radius around canvasX/canvasY, default 140 canvas pixels."),
+    includeImage: z.boolean().optional().describe("Include image content in the MCP response. Set false for lightweight smoke checks. Defaults to true."),
+  },
+  async ({ canvasX, canvasY, width, height, radius, includeImage, instanceId, playerName, port }) => {
+    try {
+      const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+      const result = await captureCanvasImage(baseURL, { canvasX, canvasY, width, height, radius, includeImage });
+      const { base64, ...metadata } = result;
+      const content: any[] = [
+        { type: "text", text: JSON.stringify({ ...metadata, imageIncluded: Boolean(base64) }, null, 2) },
+      ];
+      if (base64) {
+        content.push({ type: "image", data: base64, mimeType: "image/png" });
+      }
+      return { content };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("capturing RuneLite screenshot", e) }] };
     }
   }
 );

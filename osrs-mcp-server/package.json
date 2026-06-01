@@ -11,6 +11,7 @@
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
     "smoke:plugin": "node scripts/smoke-plugin.mjs",
     "smoke:planner": "node scripts/smoke-planner.mjs",
+    "smoke:agent-context": "node scripts/smoke-agent-context.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
   },
   "dependencies": {

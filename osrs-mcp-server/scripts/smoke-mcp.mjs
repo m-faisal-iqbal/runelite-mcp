@@ -6,7 +6,11 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const requiredTools = [
   "get_agent_context",
+  "observe_game",
   "plan_next_action",
+  "prepare_agent_step",
+  "validate_prepared_step",
+  "run_agent_cycle",
   "diagnose_runtime",
   "list_clients",
   "select_client",
@@ -25,6 +29,7 @@ const requiredTools = [
   "calculate_path_to",
   "walk_route_to",
   "capture_canvas_screenshot",
+  "get_screenshot",
   "verify_after_action",
   "perform_until",
 ];
@@ -154,6 +159,41 @@ try {
     throw new Error(`Unexpected get_agent_context status: ${context.status}`);
   }
 
+  const observeResult = await withTimeout(
+    client.callTool({
+      name: "observe_game",
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false, includePlan: true },
+    }),
+    requestTimeoutMs,
+    "observe_game",
+  );
+  const observation = parseJsonToolResult(observeResult, "observe_game");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "OBSERVED"].includes(observation.status)) {
+    throw new Error(`Unexpected observe_game status: ${observation.status}`);
+  }
+  if (observation.willExecute !== false) {
+    throw new Error("observe_game must return willExecute false");
+  }
+  if (observation.package && observation.package.willExecute !== false) {
+    throw new Error("observe_game package must return willExecute false");
+  }
+
+  const cycleResult = await withTimeout(
+    client.callTool({
+      name: "run_agent_cycle",
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false },
+    }),
+    requestTimeoutMs,
+    "run_agent_cycle",
+  );
+  const cycle = parseJsonToolResult(cycleResult, "run_agent_cycle");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "CYCLE_READY", "CYCLE_BLOCKED"].includes(cycle.status)) {
+    throw new Error(`Unexpected run_agent_cycle status: ${cycle.status}`);
+  }
+  if (cycle.willExecute !== false || cycle.validation?.willExecute !== false) {
+    throw new Error("run_agent_cycle must never execute actions");
+  }
+
   const diagnoseResult = await withTimeout(
     client.callTool({ name: "diagnose_runtime", arguments: {} }),
     requestTimeoutMs,
@@ -175,6 +215,100 @@ try {
   const plan = parseJsonToolResult(planResult, "plan_next_action");
   if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "PLANNED"].includes(plan.status)) {
     throw new Error(`Unexpected plan_next_action status: ${plan.status}`);
+  }
+
+  const prepareResult = await withTimeout(
+    client.callTool({
+      name: "prepare_agent_step",
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false },
+    }),
+    requestTimeoutMs,
+    "prepare_agent_step",
+  );
+  const prepared = parseJsonToolResult(prepareResult, "prepare_agent_step");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "PREPARED"].includes(prepared.status)) {
+    throw new Error(`Unexpected prepare_agent_step status: ${prepared.status}`);
+  }
+  if (prepared.package?.willExecute !== false) {
+    throw new Error("prepare_agent_step must return package.willExecute false");
+  }
+
+  const validateResult = await withTimeout(
+    client.callTool({
+      name: "validate_prepared_step",
+      arguments: {
+        objective: "chop 5 normal trees",
+        includeDiagnostics: false,
+        step: {
+          tool: "invoke_menu_action",
+          arguments: {
+            param0: 0,
+            param1: 0,
+            menuAction: "WALK",
+            identifier: 0,
+            itemId: -1,
+            option: "Walk here",
+            target: "",
+          },
+        },
+      },
+    }),
+    requestTimeoutMs,
+    "validate_prepared_step",
+  );
+  const validated = parseJsonToolResult(validateResult, "validate_prepared_step");
+  if (validated.status !== "VALIDATED" || validated.validation?.willExecute !== false) {
+    throw new Error(`Unexpected validate_prepared_step result: ${JSON.stringify(validated)}`);
+  }
+  if (validated.validation?.validationMode !== "client_thread_dry_run") {
+    throw new Error(`validate_prepared_step should dry-run raw invoke action, got ${validated.validation?.validationMode}`);
+  }
+
+  let screenshotChecked = false;
+  let observeScreenshotChecked = false;
+  if (live) {
+    const screenshotResult = await withTimeout(
+      client.callTool({
+        name: "get_screenshot",
+        arguments: { includeImage: false, width: 120, height: 90 },
+      }),
+      requestTimeoutMs,
+      "get_screenshot",
+    );
+    const screenshotText = textContent(screenshotResult);
+    const screenshot = JSON.parse(screenshotText);
+    if (screenshot.imageIncluded !== false || screenshot.mimeType !== "image/png" || !screenshot.filePath) {
+      throw new Error(`Unexpected get_screenshot metadata: ${screenshotText}`);
+    }
+    screenshotChecked = true;
+
+    const observeLiveResult = await withTimeout(
+      client.callTool({
+        name: "observe_game",
+        arguments: {
+          objective: "chop 5 normal trees",
+          includeDiagnostics: true,
+          includePlan: true,
+          includeScreenshot: true,
+          includeImage: false,
+          width: 120,
+          height: 90,
+        },
+      }),
+      requestTimeoutMs,
+      "live observe_game",
+    );
+    const liveObservation = parseJsonToolResult(observeLiveResult, "live observe_game");
+    if (liveObservation.status !== "OBSERVED" || liveObservation.willExecute !== false) {
+      throw new Error(`Unexpected live observe_game result: ${JSON.stringify(liveObservation)}`);
+    }
+    if (liveObservation.screenshot?.imageIncluded !== false || liveObservation.screenshot?.mimeType !== "image/png") {
+      throw new Error(`Unexpected observe_game screenshot metadata: ${JSON.stringify(liveObservation.screenshot)}`);
+    }
+    if (liveObservation.package?.willExecute !== false) {
+      throw new Error("live observe_game package must return willExecute false");
+    }
+    observeScreenshotChecked = true;
   }
 
   if (live) {
@@ -202,7 +336,13 @@ try {
     resourceCount: resources.resources.length,
     promptCount: prompts.prompts.length,
     agentContextStatus: context.status,
+    observeStatus: observation.status,
+    cycleStatus: cycle.status,
     planStatus: plan.status,
+    prepareStatus: prepared.status,
+    validateStatus: validated.status,
+    screenshotChecked,
+    observeScreenshotChecked,
     diagnosedClients: diagnose.checkedClients,
   };
 } finally {

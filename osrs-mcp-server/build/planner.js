@@ -6,6 +6,27 @@ export function actionStep(tool, reason, args, extra = {}) {
         ...extra,
     };
 }
+const ACTION_TOOLS = new Set([
+    "interact_with",
+    "perform_until",
+    "handle_dialogue",
+    "eat_food_when",
+    "deposit_inventory_item",
+    "withdraw_bank_item",
+    "invoke_menu_action",
+    "invoke_walk_action",
+    "invoke_widget_action",
+    "walk_route_to",
+    "walk_path_to",
+    "click_object",
+    "click_npc",
+    "click_ground_item",
+]);
+const DRY_RUN_CAPABLE_TOOLS = new Set([
+    "invoke_menu_action",
+    "invoke_walk_action",
+    "invoke_widget_action",
+]);
 function objectiveCount(objective) {
     const match = String(objective ?? "").match(/\b(\d{1,3})\b/);
     if (!match) {
@@ -312,4 +333,39 @@ export function buildNextActionPlan(context, snapshot, objective) {
     }, { priority: "observe" }));
     notes.push("Planner stayed conservative because the objective did not match a known safe routine or no suitable target was visible.");
     return { steps, notes, mode: "observe" };
+}
+export function buildAgentStepPackage(context, plan, objective, maxPreviewSteps = 5) {
+    const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+    const nextStep = steps[0] ?? null;
+    const firstAction = steps.find((step) => ACTION_TOOLS.has(step.tool)) ?? null;
+    const verificationStep = steps.find((step) => step.tool === "verify_last_action" || step.tool === "verify_after_action" || String(step.priority ?? "").includes("verify")) ?? null;
+    const blockerSteps = steps.filter((step) => step.priority === "blocker");
+    const dryRunRecommended = Boolean(firstAction && DRY_RUN_CAPABLE_TOOLS.has(firstAction.tool));
+    const baselineRecommended = Boolean(firstAction && steps.some((step) => step.tool === "mark_action_baseline"));
+    const readyStatus = context?.status ?? (context?.readiness?.risks?.length ? "ATTENTION_NEEDED" : "READY");
+    return {
+        objective,
+        status: blockerSteps.length > 0 ? "BLOCKED_BY_PREFLIGHT" : readyStatus,
+        mode: plan?.mode ?? "unknown",
+        willExecute: false,
+        nextStep,
+        firstAction,
+        verificationStep,
+        previewSteps: steps.slice(0, Math.max(1, maxPreviewSteps)),
+        remainingStepCount: Math.max(0, steps.length - Math.max(1, maxPreviewSteps)),
+        safety: {
+            realActionTool: Boolean(firstAction),
+            dryRunRecommended,
+            baselineRecommended,
+            requiresLiveClient: Boolean(firstAction),
+            blockerCount: blockerSteps.length,
+            risks: context?.readiness?.risks ?? [],
+        },
+        guidance: [
+            baselineRecommended ? "Call mark_action_baseline before the first real action." : undefined,
+            dryRunRecommended ? "Use dryRun: true before invoking raw RuneLite action params." : undefined,
+            firstAction ? `Execute ${firstAction.tool} only when the context still matches this package.` : "No action step is currently selected.",
+            verificationStep ? `After acting, verify with ${verificationStep.tool}.` : "After acting, refresh get_agent_context and verify the expected state changed.",
+        ].filter(Boolean),
+    };
 }

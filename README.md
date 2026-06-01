@@ -61,6 +61,7 @@ cd H:\runelite-mcp\osrs-mcp-server
 npm run build
 npm run smoke:plugin
 npm run smoke:planner
+npm run smoke:agent-context
 npm run smoke:mcp
 ```
 
@@ -83,19 +84,23 @@ Do not reuse or overwrite the older `osrs_runelite` entry.
 
 For normal play loops:
 
-1. Start with `get_agent_context`; it bundles identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
-2. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything. It covers common safe routines such as woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
-3. Read `osrs://client/identity` and `osrs://snapshot/latest` when you need the full raw context.
-4. Run `diagnose_runtime` after rebuilding the plugin or when a Java endpoint reports 404; it will tell you if RuneLite is still running an older plugin copy.
-5. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.
-6. Use `perform_until` for repeated skilling loops, such as chopping until inventory full.
-7. Use `handle_dialogue` for NPC/player dialogue.
-8. Use `eat_food_when` for HP safety.
-9. For risky actions, call `mark_action_baseline` before acting, then `verify_last_action` to prove snapshot deltas such as inventory, location, dialogue, chat, or entity-count changes.
-10. Verify single expected conditions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
-11. Use `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
-12. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
-13. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
+1. Start with `observe_game` when you want the AI's whole read-only perception packet in one call: compact context, optional plan/package, and optional screenshot metadata/image. It never executes actions.
+2. Use `run_agent_cycle` for one safe control-loop pass: observe, plan, select the next step, and validate it without executing.
+3. Use `get_agent_context` when you only need the compact state bundle: identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
+4. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything. It covers common safe routines such as woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
+5. Use `prepare_agent_step` when you want the next plan packaged with safety flags, the first action, baseline guidance, and verification guidance.
+6. Use `validate_prepared_step` immediately before acting when you need a fresh target check or a `dryRun:true` validation for raw `invoke_*` params.
+7. Read `osrs://client/identity` and `osrs://snapshot/latest` when you need the full raw context.
+8. Run `diagnose_runtime` after rebuilding the plugin or when a Java endpoint reports 404; it will tell you if RuneLite is still running an older plugin copy.
+9. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.
+10. Use `perform_until` for repeated skilling loops, such as chopping until inventory full.
+11. Use `handle_dialogue` for NPC/player dialogue.
+12. Use `eat_food_when` for HP safety.
+13. For risky actions, call `mark_action_baseline` before acting, then `verify_last_action` to prove snapshot deltas such as inventory, location, dialogue, chat, or entity-count changes.
+14. Verify single expected conditions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
+15. Use `get_screenshot` or `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
+16. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
+17. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
 
 Raw `move_mouse_and_click` should be the last resort.
 
