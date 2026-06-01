@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "tsc --watch",
+    "smoke:mcp": "node scripts/smoke-mcp.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
   },
   "dependencies": {

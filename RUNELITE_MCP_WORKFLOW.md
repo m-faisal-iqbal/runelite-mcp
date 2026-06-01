@@ -10,6 +10,9 @@ This project has two parts:
 - `Build-OSRS-MCP.bat`
   Builds the RuneLite plugin jar and TypeScript MCP server. It does not start or close RuneLite.
 
+- `cd osrs-mcp-server && npm run smoke:mcp`
+  Starts the built MCP server over stdio, verifies the expected tools/resources/prompts, calls `get_agent_context` and `diagnose_runtime`, then closes the child process. This does not start or close RuneLite. Add `-- --live` only when a plugin-loaded RuneLite client is already open and should be required.
+
 - `Install-OSRS-MCP-Plugin.bat`
   Builds, then copies the plugin jar to `%USERPROFILE%\.runelite\plugins\osrs-mcp-plugin.jar`.
   It does not start or close RuneLite.
@@ -43,6 +46,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - The Phase 1 action API exposes `/api/action/menu`, `/api/action/walk`, and `/api/action/widget`; all three run on RuneLite's ClientThread.
 - Use `diagnose_runtime` after a rebuild/install or after a 404 from a newer endpoint. It reports stale running plugin copies and missing feature endpoints without restarting RuneLite.
 - Use `get_agent_context` before planning a gameplay action. It returns one compact orientation bundle with runtime readiness, player state, risks, inventory, nearby targets, dialogue, chat, and recommended next checks.
+- Use `plan_next_action` when you want a conservative ordered list of MCP tool calls for the current objective without executing anything.
 - MCP resources are available for low-overhead context:
   - `osrs://snapshot/latest`
   - `osrs://events/recent`

@@ -670,14 +670,15 @@ server.registerPrompt("experienced-player-loop", {
                     "",
                     "Act like an experienced OSRS player using this MCP bridge.",
                     "1. Start with get_agent_context; it bundles identity, runtime freshness, state, risks, nearby targets, UI, chat, and recommended checks.",
-                    "2. Run diagnose_runtime if get_agent_context reports stale runtime, 404/missing endpoint, or after rebuilding the plugin.",
-                    "3. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
-                    "4. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
-                    "5. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
-                    "6. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
-                    "7. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
-                    "8. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
-                    "9. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
+                    "2. Use plan_next_action when you want a conservative ordered tool-call plan for the current objective before acting.",
+                    "3. Run diagnose_runtime if get_agent_context reports stale runtime, 404/missing endpoint, or after rebuilding the plugin.",
+                    "4. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
+                    "5. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
+                    "6. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
+                    "7. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
+                    "8. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
+                    "9. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
+                    "10. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
                 ].join("\n"),
             },
         }],
@@ -1256,6 +1257,135 @@ function buildAgentContext(baseURL, client, snapshot, runtime, args) {
         stream: snapshotStreamStatus(baseURL),
     };
 }
+function objectiveCount(objective) {
+    const match = String(objective ?? "").match(/\b(\d{1,3})\b/);
+    if (!match) {
+        return undefined;
+    }
+    const count = Number(match[1]);
+    return Number.isFinite(count) && count > 0 ? Math.min(count, 28) : undefined;
+}
+function objectiveIncludes(objective, words) {
+    const text = String(objective ?? "").toLowerCase();
+    return words.some((word) => text.includes(word));
+}
+function nearestMatchingTarget(targets, predicate) {
+    return sortByDistance((targets ?? []).filter(predicate))[0];
+}
+function actionStep(tool, reason, args, extra = {}) {
+    return {
+        tool,
+        reason,
+        arguments: args,
+        ...extra,
+    };
+}
+function buildNextActionPlan(context, snapshot, objective) {
+    const state = snapshot.state ?? {};
+    const dialogueType = snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type ?? "NONE";
+    const hpPercent = healthPercent(snapshot);
+    const count = objectiveCount(objective);
+    const steps = [];
+    const notes = [];
+    if (context.runtime?.status && context.runtime.status !== "ok" && context.runtime.status !== "not_checked") {
+        steps.push(actionStep("diagnose_runtime", "Runtime feature checks are not clean; confirm whether RuneLite needs a plugin reload before acting.", {}, { priority: "blocker" }));
+    }
+    if (state.status !== "LOGGED_IN") {
+        steps.push(actionStep("get_agent_context", "The player is not logged in, so gameplay actions should wait.", { includeDiagnostics: true }, { priority: "blocker" }));
+        return { steps, notes, mode: "wait_for_login" };
+    }
+    if (hpPercent !== undefined && hpPercent <= 35 && findFoodItem(snapshot)) {
+        steps.push(actionStep("eat_food_when", "Hitpoints are low and food is available.", { healthPercentAtOrBelow: 35 }, { priority: "safety" }));
+    }
+    if (dialogueType && dialogueType !== "NONE") {
+        steps.push(actionStep("handle_dialogue", "A dialogue or blocking interface is open; resolve it before ordinary movement or skilling.", {}, { priority: "interface" }));
+        return { steps, notes, mode: "handle_interface" };
+    }
+    if (inventorySlotsUsed(snapshot) >= 28) {
+        const bank = nearestMatchingTarget(snapshot.objects, (object) => String(object.name ?? "").toLowerCase().includes("bank") ||
+            String(object.option ?? "").toLowerCase().includes("bank"));
+        if (bank) {
+            steps.push(actionStep("interact_with", "Inventory is full; bank before continuing the objective.", {
+                entityType: "object",
+                name: bank.name,
+                id: bank.id,
+                option: bank.option ?? "Bank",
+                nearestToPlayer: true,
+            }, { priority: "inventory" }));
+        }
+        else {
+            notes.push("Inventory is full, but no nearby bank object was visible in the loaded scene.");
+        }
+        return { steps, notes, mode: "inventory_full" };
+    }
+    if (objectiveIncludes(objective, ["chop", "woodcut", "woodcutting", "tree", "logs"])) {
+        const tree = nearestMatchingTarget(snapshot.objects, (object) => {
+            const name = String(object.name ?? "").toLowerCase();
+            const option = String(object.option ?? "").toLowerCase();
+            return (name === "tree" || name.includes("tree")) && (option.includes("chop") || option === "");
+        });
+        if (tree) {
+            const currentLogs = inventoryQuantity(snapshot, "Logs");
+            const stopArgs = count
+                ? { condition: "inventory_quantity_at_least", inventoryItemName: "Logs", inventoryQuantityAtLeast: Math.min(28, currentLogs + count) }
+                : { condition: "inventory_full" };
+            steps.push(actionStep("mark_action_baseline", "Capture inventory/location/chat before the woodcutting loop.", { note: objective ?? "woodcutting loop" }, { priority: "verify_before" }));
+            steps.push(actionStep("perform_until", "Use repeated in-client tree interactions, stopping at the requested log count or full inventory.", {
+                actionEntityType: "object",
+                actionName: tree.name ?? "Tree",
+                actionId: tree.id,
+                actionOption: "Chop down",
+                nearestToPlayer: true,
+                maxIterations: count ?? 28,
+                ...stopArgs,
+            }, { priority: "action", target: { name: tree.name, id: tree.id, distanceToPlayer: tree.distanceToPlayer } }));
+            steps.push(actionStep("verify_last_action", "Confirm inventory/log or chat changes after the loop.", {
+                inventoryItemName: "Logs",
+                expectInventoryIncreased: true,
+                expectNewChat: true,
+                requireAnyChange: true,
+            }, { priority: "verify_after" }));
+            return { steps, notes, mode: "woodcutting" };
+        }
+        notes.push("Woodcutting objective detected, but no nearby tree was visible in the loaded scene.");
+    }
+    if (objectiveIncludes(objective, ["talk", "speak", "dialogue", "quest"])) {
+        const npc = nearestMatchingTarget(snapshot.npcs, (target) => String(target.option ?? "").toLowerCase().includes("talk") || Boolean(target.name));
+        if (npc) {
+            steps.push(actionStep("mark_action_baseline", "Capture dialogue/chat before starting the conversation.", { note: objective ?? "talk to NPC" }, { priority: "verify_before" }));
+            steps.push(actionStep("interact_with", "Talk to the nearest likely NPC using in-client menu params.", {
+                entityType: "npc",
+                name: npc.name,
+                id: npc.id,
+                option: "Talk-to",
+                nearestToPlayer: true,
+            }, { priority: "action", target: { name: npc.name, id: npc.id, distanceToPlayer: npc.distanceToPlayer } }));
+            steps.push(actionStep("handle_dialogue", "Continue or choose dialogue options after the NPC interaction opens dialogue.", {}, { priority: "followup" }));
+            return { steps, notes, mode: "dialogue" };
+        }
+    }
+    if (objectiveIncludes(objective, ["take", "pickup", "pick up", "loot", "collect"])) {
+        const item = sortByDistance(snapshot.groundItems ?? [])[0];
+        if (item) {
+            steps.push(actionStep("mark_action_baseline", "Capture inventory before taking the ground item.", { note: objective ?? "take ground item" }, { priority: "verify_before" }));
+            steps.push(actionStep("interact_with", "Take the nearest visible ground item.", {
+                entityType: "ground_item",
+                name: item.name,
+                id: item.id,
+                option: "Take",
+                nearestToPlayer: true,
+            }, { priority: "action", target: { name: item.name, id: item.id, distanceToPlayer: item.distanceToPlayer } }));
+            steps.push(actionStep("verify_last_action", "Confirm inventory changed after taking the item.", { expectInventorySlotsChanged: true, requireAnyChange: true }, { priority: "verify_after" }));
+            return { steps, notes, mode: "ground_item" };
+        }
+    }
+    steps.push(actionStep("get_agent_context", "No objective-specific action was confidently selected; refresh compact context before deciding manually.", {
+        objective,
+        includeDiagnostics: true,
+    }, { priority: "observe" }));
+    notes.push("Planner stayed conservative because the objective did not match a known safe routine or no suitable target was visible.");
+    return { steps, notes, mode: "observe" };
+}
 function inventorySlotsUsed(snapshot) {
     return (snapshot.inventory ?? []).filter((item) => item && item.id && item.id !== -1).length;
 }
@@ -1378,6 +1508,81 @@ server.tool("get_agent_context", "Get one compact observe-plan-act context bundl
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("building agent context", e) }] };
+    }
+});
+server.tool("plan_next_action", "Plan safe next MCP tool calls for the current objective without executing them. Use this after get_agent_context when you want a conservative action sequence.", {
+    objective: z.string().describe("Current gameplay objective, for example 'chop 5 normal trees' or 'talk to the nearest banker'"),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics before planning, default true"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby entries to include in the returned context summary, default 6"),
+    ...clientTargetSchema(),
+}, async ({ objective, includeDiagnostics, includeNearbyLimit, instanceId, playerName, port }) => {
+    try {
+        const clients = await discoverClients();
+        if (clients.length === 0) {
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            objective,
+                            status: "NO_CLIENT",
+                            plan: {
+                                mode: "start_runtime",
+                                steps: [actionStep("diagnose_runtime", "No RuneLite MCP plugin client was discovered; start/load RuneLite before gameplay planning.", {})],
+                                notes: ["This tool does not start, close, or restart RuneLite."],
+                            },
+                        }, null, 2)
+                    }]
+            };
+        }
+        const matches = clients.filter((client) => (port !== undefined && client.port === port) ||
+            (instanceId && client.instanceId === instanceId) ||
+            (playerName && String(client.playerName ?? "").toLowerCase() === playerName.toLowerCase()));
+        const client = (port !== undefined || instanceId || playerName)
+            ? matches[0]
+            : clients.find((candidate) => candidate.baseUrl === selectedRuneliteApi || candidate.instanceId === selectedClientInstanceId) ?? (clients.length === 1 ? clients[0] : undefined);
+        if (!client) {
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            objective,
+                            status: "NEEDS_CLIENT_SELECTION",
+                            clients,
+                            plan: {
+                                mode: "select_client",
+                                steps: [actionStep("select_client", "Multiple RuneLite clients are active; select the intended account/window before acting.", {})],
+                                notes: ["Pass port, instanceId, or playerName to plan_next_action when multiple clients are open."],
+                            },
+                        }, null, 2)
+                    }]
+            };
+        }
+        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const runtime = includeDiagnostics === false
+            ? { status: "not_checked" }
+            : await diagnoseClientRuntime(client);
+        const snapshot = await getSnapshotForBase(baseURL, true);
+        const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+            objective,
+            includeNearbyLimit: includeNearbyLimit ?? 6,
+            includeInventoryLimit: 12,
+        });
+        const plan = buildNextActionPlan(context, snapshot, objective);
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        objective,
+                        status: "PLANNED",
+                        context,
+                        plan,
+                        executionRule: "Do not execute blindly: run mark_action_baseline before risky actions, prefer the listed in-client action tools, then verify_last_action or verify_after_action.",
+                    }, null, 2)
+                }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("planning next action", e) }] };
     }
 });
 server.tool("get_game_state", "Get current player state, location, and health", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
