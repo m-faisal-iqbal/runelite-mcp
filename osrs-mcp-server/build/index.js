@@ -423,6 +423,9 @@ async function captureCanvasImage(baseURL, args) {
     return response;
 }
 async function invokeMenuAction(baseURL, action) {
+    const tickWait = action.tickAligned
+        ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
+        : undefined;
     const body = {
         param0: action.param0,
         param1: action.param1,
@@ -434,18 +437,24 @@ async function invokeMenuAction(baseURL, action) {
         dryRun: action.dryRun ?? false,
     };
     const res = await runeliteApi(baseURL).post("/action/menu", body);
-    return res.data;
+    return tickWait ? { ...res.data, tickWait } : res.data;
 }
 async function invokeWalkAction(baseURL, action) {
+    const tickWait = action.tickAligned
+        ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
+        : undefined;
     const res = await runeliteApi(baseURL).post("/action/walk", {
         worldX: action.worldX,
         worldY: action.worldY,
         plane: action.plane,
         dryRun: action.dryRun ?? false,
     });
-    return res.data;
+    return tickWait ? { ...res.data, tickWait } : res.data;
 }
 async function invokeWidgetAction(baseURL, action) {
+    const tickWait = action.tickAligned
+        ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
+        : undefined;
     const res = await runeliteApi(baseURL).post("/action/widget", {
         packedId: action.packedId,
         groupId: action.groupId,
@@ -460,7 +469,7 @@ async function invokeWidgetAction(baseURL, action) {
         target: action.target ?? "",
         dryRun: action.dryRun ?? false,
     });
-    return res.data;
+    return tickWait ? { ...res.data, tickWait } : res.data;
 }
 async function getPlayerLocation(target = {}) {
     const { snapshot } = await getSnapshotForTarget(target);
@@ -529,6 +538,35 @@ function calculateStraightLineSteps(from, to, maxStepTiles = 18, maxSteps = 12) 
         note: "Straight-line minimap steps only; obstacles and doors are not pathfound.",
         steps,
     };
+}
+async function calculateCollisionAwarePath(baseURL, worldX, worldY, plane, maxNodes = 4096) {
+    const params = {
+        worldX,
+        worldY,
+        maxNodes,
+    };
+    if (plane !== undefined) {
+        params.plane = plane;
+    }
+    const response = await runeliteApi(baseURL).get("/path", { params });
+    return response.data;
+}
+function withStraightLineFallback(snapshot, target, maxStepTiles, maxSteps, collisionPath) {
+    const fallback = calculateStraightLineSteps(snapshot.state?.location, target, maxStepTiles, maxSteps);
+    return {
+        ...fallback,
+        fallbackUsed: true,
+        fallbackReason: collisionPath?.error ?? "COLLISION_PATH_UNAVAILABLE",
+        collisionPath,
+    };
+}
+function chooseLocalPathStep(path, maxStepTiles = 18) {
+    const steps = Array.isArray(path.steps) ? path.steps : [];
+    if (steps.length <= 1) {
+        return steps[0];
+    }
+    const safeMaxStep = Math.max(1, Math.floor(maxStepTiles));
+    return steps[Math.min(safeMaxStep, steps.length - 1)];
 }
 function targetsForType(snapshot, entityType) {
     switch (entityType.toLowerCase()) {
@@ -676,7 +714,8 @@ server.registerPrompt("experienced-player-loop", {
                     "3. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
                     "4. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
                     "5. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
-                    "6. For navigation beyond the loaded scene, use calculate_path_to/walk_path_to as a temporary fallback until collision-aware pathing is available.",
+                    "6. For navigation, use calculate_path_to/walk_path_to: they prefer local-scene collision-aware paths and fall back to bounded minimap steps for farther targets.",
+                    "7. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
                 ].join("\n"),
             },
         }],
@@ -704,7 +743,7 @@ server.registerPrompt("woodcut-and-bank", {
                     `2. If inventory is not full, use interact_with({ entityType: \"object\", name: \"${treeName}\", option: \"Chop down\", nearestToPlayer: true }).`,
                     "3. Wait until player is idle or tree disappears. Check chat for errors.",
                     "4. Repeat until inventory is full.",
-                    "5. Navigate to bank using walk_to/walk_path_to as available.",
+                    "5. Navigate to bank using walk_to/walk_path_to; prefer local collision-aware steps when the bank is inside the loaded scene.",
                     `6. Open bank with interact_with on ${bankTarget} using option Bank/Open.`,
                     `7. Deposit ${logName} using bank tools, then verify inventory/bank state.`,
                 ].join("\n"),
@@ -762,6 +801,31 @@ server.registerPrompt("withdraw-and-equip", {
 }));
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+async function readClientState(baseURL) {
+    return (await runeliteApi(baseURL).get("/state")).data;
+}
+async function waitForGameTick(baseURL, minTicks = 1, timeoutMs = 1800, pollMs = 75) {
+    const startedAt = Date.now();
+    const firstState = await readClientState(baseURL);
+    const startTick = Number(firstState?.tick ?? 0);
+    const targetTick = startTick + Math.max(1, Math.floor(minTicks));
+    let lastTick = startTick;
+    while (Date.now() - startedAt <= timeoutMs) {
+        const state = await readClientState(baseURL);
+        const currentTick = Number(state?.tick ?? 0);
+        lastTick = currentTick;
+        if (currentTick >= targetTick) {
+            return {
+                startTick,
+                targetTick,
+                currentTick,
+                waitedMs: Date.now() - startedAt,
+            };
+        }
+        await sleep(Math.max(25, pollMs));
+    }
+    throw new Error(`Timed out waiting for game tick ${targetTick}; last known tick was ${lastTick}`);
 }
 async function openContextMenuForTarget(args) {
     const targetClient = { instanceId: args.instanceId, playerName: args.playerName, port: args.port };
@@ -1564,6 +1628,21 @@ server.tool("get_context_menu", "Read the current RuneLite right-click/context m
         return { content: [{ type: "text", text: errorText("fetching context menu", e) }] };
     }
 });
+server.tool("wait_for_game_tick", "Wait until RuneLite reports one or more new 600ms OSRS game ticks. Use before timing-sensitive in-client actions or after an action when tick evidence matters.", {
+    ticks: z.number().optional().describe("Number of game ticks to wait, default 1"),
+    timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 1800"),
+    pollMs: z.number().optional().describe("Polling interval in milliseconds, default 75"),
+    ...clientTargetSchema(),
+}, async ({ ticks, timeoutMs, pollMs, instanceId, playerName, port }) => {
+    try {
+        const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+        const result = await waitForGameTick(baseURL, ticks ?? 1, timeoutMs ?? 1800, pollMs ?? 75);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("waiting for game tick", e) }] };
+    }
+});
 server.tool("invoke_menu_action", "Invoke a RuneLite menu action inside the client on the RuneLite ClientThread. Use params from get_context_menu entries or dryRun first when unsure.", {
     param0: z.number().describe("RuneLite menu action param0, usually scene X, widget child id, or slot depending on action type"),
     param1: z.number().describe("RuneLite menu action param1, usually scene Y, widget packed id, or widget id depending on action type"),
@@ -1574,8 +1653,10 @@ server.tool("invoke_menu_action", "Invoke a RuneLite menu action inside the clie
     option: z.string().optional().describe("Menu option text, for example Chop down, Talk-to, Use, Walk here"),
     target: z.string().optional().describe("Menu target text"),
     dryRun: z.boolean().optional().describe("Validate and echo the action without invoking it in-game"),
+    tickAligned: z.boolean().optional().describe("Wait for the next OSRS game tick before invoking the action"),
+    tickTimeoutMs: z.number().optional().describe("Maximum wait for tickAligned actions in milliseconds, default 1800"),
     ...clientTargetSchema(),
-}, async ({ param0, param1, menuAction, identifier, id, itemId, option, target, dryRun, instanceId, playerName, port }) => {
+}, async ({ param0, param1, menuAction, identifier, id, itemId, option, target, dryRun, tickAligned, tickTimeoutMs, instanceId, playerName, port }) => {
     try {
         const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
         const result = await invokeMenuAction(baseURL, {
@@ -1588,6 +1669,8 @@ server.tool("invoke_menu_action", "Invoke a RuneLite menu action inside the clie
             option,
             target,
             dryRun,
+            tickAligned,
+            tickTimeoutMs,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -1600,11 +1683,13 @@ server.tool("invoke_walk_action", "Invoke a RuneLite WALK menu action inside the
     worldY: z.number().describe("Target world Y tile. Must be in the currently loaded scene."),
     plane: z.number().optional().describe("Target plane. Defaults to the client's current plane."),
     dryRun: z.boolean().optional().describe("Validate and echo the walk action without invoking it in-game"),
+    tickAligned: z.boolean().optional().describe("Wait for the next OSRS game tick before invoking the walk action"),
+    tickTimeoutMs: z.number().optional().describe("Maximum wait for tickAligned actions in milliseconds, default 1800"),
     ...clientTargetSchema(),
-}, async ({ worldX, worldY, plane, dryRun, instanceId, playerName, port }) => {
+}, async ({ worldX, worldY, plane, dryRun, tickAligned, tickTimeoutMs, instanceId, playerName, port }) => {
     try {
         const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
-        const result = await invokeWalkAction(baseURL, { worldX, worldY, plane, dryRun });
+        const result = await invokeWalkAction(baseURL, { worldX, worldY, plane, dryRun, tickAligned, tickTimeoutMs });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     catch (e) {
@@ -1626,8 +1711,10 @@ server.tool("invoke_widget_action", "Invoke a RuneLite widget menu action inside
     option: z.string().optional().describe("Menu option text."),
     target: z.string().optional().describe("Menu target text."),
     dryRun: z.boolean().optional().describe("Validate and echo the widget action without invoking it in-game"),
+    tickAligned: z.boolean().optional().describe("Wait for the next OSRS game tick before invoking the widget action"),
+    tickTimeoutMs: z.number().optional().describe("Maximum wait for tickAligned actions in milliseconds, default 1800"),
     ...clientTargetSchema(),
-}, async ({ packedId, groupId, childId, param0, param1, actionIndex, menuAction, type, identifier, id, itemId, option, target, dryRun, instanceId, playerName, port }) => {
+}, async ({ packedId, groupId, childId, param0, param1, actionIndex, menuAction, type, identifier, id, itemId, option, target, dryRun, tickAligned, tickTimeoutMs, instanceId, playerName, port }) => {
     try {
         const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
         const result = await invokeWidgetAction(baseURL, {
@@ -1645,6 +1732,8 @@ server.tool("invoke_widget_action", "Invoke a RuneLite widget menu action inside
             option,
             target,
             dryRun,
+            tickAligned,
+            tickTimeoutMs,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -1807,41 +1896,94 @@ server.tool("walk_to", "Walk to a nearby world tile. In auto mode, try an in-cli
         return { content: [{ type: "text", text: `Error walking to tile: ${e.message}` }] };
     }
 });
-server.tool("calculate_path_to", "Calculate bounded straight-line minimap steps from the current player tile to a target world tile without clicking.", {
+server.tool("calculate_path_to", "Calculate a local-scene collision-aware path to a target world tile without clicking, falling back to bounded straight-line minimap steps when the target is outside the loaded scene.", {
     worldX: z.number().describe("Target world X tile"),
     worldY: z.number().describe("Target world Y tile"),
     plane: z.number().optional().describe("Target plane, defaults to the player's current plane"),
     maxStepTiles: z.number().optional().describe("Maximum tiles per minimap step, default 18"),
     maxSteps: z.number().optional().describe("Maximum steps to return, default 12"),
+    maxNodes: z.number().optional().describe("Maximum local collision-map nodes to search, default 4096"),
     ...clientTargetSchema(),
-}, async ({ worldX, worldY, plane, maxStepTiles, maxSteps, instanceId, playerName, port }) => {
+}, async ({ worldX, worldY, plane, maxStepTiles, maxSteps, maxNodes, instanceId, playerName, port }) => {
     try {
-        const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port }, true);
-        const path = calculateStraightLineSteps(snapshot.state?.location, { worldX, worldY, plane }, maxStepTiles ?? 18, maxSteps ?? 12);
-        return { content: [{ type: "text", text: JSON.stringify(path, null, 2) }] };
+        const targetClient = { instanceId, playerName, port };
+        const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+        let collisionPath;
+        try {
+            collisionPath = await calculateCollisionAwarePath(baseURL, worldX, worldY, plane, maxNodes ?? 4096);
+            if (collisionPath.success) {
+                return { content: [{ type: "text", text: JSON.stringify(collisionPath, null, 2) }] };
+            }
+        }
+        catch (error) {
+            collisionPath = {
+                success: false,
+                error: "COLLISION_PATH_REQUEST_FAILED",
+                message: errorText("requesting collision-aware path", error),
+            };
+        }
+        const fallback = withStraightLineFallback(snapshot, { worldX, worldY, plane }, maxStepTiles ?? 18, maxSteps ?? 12, collisionPath);
+        return { content: [{ type: "text", text: JSON.stringify(fallback, null, 2) }] };
     }
     catch (e) {
         return { content: [{ type: "text", text: `Error calculating path: ${e.message}` }] };
     }
 });
-server.tool("walk_path_to", "Calculate a bounded path and click only the next minimap step toward the target world tile.", {
+server.tool("walk_path_to", "Walk one bounded step toward a target world tile, preferring local collision-aware in-client walking and falling back to minimap projection when needed.", {
     worldX: z.number().describe("Target world X tile"),
     worldY: z.number().describe("Target world Y tile"),
     plane: z.number().optional().describe("Target plane, defaults to the player's current plane"),
     maxStepTiles: z.number().optional().describe("Maximum tiles per minimap step, default 18"),
+    maxNodes: z.number().optional().describe("Maximum local collision-map nodes to search, default 4096"),
     maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age in milliseconds, default 1000"),
     ...clientTargetSchema(),
-}, async ({ worldX, worldY, plane, maxStepTiles, maxAgeMs, instanceId, playerName, port }) => {
+}, async ({ worldX, worldY, plane, maxStepTiles, maxNodes, maxAgeMs, instanceId, playerName, port }) => {
     try {
         const targetClient = { instanceId, playerName, port };
-        const { snapshot } = await getSnapshotForTarget(targetClient, true);
-        const path = calculateStraightLineSteps(snapshot.state?.location, { worldX, worldY, plane }, maxStepTiles ?? 18, 1);
+        const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+        const safeMaxStepTiles = maxStepTiles ?? 18;
+        let collisionPath;
+        try {
+            collisionPath = await calculateCollisionAwarePath(baseURL, worldX, worldY, plane, maxNodes ?? 4096);
+            if (collisionPath.success) {
+                const step = chooseLocalPathStep(collisionPath, safeMaxStepTiles);
+                if (!step) {
+                    throw new Error("Collision-aware path returned no walkable steps");
+                }
+                const result = await invokeWalkAction(baseURL, {
+                    worldX: step.worldX,
+                    worldY: step.worldY,
+                    plane: step.plane,
+                });
+                return {
+                    content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                mode: "collision_aware_local",
+                                walkedStep: step,
+                                result,
+                                path: collisionPath,
+                            }, null, 2)
+                        }]
+                };
+            }
+        }
+        catch (error) {
+            collisionPath = {
+                success: false,
+                error: collisionPath?.error ?? "COLLISION_LOCAL_WALK_FAILED",
+                message: errorText("walking collision-aware path", error),
+                collisionPath,
+            };
+        }
+        const path = withStraightLineFallback(snapshot, { worldX, worldY, plane }, safeMaxStepTiles, 1, collisionPath);
         const step = path.steps[0];
         const clicked = await clickMinimapProjection(step.worldX, step.worldY, step.plane, targetClient, maxAgeMs ?? 1000);
         return {
             content: [{
                     type: "text",
                     text: JSON.stringify({
+                        mode: "minimap_fallback",
                         clickedStep: step,
                         clickedAt: { screenX: clicked.screenX, screenY: clicked.screenY },
                         path,
@@ -2064,12 +2206,13 @@ server.tool("get_chat_messages", "Read recent RuneLite chat/game messages buffer
         return { content: [{ type: "text", text: errorText("fetching chat messages", e) }] };
     }
 });
-server.tool("get_recent_events", "Read recent plugin event hooks such as chat, animation changes, item-container changes, and widget loads.", {
+server.tool("get_recent_events", "Read recent plugin event hooks such as GameTick, chat, animation changes, item-container changes, and widget loads.", {
     limit: z.number().optional().describe("Maximum events to return, default 50"),
+    eventType: z.string().optional().describe("Optional exact eventType filter, for example GameTick, ChatMessage, AnimationChanged, ItemContainerChanged, or WidgetLoaded"),
     ...clientTargetSchema(),
-}, async ({ limit, instanceId, playerName, port }) => {
+}, async ({ limit, eventType, instanceId, playerName, port }) => {
     try {
-        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/events", { params: { limit } });
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/events", { params: { limit, eventType } });
         return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
     }
     catch (e) {

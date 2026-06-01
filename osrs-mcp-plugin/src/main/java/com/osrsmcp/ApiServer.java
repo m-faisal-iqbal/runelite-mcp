@@ -21,6 +21,7 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.QuestState;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
+import net.runelite.api.WorldView;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.Point;
@@ -52,10 +53,14 @@ import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -77,6 +82,15 @@ public class ApiServer {
     private static final int LAST_API_PORT = 8090;
     private static final int RECENT_CHAT_LIMIT = 100;
     private static final int RECENT_EVENT_LIMIT = 200;
+    private static final int BLOCK_MOVEMENT_NORTH_WEST = 1;
+    private static final int BLOCK_MOVEMENT_NORTH = 2;
+    private static final int BLOCK_MOVEMENT_NORTH_EAST = 4;
+    private static final int BLOCK_MOVEMENT_EAST = 8;
+    private static final int BLOCK_MOVEMENT_SOUTH_EAST = 16;
+    private static final int BLOCK_MOVEMENT_SOUTH = 32;
+    private static final int BLOCK_MOVEMENT_SOUTH_WEST = 64;
+    private static final int BLOCK_MOVEMENT_WEST = 128;
+    private static final int BLOCK_MOVEMENT_FULL = 2359552;
     private static final Logger log = LoggerFactory.getLogger(ApiServer.class);
 
     private HttpServer server;
@@ -159,6 +173,7 @@ public class ApiServer {
         server.createContext("/api/stream", new StreamHandler());
         server.createContext("/api/context_menu", new ContextMenuHandler());
         server.createContext("/api/minimap", new MinimapHandler());
+        server.createContext("/api/path", new PathHandler());
         server.createContext("/api/chat", new ChatHandler());
         server.createContext("/api/events", new EventsHandler());
         server.createContext("/api/identity", new IdentityHandler());
@@ -249,6 +264,10 @@ public class ApiServer {
 
     public void onGameTick() {
         gameTick++;
+        JsonObject details = new JsonObject();
+        details.addProperty("gameTick", gameTick);
+        details.addProperty("clientTick", clientTick);
+        addPluginEvent("GameTick", details);
     }
 
     public void updateSnapshotFromClientTick() {
@@ -431,6 +450,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
         endpoints.add(endpoint("/api/context_menu", "Current RuneLite right-click/context menu options with approximate screen coordinates when open."));
         endpoints.add(endpoint("/api/minimap", "Minimap bounds and optional world tile projection for walk tools."));
+        endpoints.add(endpoint("/api/path?worldX=3200&worldY=3200&plane=0", "Collision-aware local-scene A* path from player to a loaded-scene world tile."));
         endpoints.add(endpoint("/api/chat", "Recent buffered RuneLite chat/game messages for feedback and error detection."));
         endpoints.add(endpoint("/api/events", "Recent plugin event buffer including chat, animation changes, item-container changes, and widget loads."));
         endpoints.add(endpoint("/api/identity", "Stable plugin instance identity, player name when available, port, and last snapshot time."));
@@ -1544,6 +1564,270 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private String buildPathJson(long capturedAt, WorldPoint targetPoint, int maxNodes) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("collisionAware", true);
+        response.addProperty("scope", "loaded_scene");
+
+        Player player = client.getLocalPlayer();
+        WorldView worldView = client.getTopLevelWorldView();
+        if (player == null || player.getWorldLocation() == null) {
+            response.addProperty("success", false);
+            response.addProperty("error", "PLAYER_UNAVAILABLE");
+            return gson.toJson(response);
+        }
+        if (worldView == null || worldView.getCollisionMaps() == null) {
+            response.addProperty("success", false);
+            response.addProperty("error", "COLLISION_MAP_UNAVAILABLE");
+            return gson.toJson(response);
+        }
+
+        WorldPoint startWorld = player.getWorldLocation();
+        int plane = targetPoint.getPlane() >= 0 ? targetPoint.getPlane() : startWorld.getPlane();
+        targetPoint = new WorldPoint(targetPoint.getX(), targetPoint.getY(), plane);
+        if (plane < 0 || plane >= worldView.getCollisionMaps().length || worldView.getCollisionMaps()[plane] == null) {
+            response.addProperty("success", false);
+            response.addProperty("error", "PLANE_UNAVAILABLE");
+            return gson.toJson(response);
+        }
+
+        if (startWorld.getPlane() != plane) {
+            response.addProperty("success", false);
+            response.addProperty("error", "TARGET_ON_DIFFERENT_PLANE");
+            response.addProperty("startPlane", startWorld.getPlane());
+            response.addProperty("targetPlane", plane);
+            return gson.toJson(response);
+        }
+
+        int baseX = worldView.getBaseX();
+        int baseY = worldView.getBaseY();
+        int sizeX = worldView.getSizeX();
+        int sizeY = worldView.getSizeY();
+        int startX = startWorld.getX() - baseX;
+        int startY = startWorld.getY() - baseY;
+        int targetX = targetPoint.getX() - baseX;
+        int targetY = targetPoint.getY() - baseY;
+        int[][] flags = worldView.getCollisionMaps()[plane].getFlags();
+
+        addPathEndpoint(response, "start", startWorld, startX, startY);
+        addPathEndpoint(response, "target", targetPoint, targetX, targetY);
+        response.addProperty("baseX", baseX);
+        response.addProperty("baseY", baseY);
+        response.addProperty("sceneSizeX", sizeX);
+        response.addProperty("sceneSizeY", sizeY);
+
+        if (!isSceneCoordinate(startX, startY, sizeX, sizeY) || !isSceneCoordinate(targetX, targetY, sizeX, sizeY)) {
+            response.addProperty("success", false);
+            response.addProperty("error", "TARGET_OUTSIDE_LOADED_SCENE");
+            return gson.toJson(response);
+        }
+        if (isTileBlocked(flags, targetX, targetY, sizeX, sizeY)) {
+            response.addProperty("success", false);
+            response.addProperty("error", "TARGET_TILE_BLOCKED");
+            return gson.toJson(response);
+        }
+
+        List<PathNode> path = findLocalPath(flags, startX, startY, targetX, targetY, sizeX, sizeY, Math.max(128, maxNodes));
+        if (path.isEmpty()) {
+            response.addProperty("success", false);
+            response.addProperty("error", "NO_LOCAL_PATH");
+            return gson.toJson(response);
+        }
+
+        JsonArray steps = new JsonArray();
+        for (PathNode node : path) {
+            JsonObject step = new JsonObject();
+            step.addProperty("sceneX", node.x);
+            step.addProperty("sceneY", node.y);
+            step.addProperty("worldX", baseX + node.x);
+            step.addProperty("worldY", baseY + node.y);
+            step.addProperty("plane", plane);
+            steps.add(step);
+        }
+
+        response.addProperty("success", true);
+        response.addProperty("distance", Math.max(Math.abs(targetX - startX), Math.abs(targetY - startY)));
+        response.addProperty("stepsCount", steps.size());
+        response.add("steps", steps);
+        response.add("waypoints", buildPathWaypoints(path, baseX, baseY, plane));
+        return gson.toJson(response);
+    }
+
+    private void addPathEndpoint(JsonObject response, String prefix, WorldPoint worldPoint, int sceneX, int sceneY) {
+        JsonObject endpoint = new JsonObject();
+        endpoint.addProperty("worldX", worldPoint.getX());
+        endpoint.addProperty("worldY", worldPoint.getY());
+        endpoint.addProperty("plane", worldPoint.getPlane());
+        endpoint.addProperty("sceneX", sceneX);
+        endpoint.addProperty("sceneY", sceneY);
+        response.add(prefix, endpoint);
+    }
+
+    private boolean isSceneCoordinate(int x, int y, int sizeX, int sizeY) {
+        return x >= 0 && y >= 0 && x < sizeX && y < sizeY;
+    }
+
+    private boolean isTileBlocked(int[][] flags, int x, int y, int sizeX, int sizeY) {
+        return !isSceneCoordinate(x, y, sizeX, sizeY) || (flags[x][y] & BLOCK_MOVEMENT_FULL) != 0;
+    }
+
+    private boolean canMove(int[][] flags, int x, int y, int dx, int dy, int sizeX, int sizeY) {
+        int nx = x + dx;
+        int ny = y + dy;
+        if (isTileBlocked(flags, nx, ny, sizeX, sizeY)) {
+            return false;
+        }
+
+        int current = flags[x][y];
+        int next = flags[nx][ny];
+        if (dx == 1 && ((current & BLOCK_MOVEMENT_EAST) != 0 || (next & BLOCK_MOVEMENT_WEST) != 0)) {
+            return false;
+        }
+        if (dx == -1 && ((current & BLOCK_MOVEMENT_WEST) != 0 || (next & BLOCK_MOVEMENT_EAST) != 0)) {
+            return false;
+        }
+        if (dy == 1 && ((current & BLOCK_MOVEMENT_NORTH) != 0 || (next & BLOCK_MOVEMENT_SOUTH) != 0)) {
+            return false;
+        }
+        if (dy == -1 && ((current & BLOCK_MOVEMENT_SOUTH) != 0 || (next & BLOCK_MOVEMENT_NORTH) != 0)) {
+            return false;
+        }
+
+        if (dx != 0 && dy != 0) {
+            if (!canMove(flags, x, y, dx, 0, sizeX, sizeY) || !canMove(flags, x, y, 0, dy, sizeX, sizeY)) {
+                return false;
+            }
+            if (dx == 1 && dy == 1 && ((current & BLOCK_MOVEMENT_NORTH_EAST) != 0 || (next & BLOCK_MOVEMENT_SOUTH_WEST) != 0)) {
+                return false;
+            }
+            if (dx == 1 && dy == -1 && ((current & BLOCK_MOVEMENT_SOUTH_EAST) != 0 || (next & BLOCK_MOVEMENT_NORTH_WEST) != 0)) {
+                return false;
+            }
+            if (dx == -1 && dy == 1 && ((current & BLOCK_MOVEMENT_NORTH_WEST) != 0 || (next & BLOCK_MOVEMENT_SOUTH_EAST) != 0)) {
+                return false;
+            }
+            if (dx == -1 && dy == -1 && ((current & BLOCK_MOVEMENT_SOUTH_WEST) != 0 || (next & BLOCK_MOVEMENT_NORTH_EAST) != 0)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private int heuristic(int x, int y, int targetX, int targetY) {
+        return Math.max(Math.abs(targetX - x), Math.abs(targetY - y)) * 10;
+    }
+
+    private List<PathNode> findLocalPath(int[][] flags, int startX, int startY, int targetX, int targetY, int sizeX, int sizeY, int maxNodes) {
+        boolean[][] visited = new boolean[sizeX][sizeY];
+        int[][] bestCost = new int[sizeX][sizeY];
+        PathNode[][] parents = new PathNode[sizeX][sizeY];
+        for (int x = 0; x < sizeX; x++) {
+            for (int y = 0; y < sizeY; y++) {
+                bestCost[x][y] = Integer.MAX_VALUE;
+            }
+        }
+
+        PriorityQueue<PathNode> open = new PriorityQueue<>(Comparator.comparingInt(node -> node.priority));
+        PathNode start = new PathNode(startX, startY, 0, heuristic(startX, startY, targetX, targetY));
+        open.add(start);
+        bestCost[startX][startY] = 0;
+        int searched = 0;
+        int[] directions = {-1, 0, 1};
+
+        while (!open.isEmpty() && searched < maxNodes) {
+            PathNode current = open.poll();
+            if (visited[current.x][current.y]) {
+                continue;
+            }
+            visited[current.x][current.y] = true;
+            searched++;
+
+            if (current.x == targetX && current.y == targetY) {
+                return reconstructPath(parents, current);
+            }
+
+            for (int dx : directions) {
+                for (int dy : directions) {
+                    if (dx == 0 && dy == 0) {
+                        continue;
+                    }
+                    int nx = current.x + dx;
+                    int ny = current.y + dy;
+                    if (!isSceneCoordinate(nx, ny, sizeX, sizeY) || visited[nx][ny] || !canMove(flags, current.x, current.y, dx, dy, sizeX, sizeY)) {
+                        continue;
+                    }
+
+                    int stepCost = dx != 0 && dy != 0 ? 14 : 10;
+                    int cost = current.cost + stepCost;
+                    if (cost < bestCost[nx][ny]) {
+                        bestCost[nx][ny] = cost;
+                        parents[nx][ny] = current;
+                        open.add(new PathNode(nx, ny, cost, cost + heuristic(nx, ny, targetX, targetY)));
+                    }
+                }
+            }
+        }
+
+        return Collections.emptyList();
+    }
+
+    private List<PathNode> reconstructPath(PathNode[][] parents, PathNode end) {
+        ArrayDeque<PathNode> path = new ArrayDeque<>();
+        PathNode current = end;
+        while (current != null) {
+            path.addFirst(current);
+            current = parents[current.x][current.y];
+        }
+        return new ArrayList<>(path);
+    }
+
+    private JsonArray buildPathWaypoints(List<PathNode> path, int baseX, int baseY, int plane) {
+        JsonArray waypoints = new JsonArray();
+        if (path.isEmpty()) {
+            return waypoints;
+        }
+
+        int lastDx = 0;
+        int lastDy = 0;
+        for (int i = 1; i < path.size(); i++) {
+            PathNode previous = path.get(i - 1);
+            PathNode current = path.get(i);
+            int dx = Integer.compare(current.x - previous.x, 0);
+            int dy = Integer.compare(current.y - previous.y, 0);
+            boolean directionChanged = i > 1 && (dx != lastDx || dy != lastDy);
+            boolean isLast = i == path.size() - 1;
+            if (directionChanged || isLast) {
+                PathNode waypoint = directionChanged ? previous : current;
+                JsonObject step = new JsonObject();
+                step.addProperty("sceneX", waypoint.x);
+                step.addProperty("sceneY", waypoint.y);
+                step.addProperty("worldX", baseX + waypoint.x);
+                step.addProperty("worldY", baseY + waypoint.y);
+                step.addProperty("plane", plane);
+                waypoints.add(step);
+            }
+            lastDx = dx;
+            lastDy = dy;
+        }
+        return waypoints;
+    }
+
+    private static final class PathNode {
+        final int x;
+        final int y;
+        final int cost;
+        final int priority;
+
+        PathNode(int x, int y, int cost, int priority) {
+            this.x = x;
+            this.y = y;
+            this.cost = cost;
+            this.priority = priority;
+        }
+    }
+
     private String buildCameraJson(long capturedAt) {
         JsonObject response = new JsonObject();
         addCaptureMeta(response, capturedAt);
@@ -1603,22 +1887,38 @@ public class ApiServer {
         return buildChatJson(System.currentTimeMillis(), limit);
     }
 
-    private String buildEventsJson(long capturedAt, int limit) {
+    private String buildEventsJson(long capturedAt, int limit, String eventTypeFilter) {
         JsonArray events = new JsonArray();
+        ArrayDeque<JsonElement> selectedEvents = new ArrayDeque<>();
+        String normalizedFilter = eventTypeFilter != null ? eventTypeFilter.trim().toLowerCase() : "";
         synchronized (recentEvents) {
-            int start = Math.max(0, recentEvents.size() - Math.max(1, limit));
-            for (int i = start; i < recentEvents.size(); i++) {
-                events.add(gson.fromJson(recentEvents.get(i), JsonElement.class));
+            int remaining = Math.max(1, limit);
+            for (int i = recentEvents.size() - 1; i >= 0 && remaining > 0; i--) {
+                JsonElement eventElement = gson.fromJson(recentEvents.get(i), JsonElement.class);
+                if (!normalizedFilter.isEmpty()
+                    && (!eventElement.isJsonObject()
+                        || !eventElement.getAsJsonObject().has("eventType")
+                        || !eventElement.getAsJsonObject().get("eventType").getAsString().toLowerCase().equals(normalizedFilter))) {
+                    continue;
+                }
+                selectedEvents.addFirst(eventElement);
+                remaining--;
             }
+        }
+        for (JsonElement eventElement : selectedEvents) {
+            events.add(eventElement);
         }
         JsonObject response = new JsonObject();
         addCaptureMeta(response, capturedAt);
+        if (!normalizedFilter.isEmpty()) {
+            response.addProperty("eventType", eventTypeFilter);
+        }
         response.add("events", events);
         return withCurrentAge(gson.toJson(response));
     }
 
     private String buildEventsJson(int limit) {
-        return buildEventsJson(System.currentTimeMillis(), limit);
+        return buildEventsJson(System.currentTimeMillis(), limit, "");
     }
 
     private void addVisibleWidgetSummary(JsonArray widgets, String label, Widget widget, long capturedAt) {
@@ -2373,6 +2673,23 @@ public class ApiServer {
         }
     }
 
+    class PathHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            int worldX = getIntParam(params, "worldX", -1);
+            int worldY = getIntParam(params, "worldY", -1);
+            int plane = getIntParam(params, "plane", -1);
+            int maxNodes = getIntParam(params, "maxNodes", 4096);
+            if (worldX <= 0 || worldY <= 0) {
+                sendJsonErrorResponse(t, 400, "BAD_REQUEST", "worldX and worldY query parameters are required");
+                return;
+            }
+            WorldPoint targetPoint = new WorldPoint(worldX, worldY, plane);
+            handleOnClientThread(t, () -> buildPathJson(System.currentTimeMillis(), targetPoint, maxNodes));
+        }
+    }
+
     class ChatHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
@@ -2387,7 +2704,7 @@ public class ApiServer {
         public void handle(HttpExchange t) throws IOException {
             Map<String, String> params = parseQuery(t);
             int limit = getIntParam(params, "limit", 50);
-            sendResponse(t, 200, buildEventsJson(limit));
+            sendResponse(t, 200, buildEventsJson(System.currentTimeMillis(), limit, params.get("eventType")));
         }
     }
 

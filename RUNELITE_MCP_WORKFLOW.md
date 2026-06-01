@@ -47,16 +47,16 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
   - `osrs://client/identity`
 - MCP prompts are available for common play loops: `experienced-player-loop`, `woodcut-and-bank`, `complete-dialogue`, and `withdraw-and-equip`.
 - The cached snapshot now includes `prayers`, `combat`, `chat`, and `interfaceSummary` in addition to player/entity/inventory state.
-- `/api/events` and `get_recent_events` expose recent plugin hooks such as chat, animation changes, item-container changes, and widget loads; `/api/stream` now emits both `snapshot` and `events` SSE messages.
+- `/api/events` and `get_recent_events` expose recent plugin hooks such as GameTick, chat, animation changes, item-container changes, and widget loads; pass `eventType` to filter noisy tick events. `/api/stream` now emits both `snapshot` and `events` SSE messages.
 - Prefer `interact_with` for named object/NPC/player/ground-item interactions. It opens the context menu, then invokes the selected RuneLite menu action in-client using the real menu params.
 - Prefer `handle_dialogue` for NPC/player dialogue loops, `eat_food_when` for threshold-based food safety, and `perform_until` for repeated actions such as chopping/mining until inventory-full or a chat/entity condition.
 - `click_object`, `click_npc`, and `click_ground_item` accept an optional `option`; when set, they use the same hybrid `interact_with` path instead of a blind screen click.
 - `walk_to` now tries a loaded-scene in-client WALK action first in `auto` mode, then falls back to minimap click for farther tiles.
-- Use `invoke_menu_action`, `invoke_walk_action`, and `invoke_widget_action` directly only when you already have or are deliberately testing raw RuneLite action params. Prefer `dryRun: true` first.
+- Use `invoke_menu_action`, `invoke_walk_action`, and `invoke_widget_action` directly only when you already have or are deliberately testing raw RuneLite action params. Prefer `dryRun: true` first. Use `wait_for_game_tick` or `tickAligned: true` when timing-sensitive actions should land just after a fresh OSRS game tick.
 - Click tools refuse stale coordinates and hidden/minimized canvases.
 - Prefer `click_object`, `click_npc`, `click_ground_item`, `click_inventory_slot`, `walk_to`, and `click_minimap_tile` over raw `move_mouse_and_click`.
 - Use `get_minimap` and `get_camera` to inspect orientation, map angle, minimap zoom, and viewport context before tricky navigation.
-- Use `calculate_path_to` to inspect bounded straight-line minimap steps before navigation, then `walk_path_to` to click only the next step.
+- Use `calculate_path_to` to inspect local collision-aware path data before navigation; it falls back to bounded straight-line minimap steps when the target is outside the loaded scene. Use `walk_path_to` to move one bounded step.
 - After any click or walk, use `verify_after_action` for combined checks, or `wait_until_idle`, `wait_until_location`, and `wait_for_chat_message` for single-condition waits.
 - Use `capture_canvas_screenshot` before/after risky actions, or pass `canvasX`/`canvasY` from a target to capture a focused crop around the clickable area.
 - OS fallback mouse movement is humanized by default; inspect it with `get_input_profile` and disable with `OSRS_HUMANIZE_MOUSE=false` if coordinate testing needs instant movement.

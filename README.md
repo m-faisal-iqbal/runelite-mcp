@@ -81,8 +81,10 @@ For normal play loops:
 
 Raw `move_mouse_and_click` should be the last resort.
 
+For tick-sensitive sequences, use `wait_for_game_tick` or pass `tickAligned: true` to direct `invoke_*` tools so the action is sent just after a fresh OSRS game tick.
+
 OS fallback mouse movement is humanized by default with a short Bezier path and pre-click delay. Inspect it with `get_input_profile`; disable it by setting `OSRS_HUMANIZE_MOUSE=false` before starting the MCP server.
 
 ## Current Known Gap
 
-Long-distance navigation is still a fallback straight-line/minimap system. The next major reliability upgrade is collision-aware pathfinding, ideally by bridging RuneLite's Shortest Path plugin or a local scene collision-map A*.
+Loaded-scene navigation now has a local collision-map A* exposed through `/api/path` and used by `calculate_path_to` / `walk_path_to`. Long-distance routing beyond the loaded scene still falls back to bounded minimap steps; the next major reliability upgrade is a wider route planner, ideally by bridging RuneLite's Shortest Path plugin.
