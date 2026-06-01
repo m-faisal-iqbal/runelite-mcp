@@ -12,6 +12,8 @@
     "smoke:plugin": "node scripts/smoke-plugin.mjs",
     "smoke:planner": "node scripts/smoke-planner.mjs",
     "smoke:agent-context": "node scripts/smoke-agent-context.mjs",
+    "smoke:runtime-modules": "node scripts/smoke-runtime-modules.mjs",
+    "smoke:navigation": "node scripts/smoke-navigation.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
   },
   "dependencies": {

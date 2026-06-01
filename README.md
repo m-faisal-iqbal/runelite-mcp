@@ -62,6 +62,8 @@ npm run build
 npm run smoke:plugin
 npm run smoke:planner
 npm run smoke:agent-context
+npm run smoke:runtime-modules
+npm run smoke:navigation
 npm run smoke:mcp
 ```
 

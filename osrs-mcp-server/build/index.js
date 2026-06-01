@@ -9,6 +9,9 @@ import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree
 import { apiBaseFromPort, StateCache } from "./client.js";
 import { actionStep, buildAgentStepPackage, buildNextActionPlan } from "./planner.js";
 import { buildAgentContext } from "./agent-context.js";
+import { discoverClients as discoverRuntimeClients, selectDiscoveredClient } from "./client-discovery.js";
+import { diagnoseClientRuntime as diagnoseRuntimeClient, EXPECTED_PLUGIN_API_VERSION } from "./runtime-diagnostics.js";
+import { chooseLocalPathStep, tileDistance, withStraightLineFallback } from "./navigation.js";
 const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
 mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
     ? configuredMouseSpeed
@@ -35,26 +38,6 @@ const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS, async (
     return (await runeliteApi(baseURL).get("/snapshot")).data;
 });
 const actionBaselines = new Map();
-const EXPECTED_PLUGIN_API_VERSION = 3;
-const EXPECTED_PLUGIN_ENDPOINTS = [
-    "/api/action/menu",
-    "/api/action/walk",
-    "/api/action/widget",
-    "/api/state",
-    "/api/snapshot",
-    "/api/stream",
-    "/api/events",
-    "/api/path",
-    "/api/widgets",
-    "/api/identity",
-];
-const EXPECTED_IDENTITY_FLAGS = [
-    "supportsConcurrentStreams",
-    "supportsEventBuffer",
-    "supportsInClientActions",
-    "supportsLocalPathfinding",
-    "supportsWidgetInspector",
-];
 function runeliteApi(baseURL = selectedRuneliteApi) {
     return axios.create({
         baseURL,
@@ -82,75 +65,19 @@ async function getSnapshotForBase(baseURL, force = false) {
     return stateCache.get(baseURL, force);
 }
 async function discoverClients() {
-    const ports = Array.from({ length: 11 }, (_, index) => 8080 + index);
-    const results = await Promise.all(ports.map(async (port) => {
-        try {
-            const baseURL = apiBaseFromPort(port);
-            const res = await axios.get(`${baseURL}/identity`, { timeout: Math.min(API_TIMEOUT_MS, 2000) });
-            return { ...res.data, baseUrl: baseURL };
-        }
-        catch {
-            // Ignore closed ports during discovery.
-            return null;
-        }
-    }));
-    return results.filter(Boolean);
-}
-function selectDiscoveredClient(clients, target = {}) {
-    const matches = clients.filter((client) => (target.port !== undefined && client.port === target.port) ||
-        (target.instanceId && client.instanceId === target.instanceId) ||
-        (target.playerName && String(client.playerName ?? "").toLowerCase() === target.playerName.toLowerCase()));
-    if (target.port !== undefined || target.instanceId || target.playerName) {
-        return matches[0];
-    }
-    return clients.find((candidate) => candidate.baseUrl === selectedRuneliteApi ||
-        candidate.instanceId === selectedClientInstanceId) ?? (clients.length === 1 ? clients[0] : undefined);
+    return discoverRuntimeClients(API_TIMEOUT_MS);
 }
 async function diagnoseClientRuntime(client) {
-    const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
-    const report = {
-        baseURL,
-        port: client.port,
-        instanceId: client.instanceId,
-        playerName: client.playerName,
-        apiVersion: client.apiVersion,
-        expectedApiVersion: EXPECTED_PLUGIN_API_VERSION,
-        loggedInPlayer: client.playerName ?? null,
-        status: "ok",
-        warnings: [],
-        missingIdentityFlags: [],
-        missingEndpoints: [],
-        staleRuntime: false,
-    };
-    if ((client.apiVersion ?? 0) < EXPECTED_PLUGIN_API_VERSION) {
-        report.staleRuntime = true;
-        report.warnings.push(`Plugin API version ${client.apiVersion ?? "unknown"} is older than expected ${EXPECTED_PLUGIN_API_VERSION}. Rebuild/install is done, but RuneLite must reload the plugin to expose the newest endpoints.`);
+    return diagnoseRuntimeClient(client, API_TIMEOUT_MS);
+}
+function baseUrlForClient(client) {
+    if (client?.baseUrl) {
+        return client.baseUrl;
     }
-    for (const flag of EXPECTED_IDENTITY_FLAGS) {
-        if (client[flag] !== true) {
-            report.missingIdentityFlags.push(flag);
-        }
+    if (typeof client?.port === "number") {
+        return apiBaseFromPort(client.port);
     }
-    try {
-        const apiIndex = (await runeliteApi(baseURL).get("")).data;
-        const endpointPaths = new Set((apiIndex?.endpoints ?? []).map((endpoint) => String(endpoint.path ?? "").split("?")[0]));
-        report.endpointCount = endpointPaths.size;
-        report.missingEndpoints = EXPECTED_PLUGIN_ENDPOINTS.filter((endpoint) => !endpointPaths.has(endpoint));
-    }
-    catch (error) {
-        report.warnings.push(errorText("fetching API endpoint index", error));
-    }
-    if (report.missingIdentityFlags.length > 0 || report.missingEndpoints.length > 0) {
-        report.staleRuntime = true;
-        report.status = "needs_reload";
-        if (report.missingEndpoints.length > 0) {
-            report.warnings.push(`Missing endpoints: ${report.missingEndpoints.join(", ")}`);
-        }
-        if (report.missingIdentityFlags.length > 0) {
-            report.warnings.push(`Missing identity flags: ${report.missingIdentityFlags.join(", ")}`);
-        }
-    }
-    return report;
+    throw new Error(`Discovered RuneLite client is missing baseUrl and port: ${JSON.stringify(client)}`);
 }
 async function resolveRuneliteApi(target = {}) {
     if (target.port !== undefined) {
@@ -444,45 +371,6 @@ function freshEnough(target, maxAgeMs) {
 function hasScreenPoint(target) {
     return Number.isFinite(target.screenX) && Number.isFinite(target.screenY);
 }
-function chebyshevDistance(a, b) {
-    return Math.max(Math.abs((a?.x ?? 0) - (b?.x ?? 0)), Math.abs((a?.y ?? 0) - (b?.y ?? 0)));
-}
-function calculateStraightLineSteps(from, to, maxStepTiles = 18, maxSteps = 12) {
-    if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) {
-        throw new Error("Current player location is unavailable");
-    }
-    if (!Number.isFinite(to.worldX) || !Number.isFinite(to.worldY)) {
-        throw new Error("Target worldX/worldY are required");
-    }
-    const safeMaxStep = Math.max(1, Math.floor(maxStepTiles));
-    const totalDx = to.worldX - from.x;
-    const totalDy = to.worldY - from.y;
-    const distance = Math.max(Math.abs(totalDx), Math.abs(totalDy));
-    const stepsNeeded = Math.max(1, Math.ceil(distance / safeMaxStep));
-    const stepsToReturn = Math.min(stepsNeeded, Math.max(1, Math.floor(maxSteps)));
-    const steps = [];
-    for (let i = 1; i <= stepsToReturn; i += 1) {
-        const factor = Math.min(1, i / stepsNeeded);
-        steps.push({
-            worldX: Math.round(from.x + totalDx * factor),
-            worldY: Math.round(from.y + totalDy * factor),
-            plane: to.plane ?? from.plane ?? 0,
-            final: i === stepsNeeded,
-        });
-    }
-    return {
-        from,
-        target: { worldX: to.worldX, worldY: to.worldY, plane: to.plane ?? from.plane ?? 0 },
-        distance,
-        maxStepTiles: safeMaxStep,
-        stepsNeeded,
-        returnedSteps: steps.length,
-        truncated: stepsNeeded > steps.length,
-        collisionAware: false,
-        note: "Straight-line minimap steps only; obstacles and doors are not pathfound.",
-        steps,
-    };
-}
 async function calculateCollisionAwarePath(baseURL, worldX, worldY, plane, maxNodes = 4096) {
     const params = {
         worldX,
@@ -494,23 +382,6 @@ async function calculateCollisionAwarePath(baseURL, worldX, worldY, plane, maxNo
     }
     const response = await runeliteApi(baseURL).get("/path", { params });
     return response.data;
-}
-function withStraightLineFallback(snapshot, target, maxStepTiles, maxSteps, collisionPath) {
-    const fallback = calculateStraightLineSteps(snapshot.state?.location, target, maxStepTiles, maxSteps);
-    return {
-        ...fallback,
-        fallbackUsed: true,
-        fallbackReason: collisionPath?.error ?? "COLLISION_PATH_UNAVAILABLE",
-        collisionPath,
-    };
-}
-function chooseLocalPathStep(path, maxStepTiles = 18) {
-    const steps = Array.isArray(path.steps) ? path.steps : [];
-    if (steps.length <= 1) {
-        return steps[0];
-    }
-    const safeMaxStep = Math.max(1, Math.floor(maxStepTiles));
-    return steps[Math.min(safeMaxStep, steps.length - 1)];
 }
 async function waitUntilBaseLocation(baseURL, worldX, worldY, plane, radius = 1, timeoutMs = 8000, pollMs = 500) {
     const startedAt = Date.now();
@@ -949,15 +820,6 @@ async function selectContextMenuOption(text, target = {}, exact) {
 }
 function isPlayerIdle(state) {
     return state?.isIdle === true || (state?.animation === -1 && !state?.interactingWith);
-}
-function tileDistance(location, worldX, worldY, plane) {
-    if (!location || !Number.isFinite(location.x) || !Number.isFinite(location.y)) {
-        return Number.MAX_SAFE_INTEGER;
-    }
-    if (plane !== undefined && location.plane !== plane) {
-        return Number.MAX_SAFE_INTEGER;
-    }
-    return Math.max(Math.abs(location.x - worldX), Math.abs(location.y - worldY));
 }
 function matchesChatMessage(message, text, caseSensitive, type) {
     if (type && String(message.type ?? "").toLowerCase() !== type.toLowerCase()) {
@@ -1412,7 +1274,7 @@ server.tool("get_agent_context", "Get one compact observe-plan-act context bundl
                     }]
             };
         }
-        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
             ? { status: "not_checked" }
             : await diagnoseClientRuntime(client);
@@ -1472,7 +1334,7 @@ server.tool("observe_game", "Gather a read-only agent observation bundle: compac
                     }]
             };
         }
-        const client = selectDiscoveredClient(clients, { instanceId, playerName, port });
+        const client = selectDiscoveredClient(clients, { instanceId, playerName, port }, selectedRuneliteApi, selectedClientInstanceId);
         if (!client) {
             const plan = {
                 mode: "select_client",
@@ -1496,7 +1358,7 @@ server.tool("observe_game", "Gather a read-only agent observation bundle: compac
                     }]
             };
         }
-        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
             ? { status: "not_checked" }
             : await diagnoseClientRuntime(client);
@@ -1618,7 +1480,7 @@ server.tool("plan_next_action", "Plan safe next MCP tool calls for the current o
                     }]
             };
         }
-        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
             ? { status: "not_checked" }
             : await diagnoseClientRuntime(client);
@@ -1697,7 +1559,7 @@ server.tool("prepare_agent_step", "Prepare the next observe-plan-act-verify step
                     }]
             };
         }
-        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
             ? { status: "not_checked" }
             : await diagnoseClientRuntime(client);
@@ -1775,7 +1637,7 @@ server.tool("validate_prepared_step", "Validate a prepared next step against the
                     }]
             };
         }
-        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
             ? { status: "not_checked" }
             : await diagnoseClientRuntime(client);
@@ -1862,7 +1724,7 @@ server.tool("run_agent_cycle", "Run one safe observe-plan-validate cycle for an 
                     }]
             };
         }
-        const client = selectDiscoveredClient(clients, { instanceId, playerName, port });
+        const client = selectDiscoveredClient(clients, { instanceId, playerName, port }, selectedRuneliteApi, selectedClientInstanceId);
         if (!client) {
             const plan = {
                 mode: "select_client",
@@ -1887,7 +1749,7 @@ server.tool("run_agent_cycle", "Run one safe observe-plan-validate cycle for an 
                     }]
             };
         }
-        const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+        const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
             ? { status: "not_checked" }
             : await diagnoseClientRuntime(client);

@@ -22,6 +22,12 @@ This project has two parts:
 - `cd osrs-mcp-server && npm run smoke:agent-context`
   Runs synthetic checks for the compact observation bundle returned by `get_agent_context`, `observe_game`, and `run_agent_cycle`.
 
+- `cd osrs-mcp-server && npm run smoke:runtime-modules`
+  Runs synthetic checks for client selection and plugin runtime diagnostics after modularization.
+
+- `cd osrs-mcp-server && npm run smoke:navigation`
+  Runs synthetic checks for route fallback math, path step selection, and tile-distance behavior.
+
 - `Install-OSRS-MCP-Plugin.bat`
   Builds, then copies the plugin jar to `%USERPROFILE%\.runelite\plugins\osrs-mcp-plugin.jar`.
   It does not start or close RuneLite.
