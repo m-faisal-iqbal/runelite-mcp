@@ -8,6 +8,13 @@ import path from "node:path";
 import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree-fork/nut-js";
 import { apiBaseFromPort, StateCache, type ClientTarget, type LocalPathResult, type PathStep, type RuneLiteSnapshot, type RuneLiteTarget } from "./client.js";
 
+type ActionBaseline = {
+  baseURL: string;
+  capturedAt: number;
+  note?: string;
+  snapshot: RuneLiteSnapshot;
+};
+
 const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
 mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
   ? configuredMouseSpeed
@@ -35,6 +42,27 @@ const SNAPSHOT_CACHE_TTL_MS = Number.isFinite(configuredSnapshotCacheTtlMs) && c
 const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS, async (baseURL) => {
   return (await runeliteApi(baseURL).get("/snapshot")).data as RuneLiteSnapshot;
 });
+const actionBaselines = new Map<string, ActionBaseline>();
+const EXPECTED_PLUGIN_API_VERSION = 3;
+const EXPECTED_PLUGIN_ENDPOINTS = [
+  "/api/action/menu",
+  "/api/action/walk",
+  "/api/action/widget",
+  "/api/state",
+  "/api/snapshot",
+  "/api/stream",
+  "/api/events",
+  "/api/path",
+  "/api/widgets",
+  "/api/identity",
+];
+const EXPECTED_IDENTITY_FLAGS = [
+  "supportsConcurrentStreams",
+  "supportsEventBuffer",
+  "supportsInClientActions",
+  "supportsLocalPathfinding",
+  "supportsWidgetInspector",
+];
 
 function runeliteApi(baseURL = selectedRuneliteApi) {
   return axios.create({
@@ -71,17 +99,68 @@ async function getSnapshotForBase(baseURL: string, force = false): Promise<RuneL
 
 async function discoverClients() {
   const ports = Array.from({ length: 11 }, (_, index) => 8080 + index);
-  const clients = [];
-  for (const port of ports) {
+  const results = await Promise.all(ports.map(async (port) => {
     try {
       const baseURL = apiBaseFromPort(port);
-      const res = await axios.get(`${baseURL}/identity`, { timeout: 600 });
-      clients.push({ ...res.data, baseUrl: baseURL });
+      const res = await axios.get(`${baseURL}/identity`, { timeout: Math.min(API_TIMEOUT_MS, 2000) });
+      return { ...res.data, baseUrl: baseURL };
     } catch {
       // Ignore closed ports during discovery.
+      return null;
+    }
+  }));
+  return results.filter(Boolean);
+}
+
+async function diagnoseClientRuntime(client: any) {
+  const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+  const report: any = {
+    baseURL,
+    port: client.port,
+    instanceId: client.instanceId,
+    playerName: client.playerName,
+    apiVersion: client.apiVersion,
+    expectedApiVersion: EXPECTED_PLUGIN_API_VERSION,
+    loggedInPlayer: client.playerName ?? null,
+    status: "ok",
+    warnings: [] as string[],
+    missingIdentityFlags: [] as string[],
+    missingEndpoints: [] as string[],
+    staleRuntime: false,
+  };
+
+  if ((client.apiVersion ?? 0) < EXPECTED_PLUGIN_API_VERSION) {
+    report.staleRuntime = true;
+    report.warnings.push(`Plugin API version ${client.apiVersion ?? "unknown"} is older than expected ${EXPECTED_PLUGIN_API_VERSION}. Rebuild/install is done, but RuneLite must reload the plugin to expose the newest endpoints.`);
+  }
+
+  for (const flag of EXPECTED_IDENTITY_FLAGS) {
+    if (client[flag] !== true) {
+      report.missingIdentityFlags.push(flag);
     }
   }
-  return clients;
+
+  try {
+    const apiIndex = (await runeliteApi(baseURL).get("")).data;
+    const endpointPaths = new Set((apiIndex?.endpoints ?? []).map((endpoint: any) => String(endpoint.path ?? "").split("?")[0]));
+    report.endpointCount = endpointPaths.size;
+    report.missingEndpoints = EXPECTED_PLUGIN_ENDPOINTS.filter((endpoint) => !endpointPaths.has(endpoint));
+  } catch (error: any) {
+    report.warnings.push(errorText("fetching API endpoint index", error));
+  }
+
+  if (report.missingIdentityFlags.length > 0 || report.missingEndpoints.length > 0) {
+    report.staleRuntime = true;
+    report.status = "needs_reload";
+    if (report.missingEndpoints.length > 0) {
+      report.warnings.push(`Missing endpoints: ${report.missingEndpoints.join(", ")}`);
+    }
+    if (report.missingIdentityFlags.length > 0) {
+      report.warnings.push(`Missing identity flags: ${report.missingIdentityFlags.join(", ")}`);
+    }
+  }
+
+  return report;
 }
 
 async function resolveRuneliteApi(target: ClientTarget = {}) {
@@ -142,11 +221,17 @@ async function assertClientReady(baseURL: string) {
   if (identity?.windowActive === false) {
     throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} window is not active; focus RuneLite before OS click tools`);
   }
+  await assertClientLoggedIn(baseURL, identity);
+  return identity;
+}
+
+async function assertClientLoggedIn(baseURL: string, identity?: any) {
+  const clientIdentity = identity ?? (await runeliteApi(baseURL).get("/identity")).data;
   const state = await readClientState(baseURL);
   if (state?.status !== "LOGGED_IN") {
-    throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} is not logged in; refusing gameplay action while status is ${state?.status ?? "UNKNOWN"}`);
+    throw new Error(`RuneLite client ${clientIdentity?.instanceId ?? baseURL} is not logged in; refusing gameplay action while status is ${state?.status ?? "UNKNOWN"}`);
   }
-  return identity;
+  return { identity: clientIdentity, state };
 }
 
 function targetMatches(entity: any, name?: string, id?: number) {
@@ -351,7 +436,7 @@ async function invokeMenuAction(baseURL: string, action: {
   tickTimeoutMs?: number;
 }) {
   if (!action.dryRun) {
-    await assertClientReady(baseURL);
+    await assertClientLoggedIn(baseURL);
   }
   const tickWait = action.tickAligned
     ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
@@ -379,7 +464,7 @@ async function invokeWalkAction(baseURL: string, action: {
   tickTimeoutMs?: number;
 }) {
   if (!action.dryRun) {
-    await assertClientReady(baseURL);
+    await assertClientLoggedIn(baseURL);
   }
   const tickWait = action.tickAligned
     ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
@@ -412,7 +497,7 @@ async function invokeWidgetAction(baseURL: string, action: {
   tickTimeoutMs?: number;
 }) {
   if (!action.dryRun) {
-    await assertClientReady(baseURL);
+    await assertClientLoggedIn(baseURL);
   }
   const tickWait = action.tickAligned
     ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
@@ -773,13 +858,15 @@ server.registerPrompt(
           `Objective: ${task}`,
           "",
           "Act like an experienced OSRS player using this MCP bridge.",
-          "1. Read osrs://client/identity and osrs://snapshot/latest before acting.",
-          "2. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
-          "3. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
-          "4. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
-          "5. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
-          "6. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
-          "7. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
+          "1. Start with get_agent_context; it bundles identity, runtime freshness, state, risks, nearby targets, UI, chat, and recommended checks.",
+          "2. Run diagnose_runtime if get_agent_context reports stale runtime, 404/missing endpoint, or after rebuilding the plugin.",
+          "3. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
+          "4. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
+          "5. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
+          "6. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
+          "7. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
+          "8. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
+          "9. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
         ].join("\n"),
       },
     }],
@@ -810,11 +897,12 @@ server.registerPrompt(
           "Use this loop:",
           "1. Read osrs://snapshot/latest. Confirm inventory, player location, nearby objects, chat, and interfaceSummary.",
           `2. If inventory is not full, use interact_with({ entityType: \"object\", name: \"${treeName}\", option: \"Chop down\", nearestToPlayer: true }).`,
-          "3. Wait until player is idle or tree disappears. Check chat for errors.",
-          "4. Repeat until inventory is full.",
-          "5. Navigate to bank using walk_route_to when you know the bank tile, or walk_path_to for one cautious step.",
-          `6. Open bank with interact_with on ${bankTarget} using option Bank/Open.`,
-          `7. Deposit ${logName} using bank tools, then verify inventory/bank state.`,
+          "3. Mark a baseline before each chop, then verify logs/inventory, animation, chat, or tree/entity changes afterward.",
+          "4. Wait until player is idle or tree disappears. Check chat for errors.",
+          "5. Repeat until inventory is full.",
+          "6. Navigate to bank using walk_route_to when you know the bank tile, or walk_path_to for one cautious step.",
+          `7. Open bank with interact_with on ${bankTarget} using option Bank/Open.`,
+          `8. Deposit ${logName} using bank tools, then verify inventory/bank state.`,
         ].join("\n"),
       },
     }],
@@ -1226,6 +1314,280 @@ function buildActionVerification(snapshot: RuneLiteSnapshot, args: {
   };
 }
 
+function snapshotDiffSummary(snapshot: RuneLiteSnapshot, itemName?: string, itemId?: number) {
+  const dialogueText = cleanUiText(snapshot.dialogue?.text ?? snapshot.interfaceSummary?.dialogueText ?? "");
+  return {
+    capturedAt: snapshot.state?.capturedAt ?? snapshot.interfaceSummary?.capturedAt ?? Date.now(),
+    state: snapshot.state ?? {},
+    location: snapshot.state?.location,
+    health: snapshot.state?.health,
+    animation: snapshot.state?.animation,
+    isIdle: isPlayerIdle(snapshot.state ?? {}),
+    inventorySlotsUsed: inventorySlotsUsed(snapshot),
+    inventoryItemQuantity: (itemName || Number.isFinite(itemId)) ? inventoryQuantity(snapshot, itemName, itemId) : undefined,
+    dialogueType: snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type,
+    dialogueText,
+    entityCounts: {
+      npcs: snapshot.npcs?.length ?? 0,
+      objects: snapshot.objects?.length ?? 0,
+      groundItems: snapshot.groundItems?.length ?? 0,
+      players: snapshot.players?.length ?? 0,
+    },
+  };
+}
+
+function buildSnapshotDiffVerification(before: RuneLiteSnapshot, after: RuneLiteSnapshot, baselineCapturedAt: number, args: {
+  inventoryItemName?: string;
+  inventoryItemId?: number;
+  expectInventoryQuantityChanged?: boolean;
+  expectInventoryIncreased?: boolean;
+  expectInventoryDecreased?: boolean;
+  expectInventorySlotsChanged?: boolean;
+  expectLocationChanged?: boolean;
+  expectedWorldX?: number;
+  expectedWorldY?: number;
+  expectedPlane?: number;
+  locationRadius?: number;
+  expectDialogueChanged?: boolean;
+  dialogueType?: string;
+  expectNewChat?: boolean;
+  chatContains?: string;
+  chatType?: string;
+  caseSensitive?: boolean;
+  entityType?: string;
+  entityName?: string;
+  entityId?: number;
+  expectEntityCountChanged?: boolean;
+  requireAnyChange?: boolean;
+}) {
+  const beforeSummary = snapshotDiffSummary(before, args.inventoryItemName, args.inventoryItemId);
+  const afterSummary = snapshotDiffSummary(after, args.inventoryItemName, args.inventoryItemId);
+  const checks: any[] = [];
+  const changeKeys: string[] = [];
+
+  const beforeLocation = beforeSummary.location;
+  const afterLocation = afterSummary.location;
+  const movedDistance = beforeLocation && afterLocation
+    ? tileDistance(afterLocation, beforeLocation.x, beforeLocation.y, beforeLocation.plane)
+    : Number.MAX_SAFE_INTEGER;
+  if (Number.isFinite(movedDistance) && movedDistance > 0 && movedDistance < Number.MAX_SAFE_INTEGER) {
+    changeKeys.push("location");
+  }
+
+  const beforeItemQuantity = beforeSummary.inventoryItemQuantity;
+  const afterItemQuantity = afterSummary.inventoryItemQuantity;
+  const inventoryItemDelta = Number.isFinite(beforeItemQuantity) && Number.isFinite(afterItemQuantity)
+    ? (afterItemQuantity as number) - (beforeItemQuantity as number)
+    : undefined;
+  const inventorySlotsDelta = afterSummary.inventorySlotsUsed - beforeSummary.inventorySlotsUsed;
+  if (inventorySlotsDelta !== 0) {
+    changeKeys.push("inventory_slots");
+  }
+  if (inventoryItemDelta !== undefined && inventoryItemDelta !== 0) {
+    changeKeys.push("inventory_item_quantity");
+  }
+
+  if (afterSummary.health !== beforeSummary.health) {
+    changeKeys.push("health");
+  }
+  if (afterSummary.animation !== beforeSummary.animation) {
+    changeKeys.push("animation");
+  }
+  if (afterSummary.dialogueType !== beforeSummary.dialogueType || afterSummary.dialogueText !== beforeSummary.dialogueText) {
+    changeKeys.push("dialogue");
+  }
+
+  const freshMessages = recentMessages(after).filter((message: any) => Number(message.capturedAt ?? 0) >= baselineCapturedAt);
+  if (freshMessages.length > 0) {
+    changeKeys.push("chat");
+  }
+
+  if (args.expectInventoryQuantityChanged) {
+    checks.push({ name: "inventoryQuantityChanged", ok: inventoryItemDelta !== undefined && inventoryItemDelta !== 0, before: beforeItemQuantity, after: afterItemQuantity, delta: inventoryItemDelta });
+  }
+  if (args.expectInventoryIncreased) {
+    checks.push({ name: "inventoryIncreased", ok: inventoryItemDelta !== undefined && inventoryItemDelta > 0, before: beforeItemQuantity, after: afterItemQuantity, delta: inventoryItemDelta });
+  }
+  if (args.expectInventoryDecreased) {
+    checks.push({ name: "inventoryDecreased", ok: inventoryItemDelta !== undefined && inventoryItemDelta < 0, before: beforeItemQuantity, after: afterItemQuantity, delta: inventoryItemDelta });
+  }
+  if (args.expectInventorySlotsChanged) {
+    checks.push({ name: "inventorySlotsChanged", ok: inventorySlotsDelta !== 0, before: beforeSummary.inventorySlotsUsed, after: afterSummary.inventorySlotsUsed, delta: inventorySlotsDelta });
+  }
+  if (args.expectLocationChanged) {
+    checks.push({ name: "locationChanged", ok: Number.isFinite(movedDistance) && movedDistance > 0 && movedDistance < Number.MAX_SAFE_INTEGER, before: beforeLocation, after: afterLocation, distance: movedDistance });
+  }
+  if (Number.isFinite(args.expectedWorldX) && Number.isFinite(args.expectedWorldY)) {
+    const distance = tileDistance(afterLocation, args.expectedWorldX as number, args.expectedWorldY as number, args.expectedPlane);
+    checks.push({ name: "locationReached", ok: distance <= Math.max(0, args.locationRadius ?? 1), distance, location: afterLocation, expected: { x: args.expectedWorldX, y: args.expectedWorldY, plane: args.expectedPlane, radius: args.locationRadius ?? 1 } });
+  }
+  if (args.expectDialogueChanged) {
+    checks.push({ name: "dialogueChanged", ok: changeKeys.includes("dialogue"), before: { type: beforeSummary.dialogueType, text: beforeSummary.dialogueText }, after: { type: afterSummary.dialogueType, text: afterSummary.dialogueText } });
+  }
+  if (args.dialogueType) {
+    checks.push({ name: "dialogueType", ok: String(afterSummary.dialogueType ?? "").toLowerCase() === args.dialogueType.toLowerCase(), actual: afterSummary.dialogueType, expected: args.dialogueType });
+  }
+  if (args.expectNewChat || args.chatContains) {
+    const match = args.chatContains
+      ? freshMessages.find((message: any) => matchesChatMessage(message, args.chatContains as string, args.caseSensitive, args.chatType))
+      : freshMessages[0];
+    checks.push({ name: "newChat", ok: Boolean(match), match, freshMessageCount: freshMessages.length });
+  }
+  if (args.entityType && args.expectEntityCountChanged) {
+    const beforeCount = visibleEntityCount(before, args.entityType, args.entityName, args.entityId);
+    const afterCount = visibleEntityCount(after, args.entityType, args.entityName, args.entityId);
+    checks.push({ name: "entityCountChanged", ok: beforeCount !== afterCount, before: beforeCount, after: afterCount, entityType: args.entityType, entityName: args.entityName, entityId: args.entityId });
+  }
+
+  const requireAnyChange = args.requireAnyChange ?? checks.length === 0;
+  if (requireAnyChange) {
+    checks.push({ name: "anySnapshotChange", ok: changeKeys.length > 0, changeKeys });
+  }
+
+  return {
+    ok: checks.length === 0 ? true : checks.every((check) => check.ok),
+    checks,
+    changeKeys: Array.from(new Set(changeKeys)),
+    deltas: {
+      movedDistance,
+      inventorySlotsDelta,
+      inventoryItemDelta,
+      freshChatCount: freshMessages.length,
+    },
+    before: beforeSummary,
+    after: afterSummary,
+    freshMessages: freshMessages.slice(-10),
+  };
+}
+
+function summarizeTargets(targets: RuneLiteTarget[] | undefined, limit: number) {
+  return sortByDistance(targets ?? [])
+    .slice(0, Math.max(0, limit))
+    .map((target: any) => ({
+      id: target.id,
+      name: target.name,
+      option: target.option,
+      worldX: target.worldX,
+      worldY: target.worldY,
+      plane: target.plane,
+      distanceToPlayer: target.distanceToPlayer,
+      coordinateSource: target.coordinateSource,
+      clickable: hasScreenPoint(target) && !target.coordinateWarning,
+      ageMs: target.ageMs,
+    }));
+}
+
+function inventorySummary(snapshot: RuneLiteSnapshot, limit: number) {
+  const items = (snapshot.inventory ?? [])
+    .filter((item: any) => item && item.id && item.id !== -1)
+    .slice(0, Math.max(0, limit))
+    .map((item: any) => ({
+      slot: item.slot,
+      id: item.id,
+      name: item.name,
+      quantity: item.quantity,
+    }));
+  return {
+    slotsUsed: inventorySlotsUsed(snapshot),
+    freeSlots: Math.max(0, 28 - inventorySlotsUsed(snapshot)),
+    items,
+  };
+}
+
+function buildAgentContext(baseURL: string, client: any, snapshot: RuneLiteSnapshot, runtime: any, args: {
+  objective?: string;
+  includeNearbyLimit?: number;
+  includeInventoryLimit?: number;
+}) {
+  const nearbyLimit = Math.max(0, Math.min(args.includeNearbyLimit ?? 8, 30));
+  const inventoryLimit = Math.max(0, Math.min(args.includeInventoryLimit ?? 28, 28));
+  const state = snapshot.state ?? {};
+  const hpPercent = healthPercent(snapshot);
+  const dialogueType = snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type ?? "NONE";
+  const hasFood = Boolean(findFoodItem(snapshot));
+  const risks = [];
+  if (runtime?.status && runtime.status !== "ok") {
+    risks.push("runtime_not_current");
+  }
+  if (state.status !== "LOGGED_IN") {
+    risks.push("not_logged_in");
+  }
+  if (hpPercent !== undefined && hpPercent <= 35) {
+    risks.push("low_hitpoints");
+  }
+  if (dialogueType && dialogueType !== "NONE") {
+    risks.push("interface_or_dialogue_open");
+  }
+  if (inventorySlotsUsed(snapshot) >= 28) {
+    risks.push("inventory_full");
+  }
+
+  const recommendedNext = [];
+  if (runtime?.status && runtime.status !== "ok") {
+    recommendedNext.push("Run diagnose_runtime and reload RuneLite plugin if endpoints/features are stale.");
+  }
+  if (state.status !== "LOGGED_IN") {
+    recommendedNext.push("Wait for login before gameplay actions.");
+  }
+  if (hpPercent !== undefined && hpPercent <= 35 && hasFood) {
+    recommendedNext.push("Use eat_food_when before risky combat or travel.");
+  }
+  if (dialogueType && dialogueType !== "NONE") {
+    recommendedNext.push("Use handle_dialogue or get_widgets with a focused filter before other actions.");
+  }
+  recommendedNext.push("Before the next risky action, call mark_action_baseline; afterward call verify_last_action.");
+  recommendedNext.push("Prefer interact_with/click_* with option for in-client menu actions.");
+
+  return {
+    objective: args.objective,
+    baseURL,
+    runtime,
+    client: {
+      instanceId: client?.instanceId,
+      playerName: client?.playerName ?? state.name,
+      port: client?.port,
+      apiVersion: client?.apiVersion,
+      world: client?.world ?? state.world,
+      focused: client?.windowActive,
+      canvasShowing: client?.canvasShowing,
+    },
+    readiness: {
+      loggedIn: state.status === "LOGGED_IN",
+      stateStatus: state.status,
+      canUseInClientActions: state.status === "LOGGED_IN" && runtime?.status === "ok",
+      osClickFallbackReady: state.status === "LOGGED_IN" && client?.canvasShowing !== false && client?.windowActive !== false && client?.windowMinimized !== true,
+      risks,
+      recommendedNext,
+    },
+    player: {
+      name: state.name,
+      location: state.location,
+      health: state.health,
+      healthPercent: hpPercent,
+      runEnergy: state.runEnergy,
+      animation: state.animation,
+      idle: isPlayerIdle(state),
+      interactingWith: state.interactingWith,
+    },
+    inventory: inventorySummary(snapshot, inventoryLimit),
+    interface: {
+      dialogueType,
+      dialogueText: cleanUiText(snapshot.dialogue?.text),
+      options: (snapshot.dialogue?.options ?? []).map((option: any, index: number) => ({ index: index + 1, text: cleanUiText(option.text) })),
+      contextMenuOpen: snapshot.interfaceSummary?.contextMenuOpen,
+      bankContainerAvailable: snapshot.interfaceSummary?.bankContainerAvailable,
+    },
+    nearby: {
+      npcs: summarizeTargets(snapshot.npcs, nearbyLimit),
+      objects: summarizeTargets(snapshot.objects, nearbyLimit),
+      groundItems: summarizeTargets(snapshot.groundItems, nearbyLimit),
+      players: summarizeTargets(snapshot.players, Math.min(nearbyLimit, 5)),
+    },
+    recentChat: recentMessages(snapshot).slice(-8),
+    stream: snapshotStreamStatus(baseURL),
+  };
+}
+
 function inventorySlotsUsed(snapshot: RuneLiteSnapshot): number {
   return (snapshot.inventory ?? []).filter((item: any) => item && item.id && item.id !== -1).length;
 }
@@ -1320,6 +1682,71 @@ function cleanUiText(value: unknown): string {
 }
 
 // --- State Reading Tools ---
+
+server.tool(
+  "get_agent_context",
+  "Get one compact observe-plan-act context bundle: runtime freshness, player status, risks, inventory, nearby entities, dialogue, chat, and recommended next checks.",
+  {
+    objective: z.string().optional().describe("Optional current user objective, included in the response for continuity"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby NPC/object/ground-item entries per category, default 8"),
+    includeInventoryLimit: z.number().optional().describe("Maximum inventory entries to include, default 28"),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics, default true"),
+    ...clientTargetSchema(),
+  },
+  async ({ objective, includeNearbyLimit, includeInventoryLimit, includeDiagnostics, instanceId, playerName, port }) => {
+    try {
+      const clients = await discoverClients();
+      if (clients.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NO_CLIENT",
+              selectedBaseUrl: selectedRuneliteApi,
+              message: "No active RuneLite MCP plugin clients were discovered on ports 8080-8090.",
+              recommendedNext: ["Start RuneLite with the OSRS MCP plugin loaded, then run diagnose_runtime."],
+            }, null, 2)
+          }]
+        };
+      }
+
+      const matches = clients.filter((client: any) =>
+        (port !== undefined && client.port === port) ||
+        (instanceId && client.instanceId === instanceId) ||
+        (playerName && String(client.playerName ?? "").toLowerCase() === playerName.toLowerCase())
+      );
+      const client = (port !== undefined || instanceId || playerName)
+        ? matches[0]
+        : clients.find((candidate: any) => candidate.baseUrl === selectedRuneliteApi || candidate.instanceId === selectedClientInstanceId) ?? (clients.length === 1 ? clients[0] : undefined);
+
+      if (!client) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NEEDS_CLIENT_SELECTION",
+              selectedBaseUrl: selectedRuneliteApi,
+              clients,
+              recommendedNext: ["Use select_client or pass port/instanceId/playerName before acting."],
+            }, null, 2)
+          }]
+        };
+      }
+
+      const baseURL = client.baseUrl ?? apiBaseFromPort(client.port);
+      const runtime = includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(client);
+      const snapshot = await getSnapshotForBase(baseURL, true);
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, { objective, includeNearbyLimit, includeInventoryLimit });
+      return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("building agent context", e) }] };
+    }
+  }
+);
 
 server.tool("get_game_state", "Get current player state, location, and health", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
   try {
@@ -2463,7 +2890,7 @@ server.tool(
 
     try {
       const { baseURL } = await getSnapshotForTarget(targetClient, true);
-      await assertClientReady(baseURL);
+      await assertClientLoggedIn(baseURL);
 
       for (let routeStep = 1; routeStep <= safeMaxRouteSteps; routeStep++) {
         lastSnapshot = await getSnapshotForBase(baseURL, true);
@@ -3120,6 +3547,164 @@ server.tool(
 );
 
 server.tool(
+  "mark_action_baseline",
+  "Capture the current snapshot as the before-state for verify_last_action. Use immediately before a risky click, in-client action, skilling loop step, or UI interaction.",
+  {
+    note: z.string().optional().describe("Optional human-readable note describing the action you are about to perform"),
+    inventoryItemName: z.string().optional().describe("Optional item name to include in the baseline summary"),
+    inventoryItemId: z.number().optional().describe("Optional item id to include in the baseline summary"),
+    ...clientTargetSchema(),
+  },
+  async ({ note, inventoryItemName, inventoryItemId, instanceId, playerName, port }) => {
+    try {
+      const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+      const snapshot = await getSnapshotForBase(baseURL, true);
+      const capturedAt = Date.now();
+      actionBaselines.set(baseURL, { baseURL, capturedAt, note, snapshot });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            marked: true,
+            baseURL,
+            capturedAt,
+            note,
+            summary: snapshotDiffSummary(snapshot, inventoryItemName, inventoryItemId),
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error marking action baseline: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "verify_last_action",
+  "Compare the latest fresh snapshot against the most recent mark_action_baseline snapshot, optionally polling until requested deltas appear.",
+  {
+    timeoutMs: z.number().optional().describe("Maximum wait time in milliseconds, default 8000"),
+    pollMs: z.number().optional().describe("Polling interval in milliseconds, default 500"),
+    inventoryItemName: z.string().optional().describe("Inventory item name to diff"),
+    inventoryItemId: z.number().optional().describe("Inventory item id to diff"),
+    expectInventoryQuantityChanged: z.boolean().optional().describe("Require matching item quantity to change"),
+    expectInventoryIncreased: z.boolean().optional().describe("Require matching item quantity to increase"),
+    expectInventoryDecreased: z.boolean().optional().describe("Require matching item quantity to decrease"),
+    expectInventorySlotsChanged: z.boolean().optional().describe("Require used inventory slot count to change"),
+    expectLocationChanged: z.boolean().optional().describe("Require player location to differ from baseline"),
+    expectedWorldX: z.number().optional().describe("Expected player world X tile"),
+    expectedWorldY: z.number().optional().describe("Expected player world Y tile"),
+    expectedPlane: z.number().optional().describe("Expected player plane"),
+    locationRadius: z.number().optional().describe("Accepted radius for expected location, default 1"),
+    expectDialogueChanged: z.boolean().optional().describe("Require dialogue type or text to differ from baseline"),
+    dialogueType: z.string().optional().describe("Require current dialogue/interface type"),
+    expectNewChat: z.boolean().optional().describe("Require at least one new chat/game message after baseline"),
+    chatContains: z.string().optional().describe("Require a new chat/game message containing this text"),
+    chatType: z.string().optional().describe("Optional RuneLite chat message type filter"),
+    caseSensitive: z.boolean().optional().describe("Whether chat matching is case-sensitive"),
+    entityType: z.enum(["npc", "object", "ground_item", "player"]).optional().describe("Entity type to diff count"),
+    entityName: z.string().optional().describe("Entity name to diff count"),
+    entityId: z.number().optional().describe("Entity id to diff count"),
+    expectEntityCountChanged: z.boolean().optional().describe("Require matching visible entity count to change"),
+    requireAnyChange: z.boolean().optional().describe("Require any snapshot diff when no specific expectation is provided, default true"),
+    clearBaseline: z.boolean().optional().describe("Clear the stored baseline after a successful verification, default false"),
+    ...clientTargetSchema(),
+  },
+  async ({
+    timeoutMs,
+    pollMs,
+    inventoryItemName,
+    inventoryItemId,
+    expectInventoryQuantityChanged,
+    expectInventoryIncreased,
+    expectInventoryDecreased,
+    expectInventorySlotsChanged,
+    expectLocationChanged,
+    expectedWorldX,
+    expectedWorldY,
+    expectedPlane,
+    locationRadius,
+    expectDialogueChanged,
+    dialogueType,
+    expectNewChat,
+    chatContains,
+    chatType,
+    caseSensitive,
+    entityType,
+    entityName,
+    entityId,
+    expectEntityCountChanged,
+    requireAnyChange,
+    clearBaseline,
+    instanceId,
+    playerName,
+    port,
+  }) => {
+    const startedAt = Date.now();
+    const timeout = Math.max(1, timeoutMs ?? 8000);
+    const interval = Math.max(100, pollMs ?? 500);
+    let lastReport: any = null;
+
+    try {
+      const baseURL = await resolveRuneliteApi({ instanceId, playerName, port });
+      const baseline = actionBaselines.get(baseURL);
+      if (!baseline) {
+        throw new Error("No action baseline is stored for this client. Call mark_action_baseline before the action you want to verify.");
+      }
+
+      while (Date.now() - startedAt <= timeout) {
+        const snapshot = await getSnapshotForBase(baseURL, true);
+        lastReport = buildSnapshotDiffVerification(baseline.snapshot, snapshot, baseline.capturedAt, {
+          inventoryItemName,
+          inventoryItemId,
+          expectInventoryQuantityChanged,
+          expectInventoryIncreased,
+          expectInventoryDecreased,
+          expectInventorySlotsChanged,
+          expectLocationChanged,
+          expectedWorldX,
+          expectedWorldY,
+          expectedPlane,
+          locationRadius,
+          expectDialogueChanged,
+          dialogueType,
+          expectNewChat,
+          chatContains,
+          chatType,
+          caseSensitive,
+          entityType,
+          entityName,
+          entityId,
+          expectEntityCountChanged,
+          requireAnyChange,
+        });
+        if (lastReport.ok) {
+          if (clearBaseline) {
+            actionBaselines.delete(baseURL);
+          }
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ verified: true, waitedMs: Date.now() - startedAt, baseline: { capturedAt: baseline.capturedAt, note: baseline.note }, ...lastReport }, null, 2)
+            }]
+          };
+        }
+        await sleep(interval);
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ verified: false, waitedMs: Date.now() - startedAt, baseline: { capturedAt: baseline.capturedAt, note: baseline.note }, ...lastReport }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: `Error verifying last action: ${e.message}` }] };
+    }
+  }
+);
+
+server.tool(
   "handle_dialogue",
   "Continue dialogue and optionally select a dialogue option over several safe steps.",
   {
@@ -3448,6 +4033,48 @@ server.tool("list_clients", "List active OSRS MCP RuneLite plugin clients discov
     return { content: [{ type: "text", text: errorText("listing clients", e) }] };
   }
 });
+
+server.tool(
+  "diagnose_runtime",
+  "Check active RuneLite MCP plugin runtimes for stale jars, missing endpoints, and feature flags before attempting gameplay actions.",
+  {
+    ...clientTargetSchema(),
+  },
+  async ({ instanceId, playerName, port }) => {
+    try {
+      const clients = await discoverClients();
+      const selectedClients = clients.filter((client: any) =>
+        (port !== undefined && client.port === port) ||
+        (instanceId && client.instanceId === instanceId) ||
+        (playerName && String(client.playerName ?? "").toLowerCase() === playerName.toLowerCase()) ||
+        (port === undefined && !instanceId && !playerName)
+      );
+      const reports = [];
+      for (const client of selectedClients) {
+        reports.push(await diagnoseClientRuntime(client));
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            selectedBaseUrl: selectedRuneliteApi,
+            expectedApiVersion: EXPECTED_PLUGIN_API_VERSION,
+            checkedClients: reports.length,
+            allOk: reports.length > 0 && reports.every((report) => report.status === "ok"),
+            reports,
+            note: reports.length === 0
+              ? "No active RuneLite MCP plugin clients were discovered on ports 8080-8090."
+              : reports.some((report) => report.staleRuntime)
+              ? "Rebuild/install can stage the jar, but a running RuneLite process must reload the plugin before new Java endpoints appear. This tool does not restart or close RuneLite."
+              : "Runtime feature checks passed for the selected client(s).",
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("diagnosing runtime", e) }] };
+    }
+  }
+);
 
 server.tool(
   "select_client",

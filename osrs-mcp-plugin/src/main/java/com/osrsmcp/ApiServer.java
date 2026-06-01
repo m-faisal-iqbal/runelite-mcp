@@ -2389,9 +2389,13 @@ public class ApiServer {
     private String buildIdentityJson() {
         JsonObject response = new JsonObject();
         response.addProperty("instanceId", instanceId);
-        response.addProperty("apiVersion", 2);
+        response.addProperty("apiVersion", 3);
         response.addProperty("supportsConcurrentStreams", true);
         response.addProperty("supportsEventBuffer", true);
+        response.addProperty("supportsInClientActions", true);
+        response.addProperty("supportsLocalPathfinding", true);
+        response.addProperty("supportsWidgetInspector", true);
+        response.addProperty("supportsRuntimeDiagnostics", true);
         response.addProperty("port", port);
         response.addProperty("baseUrl", getBaseUrl());
         response.addProperty("lastSeen", System.currentTimeMillis());

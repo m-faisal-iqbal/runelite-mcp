@@ -41,6 +41,8 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 
 - The scripts do not unexpectedly close RuneLite unless `Restart-OSRS-MCP.bat` or `-RestartRuneLite` is used.
 - The Phase 1 action API exposes `/api/action/menu`, `/api/action/walk`, and `/api/action/widget`; all three run on RuneLite's ClientThread.
+- Use `diagnose_runtime` after a rebuild/install or after a 404 from a newer endpoint. It reports stale running plugin copies and missing feature endpoints without restarting RuneLite.
+- Use `get_agent_context` before planning a gameplay action. It returns one compact orientation bundle with runtime readiness, player state, risks, inventory, nearby targets, dialogue, chat, and recommended next checks.
 - MCP resources are available for low-overhead context:
   - `osrs://snapshot/latest`
   - `osrs://events/recent`
@@ -50,6 +52,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - `/api/events` and `get_recent_events` expose recent plugin hooks such as GameTick, chat, animation changes, item-container changes, and widget loads; pass `eventType` to filter noisy tick events. `/api/stream` now emits both `snapshot` and `events` SSE messages.
 - Prefer `interact_with` for named object/NPC/player/ground-item interactions. It opens the context menu, then invokes the selected RuneLite menu action in-client using the real menu params.
 - Prefer `handle_dialogue` for NPC/player dialogue loops, `eat_food_when` for threshold-based food safety, and `perform_until` for repeated actions such as chopping/mining until inventory-full or a chat/entity condition.
+- Use `mark_action_baseline` before risky actions and `verify_last_action` afterward when you need a concrete snapshot diff, such as inventory quantity, location, dialogue, chat, or entity-count changes.
 - `click_object`, `click_npc`, and `click_ground_item` accept an optional `option`; when set, they use the same hybrid `interact_with` path instead of a blind screen click.
 - `walk_to` now tries a loaded-scene in-client WALK action first in `auto` mode, then falls back to minimap click for farther tiles.
 - Use `invoke_menu_action`, `invoke_walk_action`, and `invoke_widget_action` directly only when you already have or are deliberately testing raw RuneLite action params. Prefer `dryRun: true` first. Use `wait_for_game_tick` or `tickAligned: true` when timing-sensitive actions should land just after a fresh OSRS game tick.

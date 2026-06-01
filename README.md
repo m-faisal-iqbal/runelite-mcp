@@ -71,15 +71,18 @@ Do not reuse or overwrite the older `osrs_runelite` entry.
 
 For normal play loops:
 
-1. Read `osrs://client/identity` and `osrs://snapshot/latest`.
-2. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.
-3. Use `perform_until` for repeated skilling loops, such as chopping until inventory full.
-4. Use `handle_dialogue` for NPC/player dialogue.
-5. Use `eat_food_when` for HP safety.
-6. Verify actions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
-7. Use `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
-8. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
-9. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
+1. Start with `get_agent_context`; it bundles identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
+2. Read `osrs://client/identity` and `osrs://snapshot/latest` when you need the full raw context.
+3. Run `diagnose_runtime` after rebuilding the plugin or when a Java endpoint reports 404; it will tell you if RuneLite is still running an older plugin copy.
+4. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.
+5. Use `perform_until` for repeated skilling loops, such as chopping until inventory full.
+6. Use `handle_dialogue` for NPC/player dialogue.
+7. Use `eat_food_when` for HP safety.
+8. For risky actions, call `mark_action_baseline` before acting, then `verify_last_action` to prove snapshot deltas such as inventory, location, dialogue, chat, or entity-count changes.
+9. Verify single expected conditions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
+10. Use `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
+11. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
+12. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
 
 Raw `move_mouse_and_click` should be the last resort.
 
