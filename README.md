@@ -59,11 +59,12 @@ Verify the MCP server contract without touching RuneLite:
 ```powershell
 cd H:\runelite-mcp\osrs-mcp-server
 npm run build
+npm run smoke:plugin
 npm run smoke:planner
 npm run smoke:mcp
 ```
 
-Use `npm run smoke:mcp -- --live` only when RuneLite is already running with the plugin loaded and you want the smoke test to require a discovered client.
+Use `npm run smoke:mcp -- --live` only when RuneLite is already running with the plugin loaded and you want the smoke test to require a discovered client. `smoke:plugin` validates action endpoints with `dryRun: true`; it does not click or invoke actions.
 
 ## MCP Registration
 

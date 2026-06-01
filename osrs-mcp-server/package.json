@@ -9,6 +9,7 @@
     "start": "node build/index.js",
     "dev": "tsc --watch",
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
+    "smoke:plugin": "node scripts/smoke-plugin.mjs",
     "smoke:planner": "node scripts/smoke-planner.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
   },
