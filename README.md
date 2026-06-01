@@ -84,7 +84,7 @@ Do not reuse or overwrite the older `osrs_runelite` entry.
 For normal play loops:
 
 1. Start with `get_agent_context`; it bundles identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
-2. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything.
+2. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything. It covers common safe routines such as woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
 3. Read `osrs://client/identity` and `osrs://snapshot/latest` when you need the full raw context.
 4. Run `diagnose_runtime` after rebuilding the plugin or when a Java endpoint reports 404; it will tell you if RuneLite is still running an older plugin copy.
 5. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.

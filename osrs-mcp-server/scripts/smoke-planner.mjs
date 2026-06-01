@@ -63,6 +63,37 @@ const fullInventory = buildNextActionPlan(baseContext(), loggedInSnapshot({
 }), "woodcut and bank");
 assert(fullInventory.mode === "inventory_full", "full inventory should switch to banking");
 assert(fullInventory.steps[0].tool === "interact_with", "full inventory with visible bank should interact with bank");
+assert(fullInventory.steps[0].arguments.entityType === "object", "bank booth should be treated as object");
+
+const bankDeposit = buildNextActionPlan(baseContext(), loggedInSnapshot({
+  interfaceSummary: { dialogueType: "NONE", bankContainerAvailable: true },
+  inventory: [{ id: 1511, name: "Logs", slot: 0, quantity: 5 }],
+}), "deposit logs in bank");
+assert(bankDeposit.mode === "bank_deposit", "open bank with deposit objective should deposit");
+assert(JSON.stringify(toolNames(bankDeposit)) === JSON.stringify(["mark_action_baseline", "deposit_inventory_item", "verify_last_action"]), "bank deposit should baseline, deposit, verify");
+
+const mining = buildNextActionPlan(baseContext(), loggedInSnapshot({
+  inventory: [{ id: 440, name: "Iron ore", quantity: 1 }],
+  objects: [{ id: 11364, name: "Rocks", option: "Mine", distanceToPlayer: 2 }],
+}), "mine 3 iron ore");
+assert(mining.mode === "mining", "mining objective should create mining plan");
+const miningAction = mining.steps.find((step) => step.tool === "perform_until");
+assert(miningAction.arguments.actionOption === "Mine", "mining should use Mine option");
+assert(miningAction.arguments.inventoryQuantityAtLeast === 4, "mining stop quantity should be current ore plus requested count");
+
+const fishing = buildNextActionPlan(baseContext(), loggedInSnapshot({
+  npcs: [{ id: 1530, name: "Fishing spot", option: "Net", distanceToPlayer: 1 }],
+}), "fish 2 shrimp");
+assert(fishing.mode === "fishing", "fishing objective should create fishing plan");
+const fishingAction = fishing.steps.find((step) => step.tool === "perform_until");
+assert(fishingAction.arguments.actionEntityType === "npc", "fishing should interact with NPC fishing spot");
+assert(fishingAction.arguments.inventoryItemName === "Raw shrimps", "fishing should infer raw shrimp target item");
+
+const combat = buildNextActionPlan(baseContext(), loggedInSnapshot({
+  npcs: [{ id: 3106, name: "Man", option: "Attack", distanceToPlayer: 1, isDead: false }],
+}), "attack man");
+assert(combat.mode === "combat", "combat objective should create combat plan");
+assert(toolNames(combat).includes("wait_until_idle"), "combat plan should wait for idle after attacking");
 
 const lowHp = buildNextActionPlan(baseContext(), loggedInSnapshot({
   state: { status: "LOGGED_IN", health: 2 },
@@ -84,6 +115,10 @@ console.log(JSON.stringify({
     woodcutting: woodcutting.mode,
     dialogue: dialogue.mode,
     fullInventory: fullInventory.mode,
+    bankDeposit: bankDeposit.mode,
+    mining: mining.mode,
+    fishing: fishing.mode,
+    combat: combat.mode,
     lowHpFirstTool: lowHp.steps[0].tool,
     staleRuntimeFirstTool: staleRuntime.steps[0].tool,
   },

@@ -73,6 +73,41 @@ function findFoodItem(snapshot: RuneLiteSnapshot): RuneLiteTarget | undefined {
   });
 }
 
+function stopArgsForItem(snapshot: RuneLiteSnapshot, count: number | undefined, itemName: string | undefined) {
+  if (count && itemName) {
+    return {
+      condition: "inventory_quantity_at_least",
+      inventoryItemName: itemName,
+      inventoryQuantityAtLeast: Math.min(28, inventoryQuantity(snapshot, itemName) + count),
+    };
+  }
+  return { condition: "inventory_full" };
+}
+
+function objectiveItemName(objective: string | undefined, mappings: Array<[string, string]>): string | undefined {
+  const text = String(objective ?? "").toLowerCase();
+  return mappings.find(([needle]) => text.includes(needle))?.[1];
+}
+
+function firstInventoryItemName(snapshot: RuneLiteSnapshot): string | undefined {
+  return (snapshot.inventory ?? []).find((item: any) => item && item.id && item.id !== -1)?.name;
+}
+
+function findBankTarget(snapshot: RuneLiteSnapshot) {
+  const object = nearestMatchingTarget(snapshot.objects, (target: any) =>
+    String(target.name ?? "").toLowerCase().includes("bank") ||
+    String(target.option ?? "").toLowerCase().includes("bank")
+  );
+  if (object) {
+    return { ...object, entityType: "object" };
+  }
+  const npc = nearestMatchingTarget(snapshot.npcs, (target: any) =>
+    String(target.name ?? "").toLowerCase().includes("banker") ||
+    String(target.option ?? "").toLowerCase().includes("bank")
+  );
+  return npc ? { ...npc, entityType: "npc" } : undefined;
+}
+
 export function buildNextActionPlan(context: any, snapshot: RuneLiteSnapshot, objective?: string) {
   const state = snapshot.state ?? {};
   const dialogueType = snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type ?? "NONE";
@@ -99,14 +134,35 @@ export function buildNextActionPlan(context: any, snapshot: RuneLiteSnapshot, ob
     return { steps, notes, mode: "handle_interface" };
   }
 
+  if (objectiveIncludes(objective, ["deposit", "bank logs", "bank ores", "bank fish", "bank inventory"]) && inventorySlotsUsed(snapshot) > 0) {
+    if (snapshot.interfaceSummary?.bankContainerAvailable) {
+      steps.push(actionStep("mark_action_baseline", "Capture inventory before depositing items.", { note: objective ?? "bank deposit" }, { priority: "verify_before" }));
+      steps.push(actionStep("deposit_inventory_item", "Deposit matching inventory items through the open bank interface.", {
+        itemName: firstInventoryItemName(snapshot),
+        quantity: "All",
+      }, { priority: "action" }));
+      steps.push(actionStep("verify_last_action", "Confirm inventory changed after deposit.", { expectInventorySlotsChanged: true, requireAnyChange: true }, { priority: "verify_after" }));
+      return { steps, notes, mode: "bank_deposit" };
+    }
+
+    const bank = findBankTarget(snapshot);
+    if (bank) {
+      steps.push(actionStep("interact_with", "Open the nearest visible bank before depositing inventory.", {
+        entityType: bank.entityType,
+        name: bank.name,
+        id: bank.id,
+        option: "Bank",
+        nearestToPlayer: true,
+      }, { priority: "bank_open", target: { name: bank.name, id: bank.id, distanceToPlayer: bank.distanceToPlayer } }));
+      return { steps, notes, mode: "open_bank" };
+    }
+  }
+
   if (inventorySlotsUsed(snapshot) >= 28) {
-    const bank = nearestMatchingTarget(snapshot.objects, (object: any) =>
-      String(object.name ?? "").toLowerCase().includes("bank") ||
-      String(object.option ?? "").toLowerCase().includes("bank")
-    );
+    const bank = findBankTarget(snapshot);
     if (bank) {
       steps.push(actionStep("interact_with", "Inventory is full; bank before continuing the objective.", {
-        entityType: "object",
+        entityType: bank.entityType,
         name: bank.name,
         id: bank.id,
         option: bank.option ?? "Bank",
@@ -148,6 +204,110 @@ export function buildNextActionPlan(context: any, snapshot: RuneLiteSnapshot, ob
       return { steps, notes, mode: "woodcutting" };
     }
     notes.push("Woodcutting objective detected, but no nearby tree was visible in the loaded scene.");
+  }
+
+  if (objectiveIncludes(objective, ["mine", "mining", "ore", "rocks"])) {
+    const oreName = objectiveItemName(objective, [
+      ["copper", "Copper ore"],
+      ["tin", "Tin ore"],
+      ["iron", "Iron ore"],
+      ["coal", "Coal"],
+      ["gold", "Gold ore"],
+      ["silver", "Silver ore"],
+      ["clay", "Clay"],
+      ["mithril", "Mithril ore"],
+      ["adamant", "Adamantite ore"],
+      ["rune", "Runite ore"],
+    ]);
+    const rock = nearestMatchingTarget(snapshot.objects, (object: any) => {
+      const name = String(object.name ?? "").toLowerCase();
+      const option = String(object.option ?? "").toLowerCase();
+      return option.includes("mine") || name.includes("rock");
+    });
+    if (rock) {
+      steps.push(actionStep("mark_action_baseline", "Capture inventory/location/chat before the mining loop.", { note: objective ?? "mining loop" }, { priority: "verify_before" }));
+      steps.push(actionStep("perform_until", "Use repeated in-client mining interactions, stopping at the requested ore count when known or full inventory.", {
+        actionEntityType: "object",
+        actionName: rock.name ?? "Rocks",
+        actionId: rock.id,
+        actionOption: "Mine",
+        nearestToPlayer: true,
+        maxIterations: count ?? 28,
+        ...stopArgsForItem(snapshot, count, oreName),
+      }, { priority: "action", target: { name: rock.name, id: rock.id, distanceToPlayer: rock.distanceToPlayer } }));
+      steps.push(actionStep("verify_last_action", "Confirm inventory or chat changed after mining.", {
+        inventoryItemName: oreName,
+        expectInventoryIncreased: Boolean(oreName),
+        expectInventorySlotsChanged: !oreName,
+        expectNewChat: true,
+        requireAnyChange: true,
+      }, { priority: "verify_after" }));
+      return { steps, notes, mode: "mining" };
+    }
+    notes.push("Mining objective detected, but no nearby mineable rock was visible in the loaded scene.");
+  }
+
+  if (objectiveIncludes(objective, ["fish", "fishing", "shrimp", "trout", "salmon", "lobster", "tuna", "swordfish"])) {
+    const fishName = objectiveItemName(objective, [
+      ["shrimp", "Raw shrimps"],
+      ["anchov", "Raw anchovies"],
+      ["trout", "Raw trout"],
+      ["salmon", "Raw salmon"],
+      ["tuna", "Raw tuna"],
+      ["lobster", "Raw lobster"],
+      ["swordfish", "Raw swordfish"],
+      ["shark", "Raw shark"],
+    ]);
+    const fishingSpot = nearestMatchingTarget(snapshot.npcs, (npc: any) => {
+      const name = String(npc.name ?? "").toLowerCase();
+      const option = String(npc.option ?? "").toLowerCase();
+      return name.includes("fishing spot") || ["net", "bait", "lure", "cage", "harpoon"].some((needle) => option.includes(needle));
+    });
+    if (fishingSpot) {
+      const option = ["Net", "Bait", "Lure", "Cage", "Harpoon"].find((candidate) =>
+        String(fishingSpot.option ?? "").toLowerCase().includes(candidate.toLowerCase())
+      ) ?? fishingSpot.option ?? "Net";
+      steps.push(actionStep("mark_action_baseline", "Capture inventory/location/chat before the fishing loop.", { note: objective ?? "fishing loop" }, { priority: "verify_before" }));
+      steps.push(actionStep("perform_until", "Use repeated in-client fishing spot interactions, stopping at the requested catch count when known or full inventory.", {
+        actionEntityType: "npc",
+        actionName: fishingSpot.name ?? "Fishing spot",
+        actionId: fishingSpot.id,
+        actionOption: option,
+        nearestToPlayer: true,
+        maxIterations: count ?? 28,
+        ...stopArgsForItem(snapshot, count, fishName),
+      }, { priority: "action", target: { name: fishingSpot.name, id: fishingSpot.id, distanceToPlayer: fishingSpot.distanceToPlayer } }));
+      steps.push(actionStep("verify_last_action", "Confirm inventory or chat changed after fishing.", {
+        inventoryItemName: fishName,
+        expectInventoryIncreased: Boolean(fishName),
+        expectInventorySlotsChanged: !fishName,
+        expectNewChat: true,
+        requireAnyChange: true,
+      }, { priority: "verify_after" }));
+      return { steps, notes, mode: "fishing" };
+    }
+    notes.push("Fishing objective detected, but no nearby fishing spot was visible in the loaded scene.");
+  }
+
+  if (objectiveIncludes(objective, ["attack", "fight", "kill", "combat"])) {
+    const npc = nearestMatchingTarget(snapshot.npcs, (target: any) => {
+      const option = String(target.option ?? "").toLowerCase();
+      return option.includes("attack") && target.isDead !== true;
+    }) ?? nearestMatchingTarget(snapshot.npcs, (target: any) => target.isDead !== true);
+    if (npc) {
+      steps.push(actionStep("mark_action_baseline", "Capture health, animation, chat, and target visibility before combat.", { note: objective ?? "combat interaction" }, { priority: "verify_before" }));
+      steps.push(actionStep("interact_with", "Attack the nearest visible suitable NPC using in-client menu params.", {
+        entityType: "npc",
+        name: npc.name,
+        id: npc.id,
+        option: "Attack",
+        nearestToPlayer: true,
+      }, { priority: "action", target: { name: npc.name, id: npc.id, distanceToPlayer: npc.distanceToPlayer } }));
+      steps.push(actionStep("wait_until_idle", "Wait until the player is idle again before choosing the next combat action.", { timeoutMs: 30000, stablePolls: 2 }, { priority: "wait" }));
+      steps.push(actionStep("verify_last_action", "Confirm combat caused snapshot/chat/entity changes.", { entityType: "npc", entityName: npc.name, expectEntityCountChanged: true, expectNewChat: true, requireAnyChange: true }, { priority: "verify_after" }));
+      return { steps, notes, mode: "combat" };
+    }
+    notes.push("Combat objective detected, but no nearby attackable NPC was visible in the loaded scene.");
   }
 
   if (objectiveIncludes(objective, ["talk", "speak", "dialogue", "quest"])) {

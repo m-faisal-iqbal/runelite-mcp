@@ -52,7 +52,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - The Phase 1 action API exposes `/api/action/menu`, `/api/action/walk`, and `/api/action/widget`; all three run on RuneLite's ClientThread.
 - Use `diagnose_runtime` after a rebuild/install or after a 404 from a newer endpoint. It reports stale running plugin copies and missing feature endpoints without restarting RuneLite.
 - Use `get_agent_context` before planning a gameplay action. It returns one compact orientation bundle with runtime readiness, player state, risks, inventory, nearby targets, dialogue, chat, and recommended next checks.
-- Use `plan_next_action` when you want a conservative ordered list of MCP tool calls for the current objective without executing anything.
+- Use `plan_next_action` when you want a conservative ordered list of MCP tool calls for the current objective without executing anything. It currently plans common routines for woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
 - MCP resources are available for low-overhead context:
   - `osrs://snapshot/latest`
   - `osrs://events/recent`
