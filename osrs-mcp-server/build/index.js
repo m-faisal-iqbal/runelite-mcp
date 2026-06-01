@@ -122,6 +122,10 @@ async function assertClientReady(baseURL) {
     if (identity?.windowActive === false) {
         throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} window is not active; focus RuneLite before OS click tools`);
     }
+    const state = await readClientState(baseURL);
+    if (state?.status !== "LOGGED_IN") {
+        throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} is not logged in; refusing gameplay action while status is ${state?.status ?? "UNKNOWN"}`);
+    }
     return identity;
 }
 function targetMatches(entity, name, id) {
@@ -270,6 +274,9 @@ async function captureCanvasImage(baseURL, args) {
     return response;
 }
 async function invokeMenuAction(baseURL, action) {
+    if (!action.dryRun) {
+        await assertClientReady(baseURL);
+    }
     const tickWait = action.tickAligned
         ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
         : undefined;
@@ -287,6 +294,9 @@ async function invokeMenuAction(baseURL, action) {
     return tickWait ? { ...res.data, tickWait } : res.data;
 }
 async function invokeWalkAction(baseURL, action) {
+    if (!action.dryRun) {
+        await assertClientReady(baseURL);
+    }
     const tickWait = action.tickAligned
         ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
         : undefined;
@@ -299,6 +309,9 @@ async function invokeWalkAction(baseURL, action) {
     return tickWait ? { ...res.data, tickWait } : res.data;
 }
 async function invokeWidgetAction(baseURL, action) {
+    if (!action.dryRun) {
+        await assertClientReady(baseURL);
+    }
     const tickWait = action.tickAligned
         ? await waitForGameTick(baseURL, 1, action.tickTimeoutMs ?? 1800)
         : undefined;
@@ -414,6 +427,34 @@ function chooseLocalPathStep(path, maxStepTiles = 18) {
     }
     const safeMaxStep = Math.max(1, Math.floor(maxStepTiles));
     return steps[Math.min(safeMaxStep, steps.length - 1)];
+}
+async function waitUntilBaseLocation(baseURL, worldX, worldY, plane, radius = 1, timeoutMs = 8000, pollMs = 500) {
+    const startedAt = Date.now();
+    const timeout = Math.max(1, timeoutMs);
+    const interval = Math.max(100, pollMs);
+    const acceptedRadius = Math.max(0, radius);
+    let lastLocation = null;
+    let lastDistance = Number.MAX_SAFE_INTEGER;
+    while (Date.now() - startedAt <= timeout) {
+        const snapshot = await getSnapshotForBase(baseURL, true);
+        lastLocation = snapshot.state?.location;
+        lastDistance = tileDistance(lastLocation, worldX, worldY, plane);
+        if (lastDistance <= acceptedRadius) {
+            return {
+                reached: true,
+                waitedMs: Date.now() - startedAt,
+                distance: lastDistance,
+                location: lastLocation,
+            };
+        }
+        await sleep(interval);
+    }
+    return {
+        reached: false,
+        waitedMs: Date.now() - startedAt,
+        distance: lastDistance,
+        location: lastLocation,
+    };
 }
 function targetsForType(snapshot, entityType) {
     switch (entityType.toLowerCase()) {
@@ -561,7 +602,7 @@ server.registerPrompt("experienced-player-loop", {
                     "3. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
                     "4. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
                     "5. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
-                    "6. For navigation, use calculate_path_to/walk_path_to: they prefer local-scene collision-aware paths and fall back to bounded minimap steps for farther targets.",
+                    "6. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
                     "7. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
                 ].join("\n"),
             },
@@ -590,7 +631,7 @@ server.registerPrompt("woodcut-and-bank", {
                     `2. If inventory is not full, use interact_with({ entityType: \"object\", name: \"${treeName}\", option: \"Chop down\", nearestToPlayer: true }).`,
                     "3. Wait until player is idle or tree disappears. Check chat for errors.",
                     "4. Repeat until inventory is full.",
-                    "5. Navigate to bank using walk_to/walk_path_to; prefer local collision-aware steps when the bank is inside the loaded scene.",
+                    "5. Navigate to bank using walk_route_to when you know the bank tile, or walk_path_to for one cautious step.",
                     `6. Open bank with interact_with on ${bankTarget} using option Bank/Open.`,
                     `7. Deposit ${logName} using bank tools, then verify inventory/bank state.`,
                 ].join("\n"),
@@ -1106,6 +1147,23 @@ server.tool("get_interface_summary", "Get compact open-interface and high-value 
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("fetching interface summary", e) }] };
+    }
+});
+server.tool("get_widgets", "Inspect a bounded set of RuneLite widgets with ids, text, actions, bounds, and screen coordinates. Use filter for complex interfaces like bank, GE, quest, shop, or dialogue.", {
+    filter: z.string().optional().describe("Optional case-insensitive text/name/action/id filter, for example withdraw, deposit, exchange, quest, continue, or an id substring"),
+    includeHidden: z.boolean().optional().describe("Include hidden widgets. Defaults to false."),
+    maxWidgets: z.number().optional().describe("Maximum widgets to return, default 250, capped by the plugin at 1000."),
+    maxDepth: z.number().optional().describe("Maximum widget tree depth to inspect, default 6, capped by the plugin at 12."),
+    ...clientTargetSchema(),
+}, async ({ filter, includeHidden, maxWidgets, maxDepth, instanceId, playerName, port }) => {
+    try {
+        const res = await (await apiForTarget({ instanceId, playerName, port })).get("/widgets", {
+            params: { filter, includeHidden, maxWidgets, maxDepth },
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("fetching widgets", e) }] };
     }
 });
 server.tool("get_coordinate_debug", "Get RuneLite canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {
@@ -1840,6 +1898,144 @@ server.tool("walk_path_to", "Walk one bounded step toward a target world tile, p
     }
     catch (e) {
         return { content: [{ type: "text", text: `Error walking path step: ${e.message}` }] };
+    }
+});
+server.tool("walk_route_to", "Walk toward a target world tile over multiple bounded steps, re-planning from fresh state after each movement. Prefer this for practical navigation inside or near the loaded scene.", {
+    worldX: z.number().describe("Target world X tile"),
+    worldY: z.number().describe("Target world Y tile"),
+    plane: z.number().optional().describe("Target plane, defaults to the player's current plane"),
+    destinationRadius: z.number().optional().describe("Accepted radius around the final target, default 1"),
+    stepRadius: z.number().optional().describe("Accepted radius around each intermediate step, default 2"),
+    maxRouteSteps: z.number().optional().describe("Maximum movement actions before stopping, default 8"),
+    maxStepTiles: z.number().optional().describe("Maximum local path tiles per movement action, default 18"),
+    maxNodes: z.number().optional().describe("Maximum local collision-map nodes to search per re-plan, default 4096"),
+    stepTimeoutMs: z.number().optional().describe("Maximum wait after each movement action, default 8000"),
+    pollMs: z.number().optional().describe("Location polling interval while waiting, default 500"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age for fallback clicks, default 1000"),
+    allowMinimapFallback: z.boolean().optional().describe("Use bounded minimap fallback when local collision path is unavailable, default true"),
+    tickAligned: z.boolean().optional().describe("Wait for the next OSRS game tick before each in-client walk action, default true"),
+    ...clientTargetSchema(),
+}, async ({ worldX, worldY, plane, destinationRadius, stepRadius, maxRouteSteps, maxStepTiles, maxNodes, stepTimeoutMs, pollMs, maxAgeMs, allowMinimapFallback, tickAligned, instanceId, playerName, port, }) => {
+    const targetClient = { instanceId, playerName, port };
+    const routeStartedAt = Date.now();
+    const safeMaxRouteSteps = Math.max(1, Math.min(Math.floor(maxRouteSteps ?? 8), 50));
+    const safeMaxStepTiles = Math.max(1, Math.min(Math.floor(maxStepTiles ?? 18), 64));
+    const finalRadius = Math.max(0, destinationRadius ?? 1);
+    const intermediateRadius = Math.max(0, stepRadius ?? 2);
+    const movementTimeout = Math.max(500, stepTimeoutMs ?? 8000);
+    const interval = Math.max(100, pollMs ?? 500);
+    const useFallback = allowMinimapFallback ?? true;
+    const steps = [];
+    let lastSnapshot;
+    let lastDistance = Number.MAX_SAFE_INTEGER;
+    try {
+        const { baseURL } = await getSnapshotForTarget(targetClient, true);
+        await assertClientReady(baseURL);
+        for (let routeStep = 1; routeStep <= safeMaxRouteSteps; routeStep++) {
+            lastSnapshot = await getSnapshotForBase(baseURL, true);
+            const currentLocation = lastSnapshot.state?.location;
+            lastDistance = tileDistance(currentLocation, worldX, worldY, plane);
+            if (lastDistance <= finalRadius) {
+                return {
+                    content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                reached: true,
+                                reason: "already_at_destination",
+                                waitedMs: Date.now() - routeStartedAt,
+                                distance: lastDistance,
+                                location: currentLocation,
+                                steps,
+                            }, null, 2)
+                        }]
+                };
+            }
+            let mode = "collision_aware_local";
+            let plannedPath;
+            let walkedStep;
+            let actionResult;
+            try {
+                const collisionPath = await calculateCollisionAwarePath(baseURL, worldX, worldY, plane, maxNodes ?? 4096);
+                plannedPath = collisionPath;
+                if (!collisionPath.success) {
+                    throw new Error(collisionPath.message ?? collisionPath.error ?? "Collision path unavailable");
+                }
+                walkedStep = chooseLocalPathStep(collisionPath, safeMaxStepTiles);
+                if (!walkedStep) {
+                    throw new Error("Collision-aware path returned no walkable steps");
+                }
+                actionResult = await invokeWalkAction(baseURL, {
+                    worldX: walkedStep.worldX,
+                    worldY: walkedStep.worldY,
+                    plane: walkedStep.plane,
+                    tickAligned: tickAligned ?? true,
+                });
+            }
+            catch (error) {
+                if (!useFallback) {
+                    throw error;
+                }
+                mode = "minimap_fallback";
+                const fallback = withStraightLineFallback(lastSnapshot, { worldX, worldY, plane }, safeMaxStepTiles, 1, plannedPath);
+                plannedPath = fallback;
+                walkedStep = fallback.steps?.[0];
+                if (!walkedStep) {
+                    throw new Error(`No fallback route step available after path failure: ${errorText("planning route step", error)}`);
+                }
+                const clicked = await clickMinimapProjection(walkedStep.worldX, walkedStep.worldY, walkedStep.plane, targetClient, maxAgeMs ?? 1000);
+                actionResult = { clickedAt: { screenX: clicked.screenX, screenY: clicked.screenY }, target: clicked };
+            }
+            const wait = await waitUntilBaseLocation(baseURL, walkedStep.worldX, walkedStep.worldY, walkedStep.plane, walkedStep.final ? finalRadius : intermediateRadius, movementTimeout, interval);
+            lastSnapshot = await getSnapshotForBase(baseURL, true);
+            lastDistance = tileDistance(lastSnapshot.state?.location, worldX, worldY, plane);
+            steps.push({
+                routeStep,
+                mode,
+                from: currentLocation,
+                walkedStep,
+                actionResult,
+                wait,
+                distanceToDestination: lastDistance,
+                pathSummary: {
+                    success: plannedPath?.success,
+                    collisionAware: plannedPath?.collisionAware,
+                    scope: plannedPath?.scope,
+                    stepsCount: plannedPath?.stepsCount ?? plannedPath?.steps?.length,
+                    fallbackUsed: plannedPath?.fallbackUsed,
+                    fallbackReason: plannedPath?.fallbackReason,
+                },
+            });
+            if (lastDistance <= finalRadius) {
+                return {
+                    content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                reached: true,
+                                waitedMs: Date.now() - routeStartedAt,
+                                distance: lastDistance,
+                                location: lastSnapshot.state?.location,
+                                steps,
+                            }, null, 2)
+                        }]
+                };
+            }
+        }
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        reached: false,
+                        reason: "max_route_steps_exhausted",
+                        waitedMs: Date.now() - routeStartedAt,
+                        distance: lastDistance,
+                        location: lastSnapshot?.state?.location,
+                        steps,
+                    }, null, 2)
+                }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error walking route: ${e.message}` }] };
     }
 });
 server.tool("click_minimap_tile", "Project a nearby world tile onto the minimap and click the resulting minimapProjection point.", {

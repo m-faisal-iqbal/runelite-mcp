@@ -162,6 +162,7 @@ public class ApiServer {
         server.createContext("/api/equipment", new EquipmentHandler());
         server.createContext("/api/skills", new SkillsHandler());
         server.createContext("/api/interface_summary", new InterfaceSummaryHandler());
+        server.createContext("/api/widgets", new WidgetsHandler());
         server.createContext("/api/vars", new VarsHandler());
         server.createContext("/api/quest_state", new QuestStateHandler());
         server.createContext("/api/prayers", new PrayersHandler());
@@ -439,6 +440,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/equipment", "Equipped item IDs, names, quantities, and slots."));
         endpoints.add(endpoint("/api/skills", "Real level, boosted level, and XP for each skill."));
         endpoints.add(endpoint("/api/interface_summary", "Compact summary of open/high-value interfaces and visible widget bounds."));
+        endpoints.add(endpoint("/api/widgets?filter=withdraw&maxWidgets=250&maxDepth=6", "Bounded generic widget inspector with ids, text, actions, bounds, and screen coordinates for complex interfaces."));
         endpoints.add(endpoint("/api/vars?varbits=1,2&varps=3,4", "Read selected varbit and varp values for quest/state tools without dumping every game variable."));
         endpoints.add(endpoint("/api/quest_state?name=Cook%27s%20Assistant", "Read RuneLite quest state by name, enum name, or id; omit name for all quest states."));
         endpoints.add(endpoint("/api/prayers", "Prayer level, active prayers, prayer varbits, and prayer/quick-prayer orb click coordinates."));
@@ -1971,6 +1973,95 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private String buildWidgetsJson(long capturedAt, boolean includeHidden, int maxWidgets, int maxDepth, String filter) {
+        int safeMaxWidgets = Math.max(1, Math.min(maxWidgets, 1000));
+        int safeMaxDepth = Math.max(0, Math.min(maxDepth, 12));
+        String normalizedFilter = filter != null ? filter.trim().toLowerCase() : "";
+
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("gameState", client.getGameState() != null ? client.getGameState().name() : "");
+        response.addProperty("topLevelInterfaceId", client.getTopLevelInterfaceId());
+        response.addProperty("includeHidden", includeHidden);
+        response.addProperty("maxWidgets", safeMaxWidgets);
+        response.addProperty("maxDepth", safeMaxDepth);
+        if (!normalizedFilter.isEmpty()) {
+            response.addProperty("filter", filter);
+        }
+
+        JsonArray widgets = new JsonArray();
+        Widget[] roots = client.getWidgetRoots();
+        if (roots != null) {
+            for (int i = 0; i < roots.length; i++) {
+                Widget root = roots[i];
+                if (root == null || widgets.size() >= safeMaxWidgets) {
+                    continue;
+                }
+                addWidgetTree(widgets, root, capturedAt, includeHidden, safeMaxWidgets, safeMaxDepth, normalizedFilter, 0, "root", i);
+            }
+        }
+
+        response.addProperty("returnedWidgets", widgets.size());
+        response.add("widgets", widgets);
+        return gson.toJson(response);
+    }
+
+    private void addWidgetTree(JsonArray response, Widget widget, long capturedAt, boolean includeHidden, int maxWidgets, int maxDepth, String filter, int depth, String childCollection, int arrayIndex) {
+        if (widget == null || response.size() >= maxWidgets || depth > maxDepth) {
+            return;
+        }
+        if ((includeHidden || !widget.isHidden()) && widgetMatchesFilter(widget, filter)) {
+            JsonObject widgetJson = buildWidgetJson("widget", null, widget, capturedAt);
+            widgetJson.addProperty("widgetId", widget.getId());
+            widgetJson.addProperty("packedId", widget.getId());
+            widgetJson.addProperty("groupId", widget.getId() >>> 16);
+            widgetJson.addProperty("childId", widget.getId() & 0xFFFF);
+            widgetJson.addProperty("parentId", widget.getParentId());
+            widgetJson.addProperty("type", widget.getType());
+            widgetJson.addProperty("depth", depth);
+            widgetJson.addProperty("childCollection", childCollection);
+            widgetJson.addProperty("arrayIndex", arrayIndex);
+            addChildCounts(widgetJson, widget);
+            response.add(widgetJson);
+        }
+
+        if (depth >= maxDepth) {
+            return;
+        }
+        addWidgetChildren(response, widget.getNestedChildren(), capturedAt, includeHidden, maxWidgets, maxDepth, filter, depth + 1, "nested");
+        addWidgetChildren(response, widget.getDynamicChildren(), capturedAt, includeHidden, maxWidgets, maxDepth, filter, depth + 1, "dynamic");
+        addWidgetChildren(response, widget.getStaticChildren(), capturedAt, includeHidden, maxWidgets, maxDepth, filter, depth + 1, "static");
+    }
+
+    private void addWidgetChildren(JsonArray response, Widget[] children, long capturedAt, boolean includeHidden, int maxWidgets, int maxDepth, String filter, int depth, String childCollection) {
+        if (children == null || response.size() >= maxWidgets) {
+            return;
+        }
+        for (int i = 0; i < children.length; i++) {
+            Widget child = children[i];
+            if (response.size() >= maxWidgets) {
+                return;
+            }
+            addWidgetTree(response, child, capturedAt, includeHidden, maxWidgets, maxDepth, filter, depth, childCollection, i);
+        }
+    }
+
+    private void addChildCounts(JsonObject response, Widget widget) {
+        response.addProperty("nestedChildCount", widget.getNestedChildren() != null ? widget.getNestedChildren().length : 0);
+        response.addProperty("dynamicChildCount", widget.getDynamicChildren() != null ? widget.getDynamicChildren().length : 0);
+        response.addProperty("staticChildCount", widget.getStaticChildren() != null ? widget.getStaticChildren().length : 0);
+    }
+
+    private boolean widgetMatchesFilter(Widget widget, String filter) {
+        if (filter == null || filter.isEmpty()) {
+            return true;
+        }
+        if (String.valueOf(widget.getId()).contains(filter)) {
+            return true;
+        }
+        return hasTextNameOrActionContaining(widget, filter);
+    }
+
     private Map<String, String> parseQuery(HttpExchange exchange) {
         Map<String, String> params = new HashMap<>();
         String query = exchange.getRequestURI().getRawQuery();
@@ -2543,6 +2634,18 @@ public class ApiServer {
                 return;
             }
             handleOnClientThread(t, () -> buildInterfaceSummaryJson(System.currentTimeMillis()));
+        }
+    }
+
+    class WidgetsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            boolean includeHidden = Boolean.parseBoolean(params.getOrDefault("includeHidden", "false"));
+            int maxWidgets = getIntParam(params, "maxWidgets", 250);
+            int maxDepth = getIntParam(params, "maxDepth", 6);
+            String filter = params.getOrDefault("filter", "");
+            handleOnClientThread(t, () -> buildWidgetsJson(System.currentTimeMillis(), includeHidden, maxWidgets, maxDepth, filter));
         }
     }
 

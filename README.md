@@ -78,6 +78,8 @@ For normal play loops:
 5. Use `eat_food_when` for HP safety.
 6. Verify actions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
 7. Use `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
+8. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
+9. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
 
 Raw `move_mouse_and_click` should be the last resort.
 
@@ -87,4 +89,4 @@ OS fallback mouse movement is humanized by default with a short Bezier path and 
 
 ## Current Known Gap
 
-Loaded-scene navigation now has a local collision-map A* exposed through `/api/path` and used by `calculate_path_to` / `walk_path_to`. Long-distance routing beyond the loaded scene still falls back to bounded minimap steps; the next major reliability upgrade is a wider route planner, ideally by bridging RuneLite's Shortest Path plugin.
+Loaded-scene navigation now has a local collision-map A* exposed through `/api/path` and used by `calculate_path_to`, `walk_path_to`, and `walk_route_to`. `walk_route_to` re-plans after each bounded movement step. Long-distance routing beyond the loaded scene still falls back to bounded minimap steps; the next major reliability upgrade is a wider route planner, ideally by bridging RuneLite's Shortest Path plugin if a stable integration surface is available.

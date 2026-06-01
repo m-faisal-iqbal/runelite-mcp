@@ -56,7 +56,8 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - Click tools refuse stale coordinates and hidden/minimized canvases.
 - Prefer `click_object`, `click_npc`, `click_ground_item`, `click_inventory_slot`, `walk_to`, and `click_minimap_tile` over raw `move_mouse_and_click`.
 - Use `get_minimap` and `get_camera` to inspect orientation, map angle, minimap zoom, and viewport context before tricky navigation.
-- Use `calculate_path_to` to inspect local collision-aware path data before navigation; it falls back to bounded straight-line minimap steps when the target is outside the loaded scene. Use `walk_path_to` to move one bounded step.
+- Use `get_widgets` with a focused `filter` such as `withdraw`, `deposit`, `exchange`, `quest`, or `continue` when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
+- Use `walk_route_to` for multi-step movement to a known tile. Use `calculate_path_to` to inspect local collision-aware path data before navigation, and `walk_path_to` when you want one bounded step.
 - After any click or walk, use `verify_after_action` for combined checks, or `wait_until_idle`, `wait_until_location`, and `wait_for_chat_message` for single-condition waits.
 - Use `capture_canvas_screenshot` before/after risky actions, or pass `canvasX`/`canvasY` from a target to capture a focused crop around the clickable area.
 - OS fallback mouse movement is humanized by default; inspect it with `get_input_profile` and disable with `OSRS_HUMANIZE_MOUSE=false` if coordinate testing needs instant movement.
