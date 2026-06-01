@@ -13,6 +13,9 @@ This project has two parts:
 - `cd osrs-mcp-server && npm run smoke:mcp`
   Starts the built MCP server over stdio, verifies the expected tools/resources/prompts, calls `get_agent_context` and `diagnose_runtime`, then closes the child process. This does not start or close RuneLite. Add `-- --live` only when a plugin-loaded RuneLite client is already open and should be required.
 
+- `cd osrs-mcp-server && npm run smoke:planner`
+  Runs synthetic snapshot checks for the pure action planner, including login, woodcutting, dialogue, full-inventory banking, low-HP food safety, and stale-runtime handling.
+
 - `Install-OSRS-MCP-Plugin.bat`
   Builds, then copies the plugin jar to `%USERPROFILE%\.runelite\plugins\osrs-mcp-plugin.jar`.
   It does not start or close RuneLite.

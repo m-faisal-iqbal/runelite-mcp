@@ -59,6 +59,7 @@ Verify the MCP server contract without touching RuneLite:
 ```powershell
 cd H:\runelite-mcp\osrs-mcp-server
 npm run build
+npm run smoke:planner
 npm run smoke:mcp
 ```
 
