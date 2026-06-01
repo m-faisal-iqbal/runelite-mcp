@@ -32,7 +32,9 @@ const configuredSnapshotCacheTtlMs = Number(process.env.OSRS_SNAPSHOT_CACHE_TTL_
 const SNAPSHOT_CACHE_TTL_MS = Number.isFinite(configuredSnapshotCacheTtlMs) && configuredSnapshotCacheTtlMs >= 0
   ? configuredSnapshotCacheTtlMs
   : 250;
-const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS);
+const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS, async (baseURL) => {
+  return (await runeliteApi(baseURL).get("/snapshot")).data as RuneLiteSnapshot;
+});
 
 function runeliteApi(baseURL = selectedRuneliteApi) {
   return axios.create({
@@ -45,10 +47,6 @@ function errorText(action: string, e: any): string {
   const status = e?.response?.status ? ` HTTP ${e.response.status}` : "";
   const responseData = e?.response?.data ? ` ${JSON.stringify(e.response.data)}` : "";
   return `Error ${action}:${status} ${e?.message ?? String(e)}${responseData}`;
-}
-
-function apiBaseFromPort(port: number): string {
-  return `http://localhost:${port}/api`;
 }
 
 function runeliteApiForPort(port?: number) {
