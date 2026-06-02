@@ -64,6 +64,7 @@ npm run smoke:planner
 npm run smoke:agent-context
 npm run smoke:agent-memory
 npm run smoke:knowledge
+npm run smoke:semantic
 npm run smoke:runtime-modules
 npm run smoke:navigation
 npm run smoke:mcp
@@ -93,7 +94,8 @@ For normal play loops:
 3. Use `execute_agent_step` when you want exactly one validated step to run. It defaults to `executionMode: "dry_run"` and real execution requires `executionMode: "execute"` plus `confirmExecution: "EXECUTE_ONE_STEP"`. For `perform_until` plans, it performs only one loop interaction and then returns control for verification.
 4. Use `agent_start_goal`, `agent_status`, `agent_stop`, `agent_pause`, `agent_resume`, and `agent_history` to manage an agent session. Phase 3 persists sessions/events/profile/journal rows to `osrs-mcp-server/data/agent-memory.sqlite`; inspect them with `agent_memory_status`, `agent_memory_sessions`, `memory_get_profile`, `memory_get_goal`, `memory_record_observation`, `memory_record_action`, and `osrs://memory/profile`. Use `agent_run_goal` for the bounded observe-plan-execute-verify loop; real autonomy requires `executionMode: "execute"` plus `confirmExecution: "RUN_AUTONOMY"`.
 5. Use Phase 4 curated knowledge tools before planning broad goals: `knowledge_query`, `knowledge_get_method`, `knowledge_get_location`, `knowledge_get_quest`, `knowledge_get_monster`, `knowledge_get_gear`, and `osrs://knowledge/index`. The local seed covers starter/F2P methods, locations, quests, monsters, and gear; live wiki/GE sync is intentionally future work.
-6. Use Universal Activity tools for bounded player-like actions: `skill_interact`, `skill_acquire`, `skill_train`, `skill_travel`, `skill_combat`, `skill_manage_inventory`, and `skill_earn_gp`. Phase 1 supports log acquisition/woodcutting and simple NPC combat first; unsupported domains return explicit blockers.
+6. Use Phase 5 semantic interface tools for complex UI and quest planning: `get_semantic_interface`, `semantic_find_control`, `semantic_invoke_control`, `quest_plan_next_step`, `complete_quest`, and `osrs://semantic/interface`. Phase 5 V1 plans Tutorial Island/Cook's Assistant and executes at most one explicitly armed dialogue/widget step.
+7. Use Universal Activity tools for bounded player-like actions: `skill_interact`, `skill_acquire`, `skill_train`, `skill_travel`, `skill_combat`, `skill_manage_inventory`, and `skill_earn_gp`. Phase 1 supports log acquisition/woodcutting and simple NPC combat first; unsupported domains return explicit blockers.
 6. Use `get_agent_context` when you only need the compact state bundle: identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
 7. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything. It covers common safe routines such as woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
 8. Use `prepare_agent_step` when you want the next plan packaged with safety flags, the first action, baseline guidance, and verification guidance.

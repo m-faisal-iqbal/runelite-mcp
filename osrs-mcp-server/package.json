@@ -14,6 +14,7 @@
     "smoke:agent-context": "node scripts/smoke-agent-context.mjs",
     "smoke:agent-memory": "node scripts/smoke-agent-memory.mjs",
     "smoke:knowledge": "node scripts/smoke-knowledge.mjs",
+    "smoke:semantic": "node scripts/smoke-semantic.mjs",
     "smoke:runtime-modules": "node scripts/smoke-runtime-modules.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"

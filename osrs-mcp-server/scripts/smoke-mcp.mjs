@@ -31,6 +31,11 @@ const requiredTools = [
   "knowledge_get_quest",
   "knowledge_get_monster",
   "knowledge_get_gear",
+  "get_semantic_interface",
+  "semantic_find_control",
+  "semantic_invoke_control",
+  "quest_plan_next_step",
+  "complete_quest",
   "skill_interact",
   "skill_acquire",
   "skill_train",
@@ -68,6 +73,7 @@ const requiredResources = [
   "osrs://client/identity",
   "osrs://memory/profile",
   "osrs://knowledge/index",
+  "osrs://semantic/interface",
 ];
 
 const requiredPrompts = [

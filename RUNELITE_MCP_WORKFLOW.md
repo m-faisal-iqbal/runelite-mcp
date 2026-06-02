@@ -28,6 +28,9 @@ This project has two parts:
 - `cd osrs-mcp-server && npm run smoke:knowledge`
   Verifies the Phase 4 curated local knowledge tools/resources, including a `50 Magic` method query with dependency milestones.
 
+- `cd osrs-mcp-server && npm run smoke:semantic`
+  Verifies the Phase 5 semantic interface mapper, quest next-step planner, and MCP tool/resource registration.
+
 - `cd osrs-mcp-server && npm run smoke:runtime-modules`
   Runs synthetic checks for client selection and plugin runtime diagnostics after modularization.
 
@@ -71,6 +74,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - Use `execute_agent_step` for exactly one validated step. It defaults to dry-run; real execution requires `executionMode: "execute"` and `confirmExecution: "EXECUTE_ONE_STEP"`, captures a baseline by default, and returns post-action verification guidance. For `perform_until` plans it performs one loop interaction only, not the whole loop.
 - Use `agent_start_goal`, `agent_status`, `agent_stop`, `agent_pause`, `agent_resume`, and `agent_history` for the agent gateway. Phase 3 persists sessions/events/profile/journal rows to `osrs-mcp-server/data/agent-memory.sqlite`; use `agent_memory_status`, `agent_memory_sessions`, `memory_get_profile`, `memory_get_goal`, `memory_record_observation`, `memory_record_action`, and `osrs://memory/profile` to inspect restored history. Use `agent_run_goal` for the bounded observe-plan-execute-verify loop; real autonomy requires `executionMode: "execute"` plus `confirmExecution: "RUN_AUTONOMY"`.
 - Use Phase 4 curated knowledge tools before broad planning: `knowledge_query`, `knowledge_get_method`, `knowledge_get_location`, `knowledge_get_quest`, `knowledge_get_monster`, `knowledge_get_gear`, and `osrs://knowledge/index`. The local seed is a deterministic starter/F2P foundation; live wiki/GE sync comes later.
+- Use Phase 5 semantic interface tools for complex UI and quest planning: `get_semantic_interface`, `semantic_find_control`, `semantic_invoke_control`, `quest_plan_next_step`, `complete_quest`, and `osrs://semantic/interface`. Phase 5 V1 plans Tutorial Island/Cook's Assistant and executes at most one explicitly armed dialogue/widget step.
 - Use bounded Universal Activity tools for player-like actions: `skill_interact`, `skill_acquire`, `skill_train`, `skill_travel`, and `skill_combat`. Phase 1 supports log acquisition/woodcutting and simple NPC combat first; broader inventory, economy, and global travel policies return explicit blockers.
 - Use `get_agent_context` before planning a gameplay action. It returns one compact orientation bundle with runtime readiness, player state, risks, inventory, nearby targets, dialogue, chat, and recommended next checks.
 - Use `plan_next_action` when you want a conservative ordered list of MCP tool calls for the current objective without executing anything. It currently plans common routines for woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.

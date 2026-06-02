@@ -14,6 +14,7 @@ import { getKnowledgeRecord, getMethodKnowledge, knowledgeSummary, queryKnowledg
 import { discoverClients as discoverRuntimeClients, selectDiscoveredClient } from "./client-discovery.js";
 import { diagnoseClientRuntime as diagnoseRuntimeClient, EXPECTED_PLUGIN_API_VERSION } from "./runtime-diagnostics.js";
 import { chooseLocalPathStep, tileDistance, withStraightLineFallback } from "./navigation.js";
+import { buildSemanticInterface, findSemanticControls, planQuestStep } from "./semantic-interface.js";
 const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
 mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
     ? configuredMouseSpeed
@@ -46,6 +47,7 @@ const agentMemory = new AgentMemoryStore();
 let agentMemoryLoaded = false;
 const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
 const RUN_AUTONOMY_CONFIRMATION = "RUN_AUTONOMY";
+const EXECUTE_SEMANTIC_CONTROL_CONFIRMATION = "EXECUTE_SEMANTIC_CONTROL";
 const EXECUTABLE_AGENT_TOOLS = new Set([
     "invoke_menu_action",
     "invoke_walk_action",
@@ -133,6 +135,39 @@ async function getSnapshotForTarget(target = {}, force = false) {
     return {
         baseURL,
         snapshot: await getSnapshotForBase(baseURL, force),
+    };
+}
+async function getSemanticInterfaceForTarget(target = {}, args = {}) {
+    const baseURL = await resolveRuneliteApi(target);
+    const snapshot = await getSnapshotForBase(baseURL, args.forceRefresh ?? true);
+    let widgets = [];
+    let widgetError;
+    try {
+        const res = await runeliteApi(baseURL).get("/widgets", {
+            params: {
+                filter: args.widgetFilter,
+                includeHidden: args.includeHidden ?? false,
+                maxWidgets: Math.max(1, Math.min(500, args.maxWidgets ?? 150)),
+                maxDepth: 8,
+            },
+        });
+        widgets = Array.isArray(res.data?.widgets)
+            ? res.data.widgets
+            : Array.isArray(res.data)
+                ? res.data
+                : Array.isArray(res.data?.actionWidgets)
+                    ? res.data.actionWidgets
+                    : [];
+    }
+    catch (error) {
+        widgetError = error?.message ?? String(error);
+    }
+    return {
+        baseURL,
+        snapshot,
+        widgets,
+        widgetError,
+        semantic: buildSemanticInterface(snapshot, widgets),
     };
 }
 async function getPathfindingStatusForTarget(target = {}) {
@@ -3233,6 +3268,323 @@ server.tool("memory_record_action", "Record a durable action result, lesson, or 
         data,
         persistence: await agentMemory.status(),
     });
+});
+server.registerResource("semantic-interface", "osrs://semantic/interface", {
+    title: "Semantic OSRS Interface",
+    description: "Phase 5 semantic controls inferred from the latest snapshot and visible widgets.",
+    mimeType: "application/json",
+}, async () => {
+    const uri = "osrs://semantic/interface";
+    try {
+        const semantic = await getSemanticInterfaceForTarget({}, { forceRefresh: true, maxWidgets: 150 });
+        return resourceText(uri, {
+            status: "SEMANTIC_READY",
+            baseURL: semantic.baseURL,
+            widgetError: semantic.widgetError,
+            semantic: semantic.semantic,
+        });
+    }
+    catch (error) {
+        return resourceText(uri, {
+            status: "SEMANTIC_UNAVAILABLE",
+            error: error?.message ?? String(error),
+        });
+    }
+});
+server.tool("get_semantic_interface", "Read Phase 5 semantic controls inferred from dialogue, inventory/equipment, interface summary, and visible widgets.", {
+    widgetFilter: z.string().optional().describe("Optional widget text/action/id filter such as continue, quest, bank, spell, prayer"),
+    maxWidgets: z.number().optional().describe("Maximum raw widgets to inspect, default 150"),
+    includeHidden: z.boolean().optional().describe("Include hidden widgets, default false"),
+    forceRefresh: z.boolean().optional().describe("Force a fresh snapshot, default true"),
+    ...clientTargetSchema(),
+}, async ({ widgetFilter, maxWidgets, includeHidden, forceRefresh, instanceId, playerName, port }) => {
+    try {
+        const result = await getSemanticInterfaceForTarget({ instanceId, playerName, port }, {
+            widgetFilter,
+            maxWidgets,
+            includeHidden,
+            forceRefresh,
+        });
+        return jsonTool({
+            status: "SEMANTIC_READY",
+            willExecute: false,
+            executed: false,
+            baseURL: result.baseURL,
+            widgetCount: result.widgets.length,
+            widgetError: result.widgetError,
+            semantic: result.semantic,
+            resource: "osrs://semantic/interface",
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("building semantic interface", e) }] };
+    }
+});
+server.tool("semantic_find_control", "Find named semantic controls by type/text/role without executing anything.", {
+    type: z.string().optional().describe("Control type, for example dialogue_continue, dialogue_option, bank_action, spell, prayer, quest_widget"),
+    text: z.string().optional().describe("Case-insensitive label/text substring"),
+    role: z.string().optional().describe("Role substring such as continue, deposit, withdraw, quest"),
+    limit: z.number().optional().describe("Maximum controls, default 20"),
+    widgetFilter: z.string().optional().describe("Optional raw widget filter before semantic classification"),
+    ...clientTargetSchema(),
+}, async ({ type, text, role, limit, widgetFilter, instanceId, playerName, port }) => {
+    try {
+        const result = await getSemanticInterfaceForTarget({ instanceId, playerName, port }, { widgetFilter, forceRefresh: true });
+        const controls = findSemanticControls(result.semantic, { type, text, role, limit });
+        return jsonTool({
+            status: "SEMANTIC_CONTROLS_FOUND",
+            willExecute: false,
+            executed: false,
+            query: { type, text, role, limit, widgetFilter },
+            controls,
+            semanticSummary: {
+                dialogue: result.semantic.dialogue,
+                groups: result.semantic.groups,
+                recommendedNext: result.semantic.recommendedNext,
+            },
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("finding semantic controls", e) }] };
+    }
+});
+server.tool("semantic_invoke_control", `Validate or execute one semantic control. Defaults to dry-run; real execution requires confirmExecution='${EXECUTE_SEMANTIC_CONTROL_CONFIRMATION}' and uses only keyboard dialogue or in-client widget action paths.`, {
+    controlId: z.string().optional().describe("Semantic control id from get_semantic_interface/semantic_find_control"),
+    type: z.string().optional().describe("Control type to select when controlId is omitted"),
+    text: z.string().optional().describe("Text substring to select when controlId is omitted"),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    confirmExecution: z.string().optional().describe(`Required for executionMode=execute: ${EXECUTE_SEMANTIC_CONTROL_CONFIRMATION}`),
+    widgetFilter: z.string().optional(),
+    tickAligned: z.boolean().optional(),
+    tickTimeoutMs: z.number().optional(),
+    ...clientTargetSchema(),
+}, async ({ controlId, type, text, executionMode, confirmExecution, widgetFilter, tickAligned, tickTimeoutMs, instanceId, playerName, port }) => {
+    try {
+        const wantsExecution = executionMode === "execute";
+        const semanticResult = await getSemanticInterfaceForTarget({ instanceId, playerName, port }, { widgetFilter, forceRefresh: true });
+        const control = controlId
+            ? semanticResult.semantic.controls.find((candidate) => candidate.id === controlId)
+            : findSemanticControls(semanticResult.semantic, { type, text, limit: 1 })[0];
+        if (!control) {
+            return jsonTool({
+                status: "SEMANTIC_CONTROL_NOT_FOUND",
+                willExecute: false,
+                executed: false,
+                selectedControl: null,
+                stopReason: "No semantic control matched the requested id/type/text.",
+                semanticSummary: { dialogue: semanticResult.semantic.dialogue, groups: semanticResult.semantic.groups },
+            });
+        }
+        if (!wantsExecution) {
+            return jsonTool({
+                status: "SEMANTIC_DRY_RUN_READY",
+                willExecute: false,
+                executed: false,
+                selectedControl: control,
+                action: control.action,
+                armingRequired: EXECUTE_SEMANTIC_CONTROL_CONFIRMATION,
+            });
+        }
+        if (confirmExecution !== EXECUTE_SEMANTIC_CONTROL_CONFIRMATION) {
+            return jsonTool({
+                status: "SEMANTIC_NOT_ARMED",
+                willExecute: false,
+                executed: false,
+                selectedControl: control,
+                requiredConfirmation: EXECUTE_SEMANTIC_CONTROL_CONFIRMATION,
+                stopReason: "executionMode='execute' was requested, but the semantic-control arming phrase was missing or incorrect.",
+            });
+        }
+        let actionResult;
+        if (control.type === "dialogue_continue") {
+            await keyboard.type(Key.Space);
+            actionResult = { success: true, method: "keyboard_space" };
+        }
+        else if (control.type === "dialogue_option") {
+            const match = control.id.match(/dialogue\.option\.(\d+)/);
+            const optionNumber = match ? Number(match[1]) : undefined;
+            if (!optionNumber || optionNumber < 1 || optionNumber > 9) {
+                return jsonTool({
+                    status: "SEMANTIC_EXECUTION_BLOCKED",
+                    willExecute: false,
+                    executed: false,
+                    selectedControl: control,
+                    stopReason: "Dialogue option execution supports number-key options 1-9 only in Phase 5 V1.",
+                });
+            }
+            await keyboard.type(String(optionNumber));
+            actionResult = { success: true, method: "keyboard_dialogue_option", optionNumber };
+        }
+        else if (control.widget?.packedId || (control.widget?.groupId !== undefined && control.widget?.childId !== undefined)) {
+            actionResult = await invokeWidgetAction(semanticResult.baseURL, {
+                packedId: control.widget.packedId,
+                groupId: control.widget.groupId,
+                childId: control.widget.childId,
+                itemId: control.widget.itemId,
+                option: control.widget.actions?.[0] ?? control.action?.arguments?.option ?? "Select",
+                dryRun: false,
+                tickAligned,
+                tickTimeoutMs,
+            });
+        }
+        else {
+            return jsonTool({
+                status: "SEMANTIC_EXECUTION_BLOCKED",
+                willExecute: false,
+                executed: false,
+                selectedControl: control,
+                stopReason: "This semantic control has no supported keyboard or in-client widget action path.",
+            });
+        }
+        const after = await getSnapshotForBase(semanticResult.baseURL, true);
+        return jsonTool({
+            status: "SEMANTIC_EXECUTED",
+            willExecute: true,
+            executed: true,
+            selectedControl: control,
+            actionResult,
+            verification: {
+                postDialogueType: after.interfaceSummary?.dialogueType ?? after.dialogue?.type,
+                postDialogueText: after.dialogue?.text,
+                postInterfaceSummary: after.interfaceSummary,
+            },
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("invoking semantic control", e) }] };
+    }
+});
+server.tool("quest_plan_next_step", "Plan the next safe quest/dialogue step using Phase 5 semantic interface controls and curated quest knowledge. This tool never executes.", {
+    questName: z.string().describe("Quest name, for example Tutorial Island or Cook's Assistant"),
+    widgetFilter: z.string().optional().describe("Optional widget filter, default quest/dialogue relevant widgets"),
+    ...clientTargetSchema(),
+}, async ({ questName, widgetFilter, instanceId, playerName, port }) => {
+    try {
+        const semanticResult = await getSemanticInterfaceForTarget({ instanceId, playerName, port }, {
+            widgetFilter: widgetFilter ?? "quest continue option cook guide",
+            forceRefresh: true,
+            maxWidgets: 200,
+        });
+        const questKnowledge = getKnowledgeRecord("quest", questName);
+        const plan = planQuestStep({
+            questName,
+            snapshot: semanticResult.snapshot,
+            semanticInterface: semanticResult.semantic,
+            questKnowledge,
+        });
+        return jsonTool({
+            status: plan.status,
+            willExecute: false,
+            executed: false,
+            questName,
+            questKnowledge,
+            semanticSummary: {
+                dialogue: semanticResult.semantic.dialogue,
+                groups: semanticResult.semantic.groups,
+                recommendedNext: semanticResult.semantic.recommendedNext,
+            },
+            plan,
+            executionRule: "quest_plan_next_step never executes. Use semantic_invoke_control, handle_dialogue, or existing activity tools for one verified action at a time.",
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("planning quest step", e) }] };
+    }
+});
+server.tool("complete_quest", "Phase 5 V1 quest engine entry point. Plans Tutorial Island/Cook's Assistant next steps with semantic controls; execution is one-step and explicitly armed.", {
+    questName: z.string().describe("Quest name, for example Tutorial Island or Cook's Assistant"),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    confirmExecution: z.string().optional().describe(`Required only for the limited one-step semantic execution path: ${EXECUTE_SEMANTIC_CONTROL_CONFIRMATION}`),
+    maxSteps: z.number().optional().describe("Maximum quest steps for this call. Phase 5 V1 executes at most 1; dry-run previews one step."),
+    ...clientTargetSchema(),
+}, async ({ questName, executionMode, confirmExecution, maxSteps, instanceId, playerName, port }) => {
+    try {
+        const semanticResult = await getSemanticInterfaceForTarget({ instanceId, playerName, port }, {
+            widgetFilter: "quest continue option cook guide",
+            forceRefresh: true,
+            maxWidgets: 200,
+        });
+        const questKnowledge = getKnowledgeRecord("quest", questName);
+        const plan = planQuestStep({
+            questName,
+            snapshot: semanticResult.snapshot,
+            semanticInterface: semanticResult.semantic,
+            questKnowledge,
+        });
+        const wantsExecution = executionMode === "execute";
+        const executableDialogue = plan.selectedStep?.tool === "handle_dialogue" && semanticResult.semantic.controls.some((control) => control.type === "dialogue_continue" || control.type === "dialogue_option");
+        if (!wantsExecution) {
+            return jsonTool({
+                status: "QUEST_DRY_RUN_READY",
+                willExecute: false,
+                executed: false,
+                questName,
+                maxSteps: Math.min(1, maxSteps ?? 1),
+                plan,
+                semanticControls: semanticResult.semantic.controls.slice(0, 20),
+                questKnowledge,
+                armingRequired: EXECUTE_SEMANTIC_CONTROL_CONFIRMATION,
+            });
+        }
+        if (confirmExecution !== EXECUTE_SEMANTIC_CONTROL_CONFIRMATION) {
+            return jsonTool({
+                status: "QUEST_NOT_ARMED",
+                willExecute: false,
+                executed: false,
+                questName,
+                plan,
+                requiredConfirmation: EXECUTE_SEMANTIC_CONTROL_CONFIRMATION,
+                stopReason: "Quest execution requires explicit arming and runs at most one semantic/dialogue step in Phase 5 V1.",
+            });
+        }
+        if (!executableDialogue) {
+            return jsonTool({
+                status: "QUEST_EXECUTION_BLOCKED",
+                willExecute: false,
+                executed: false,
+                questName,
+                plan,
+                stopReason: "Phase 5 V1 can execute only an already-open dialogue continue/option step. Use the planned existing tool manually for other phases.",
+            });
+        }
+        const dialogueControl = semanticResult.semantic.controls.find((control) => control.type === "dialogue_option")
+            ?? semanticResult.semantic.controls.find((control) => control.type === "dialogue_continue");
+        if (!dialogueControl) {
+            return jsonTool({
+                status: "QUEST_EXECUTION_BLOCKED",
+                willExecute: false,
+                executed: false,
+                questName,
+                plan,
+                stopReason: "No executable dialogue semantic control is visible.",
+            });
+        }
+        if (dialogueControl.type === "dialogue_option") {
+            const optionNumber = Number(dialogueControl.id.match(/dialogue\.option\.(\d+)/)?.[1]);
+            await keyboard.type(String(optionNumber));
+        }
+        else {
+            await keyboard.type(Key.Space);
+        }
+        const after = await getSnapshotForBase(semanticResult.baseURL, true);
+        return jsonTool({
+            status: "QUEST_EXECUTED_ONE_STEP",
+            willExecute: true,
+            executed: true,
+            questName,
+            selectedControl: dialogueControl,
+            plan,
+            verification: {
+                postDialogueType: after.interfaceSummary?.dialogueType ?? after.dialogue?.type,
+                postDialogueText: after.dialogue?.text,
+                postInterfaceSummary: after.interfaceSummary,
+            },
+            stopReason: "Phase 5 V1 executed one dialogue step only; re-plan before continuing.",
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running quest engine", e) }] };
+    }
 });
 server.tool("agent_run_goal", `Run a bounded Phase 2 observe-plan-execute-verify loop for an agent goal. Defaults to dry-run; real execution requires confirmExecution='${RUN_AUTONOMY_CONFIRMATION}'.`, {
     goal: z.string().optional().describe("High-level gameplay goal. Required unless sessionId points to an existing session."),
