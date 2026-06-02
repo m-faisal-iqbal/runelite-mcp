@@ -38,6 +38,8 @@ const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS, async (
     return (await runeliteApi(baseURL).get("/snapshot")).data;
 });
 const actionBaselines = new Map();
+const agentSessions = new Map();
+let activeAgentSessionId;
 const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
 const EXECUTABLE_AGENT_TOOLS = new Set([
     "invoke_menu_action",
@@ -1472,6 +1474,233 @@ async function executeAgentStepAction(baseURL, step, target, args) {
         option: stepArgs.option,
     });
 }
+function makeAgentSessionId() {
+    return `agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function publicAgentSession(session) {
+    if (!session) {
+        return null;
+    }
+    return {
+        id: session.id,
+        goal: session.goal,
+        status: session.status,
+        executionMode: session.executionMode,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        selectedClient: session.selectedClient,
+        stepCount: session.stepCount,
+        stopReason: session.stopReason,
+        historyCount: session.history.length,
+        lastEvents: session.history.slice(-10),
+    };
+}
+function getAgentSession(sessionId) {
+    if (sessionId) {
+        return agentSessions.get(sessionId);
+    }
+    return activeAgentSessionId ? agentSessions.get(activeAgentSessionId) : undefined;
+}
+function recordAgentEvent(session, type, data) {
+    if (!session) {
+        return;
+    }
+    session.updatedAt = Date.now();
+    session.history.push({ at: session.updatedAt, type, data });
+    if (session.history.length > 500) {
+        session.history.splice(0, session.history.length - 500);
+    }
+}
+function jsonTool(data) {
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+async function resolveActivityClient(target = {}) {
+    const clients = await discoverClients();
+    if (clients.length === 0) {
+        return {
+            status: "NO_CLIENT",
+            clients,
+            reason: "No active RuneLite MCP plugin clients were discovered on ports 8080-8090.",
+        };
+    }
+    const client = selectDiscoveredClient(clients, target, selectedRuneliteApi, selectedClientInstanceId);
+    if (!client) {
+        return {
+            status: "NEEDS_CLIENT_SELECTION",
+            clients,
+            reason: "Multiple RuneLite clients are active. Use select_client or pass port/instanceId/playerName.",
+        };
+    }
+    const baseURL = baseUrlForClient(client);
+    const targetClient = {
+        instanceId: target.instanceId ?? client.instanceId,
+        playerName: target.playerName,
+        port: target.port ?? client.port,
+    };
+    return { status: "READY", clients, client, baseURL, targetClient };
+}
+async function waitForActivityVerification(baseURL, args) {
+    const timeout = Math.max(1, args.timeoutMs ?? 8000);
+    const interval = Math.max(100, args.pollMs ?? 500);
+    let lastReport = null;
+    const startedPollingAt = Date.now();
+    while (Date.now() - startedPollingAt <= timeout) {
+        const snapshot = await getSnapshotForBase(baseURL, true);
+        lastReport = buildActionVerification(snapshot, {
+            startedAt: args.startedAt,
+            expectIdle: args.expectIdle,
+            expectedWorldX: args.expectedWorldX,
+            expectedWorldY: args.expectedWorldY,
+            expectedPlane: args.expectedPlane,
+            locationRadius: args.locationRadius,
+            chatContains: args.chatContains,
+            chatType: args.chatType,
+            caseSensitive: args.caseSensitive,
+            inventoryItemName: args.inventoryItemName,
+            inventoryItemId: args.inventoryItemId,
+            inventoryQuantityAtLeast: args.inventoryQuantityAtLeast,
+            inventoryQuantityChangedFrom: args.inventoryQuantityChangedFrom,
+            entityType: args.entityType,
+            entityName: args.entityName,
+            entityId: args.entityId,
+            requireEntityVisible: args.requireEntityVisible,
+            dialogueType: args.dialogueType,
+        });
+        if (lastReport.ok) {
+            return { verified: true, waitedMs: Date.now() - startedPollingAt, ...lastReport };
+        }
+        await sleep(interval);
+    }
+    return { verified: false, waitedMs: Date.now() - startedPollingAt, ...lastReport };
+}
+async function runActivityStep(args) {
+    const executionMode = args.executionMode ?? "dry_run";
+    const wantsExecution = executionMode === "execute";
+    const resolved = await resolveActivityClient(args.target ?? {});
+    if (resolved.status !== "READY") {
+        const result = {
+            status: resolved.status,
+            willExecute: false,
+            executed: false,
+            selectedStep: args.step,
+            verification: { verified: false, reason: resolved.reason },
+            stopReason: resolved.reason,
+            clients: resolved.clients,
+        };
+        recordAgentEvent(args.session, `${args.label}:blocked`, result);
+        return result;
+    }
+    const baseURL = resolved.baseURL;
+    const targetClient = resolved.targetClient;
+    const beforeSnapshot = await getSnapshotForBase(baseURL, true);
+    const validation = await validatePreparedStep(baseURL, beforeSnapshot, args.step, {
+        dryRunRawActions: true,
+        maxAgeMs: args.maxAgeMs,
+    });
+    if (!validation.valid) {
+        const result = {
+            status: "EXECUTION_BLOCKED",
+            willExecute: false,
+            executed: false,
+            selectedStep: args.step,
+            validation,
+            verification: { verified: false, reason: validation.reason },
+            stopReason: validation.reason,
+        };
+        recordAgentEvent(args.session, `${args.label}:blocked`, result);
+        return result;
+    }
+    if (!wantsExecution) {
+        const actionResult = await dryRunAgentStep(baseURL, args.step, targetClient);
+        const result = {
+            status: "DRY_RUN_READY",
+            willExecute: false,
+            executed: false,
+            selectedStep: args.step,
+            validation,
+            actionResult,
+            verification: { verified: actionResult?.success !== false, dryRun: true },
+            stopReason: undefined,
+        };
+        recordAgentEvent(args.session, `${args.label}:dry_run`, result);
+        return result;
+    }
+    const baselineCapturedAt = Date.now();
+    actionBaselines.set(baseURL, {
+        baseURL,
+        capturedAt: baselineCapturedAt,
+        note: `${args.label}:${args.step.tool}`,
+        snapshot: beforeSnapshot,
+    });
+    const actionResult = await executeAgentStepAction(baseURL, args.step, targetClient, {
+        tickAligned: args.tickAligned,
+        tickTimeoutMs: args.tickTimeoutMs,
+    });
+    const verification = args.verification
+        ? await waitForActivityVerification(baseURL, { ...args.verification, startedAt: baselineCapturedAt })
+        : (() => {
+            return {
+                verified: true,
+                report: "No explicit verification requested beyond successful action dispatch.",
+            };
+        })();
+    const result = {
+        status: verification.verified === false ? "EXECUTED_NEEDS_REVIEW" : "EXECUTED",
+        willExecute: true,
+        executed: true,
+        selectedStep: args.step,
+        validation,
+        actionResult,
+        verification,
+        stopReason: verification.verified === false ? "VERIFICATION_FAILED" : undefined,
+    };
+    if (args.session) {
+        args.session.stepCount += 1;
+    }
+    recordAgentEvent(args.session, `${args.label}:execute`, result);
+    return result;
+}
+function treeNameForItem(itemName, method) {
+    const item = String(itemName ?? "").toLowerCase();
+    const chosenMethod = String(method ?? "").toLowerCase();
+    if (item.includes("oak") || chosenMethod.includes("oak")) {
+        return "Oak tree";
+    }
+    if (item.includes("willow") || chosenMethod.includes("willow")) {
+        return "Willow tree";
+    }
+    if (item.includes("maple") || chosenMethod.includes("maple")) {
+        return "Maple tree";
+    }
+    if (item.includes("yew") || chosenMethod.includes("yew")) {
+        return "Yew tree";
+    }
+    return "Tree";
+}
+function logsItemName(itemName) {
+    const item = String(itemName ?? "").toLowerCase();
+    if (item.includes("oak")) {
+        return "Oak logs";
+    }
+    if (item.includes("willow")) {
+        return "Willow logs";
+    }
+    if (item.includes("maple")) {
+        return "Maple logs";
+    }
+    if (item.includes("yew")) {
+        return "Yew logs";
+    }
+    return itemName ?? "Logs";
+}
+function skillLevel(snapshot, skill) {
+    const skills = snapshot.skills ?? {};
+    const exact = skills[skill];
+    const title = skills[skill.charAt(0).toUpperCase() + skill.slice(1).toLowerCase()];
+    const value = exact ?? title;
+    const level = Number(value?.level ?? value?.boostedLevel ?? value);
+    return Number.isFinite(level) ? level : undefined;
+}
 // --- State Reading Tools ---
 server.tool("get_agent_context", "Get one compact observe-plan-act context bundle: runtime freshness, player status, risks, inventory, nearby entities, dialogue, chat, and recommended next checks.", {
     objective: z.string().optional().describe("Optional current user objective, included in the response for continuity"),
@@ -2311,6 +2540,457 @@ server.tool("execute_agent_step", "Validate and optionally execute exactly one p
     }
     catch (e) {
         return { content: [{ type: "text", text: errorText("executing agent step", e) }] };
+    }
+});
+server.tool("agent_start_goal", "Create an in-memory agent goal session. This does not execute actions; Phase 2 adds full autonomous running.", {
+    goal: z.string().describe("High-level gameplay goal to track"),
+    executionMode: z.enum(["dry_run", "execute"]).optional().describe("Default execution mode for this session, default dry_run"),
+    instanceId: z.string().optional(),
+    playerName: z.string().optional(),
+    port: z.number().optional(),
+}, async ({ goal, executionMode, instanceId, playerName, port }) => {
+    const now = Date.now();
+    const session = {
+        id: makeAgentSessionId(),
+        goal,
+        status: "created",
+        executionMode: executionMode ?? "dry_run",
+        createdAt: now,
+        updatedAt: now,
+        selectedClient: { instanceId, playerName, port },
+        stepCount: 0,
+        history: [],
+    };
+    agentSessions.set(session.id, session);
+    activeAgentSessionId = session.id;
+    recordAgentEvent(session, "session_created", { goal, executionMode: session.executionMode, selectedClient: session.selectedClient });
+    return jsonTool({
+        status: "SESSION_CREATED",
+        willExecute: false,
+        executed: false,
+        session: publicAgentSession(session),
+        stopReason: undefined,
+    });
+});
+server.tool("agent_status", "Read the active in-memory agent session status, or a specific session by id.", {
+    sessionId: z.string().optional(),
+}, async ({ sessionId }) => {
+    const session = getAgentSession(sessionId);
+    return jsonTool({
+        status: session ? "SESSION_FOUND" : "NO_SESSION",
+        willExecute: false,
+        executed: false,
+        activeSessionId: activeAgentSessionId,
+        session: publicAgentSession(session),
+        stopReason: session ? session.stopReason : "No active agent session exists.",
+    });
+});
+server.tool("agent_stop", "Stop the active in-memory agent session. This is the Phase 1 emergency stop/control-plane primitive.", {
+    sessionId: z.string().optional(),
+    reason: z.string().optional(),
+}, async ({ sessionId, reason }) => {
+    const session = getAgentSession(sessionId);
+    if (!session) {
+        return jsonTool({
+            status: "NO_SESSION",
+            willExecute: false,
+            executed: false,
+            stopReason: "No active agent session exists.",
+        });
+    }
+    session.status = "stopped";
+    session.stopReason = reason ?? "Stopped by agent_stop.";
+    recordAgentEvent(session, "session_stopped", { reason: session.stopReason });
+    return jsonTool({
+        status: "SESSION_STOPPED",
+        willExecute: false,
+        executed: false,
+        session: publicAgentSession(session),
+        stopReason: session.stopReason,
+    });
+});
+server.tool("agent_pause", "Pause the active in-memory agent session. This does not affect RuneLite; it gates Phase 1 activity tools through session state.", {
+    sessionId: z.string().optional(),
+    reason: z.string().optional(),
+}, async ({ sessionId, reason }) => {
+    const session = getAgentSession(sessionId);
+    if (!session) {
+        return jsonTool({ status: "NO_SESSION", willExecute: false, executed: false, stopReason: "No active agent session exists." });
+    }
+    session.status = "paused";
+    session.stopReason = reason ?? "Paused by agent_pause.";
+    recordAgentEvent(session, "session_paused", { reason: session.stopReason });
+    return jsonTool({ status: "SESSION_PAUSED", willExecute: false, executed: false, session: publicAgentSession(session), stopReason: session.stopReason });
+});
+server.tool("agent_resume", "Resume a paused in-memory agent session. This does not start full-auto execution in Phase 1.", {
+    sessionId: z.string().optional(),
+}, async ({ sessionId }) => {
+    const session = getAgentSession(sessionId);
+    if (!session) {
+        return jsonTool({ status: "NO_SESSION", willExecute: false, executed: false, stopReason: "No active agent session exists." });
+    }
+    session.status = "running";
+    session.stopReason = undefined;
+    activeAgentSessionId = session.id;
+    recordAgentEvent(session, "session_resumed");
+    return jsonTool({ status: "SESSION_RESUMED", willExecute: false, executed: false, session: publicAgentSession(session), stopReason: undefined });
+});
+server.tool("agent_history", "Read recent in-memory agent session events.", {
+    sessionId: z.string().optional(),
+    limit: z.number().optional().describe("Maximum events to return, default 50"),
+}, async ({ sessionId, limit }) => {
+    const session = getAgentSession(sessionId);
+    const max = Math.max(1, Math.min(500, limit ?? 50));
+    return jsonTool({
+        status: session ? "SESSION_FOUND" : "NO_SESSION",
+        willExecute: false,
+        executed: false,
+        session: publicAgentSession(session),
+        events: session ? session.history.slice(-max) : [],
+        stopReason: session ? session.stopReason : "No active agent session exists.",
+    });
+});
+server.tool("skill_interact", "Universal one-step interaction with a visible NPC, object, player, or ground item through the safe agent step primitive.", {
+    entityType: z.enum(["npc", "object", "ground_item", "player"]),
+    option: z.string().describe("Menu option, for example Chop down, Attack, Talk-to, Take, Open"),
+    name: z.string().optional(),
+    id: z.number().optional(),
+    nearestToPlayer: z.boolean().optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+    maxAgeMs: z.number().optional(),
+    ...clientTargetSchema(),
+}, async ({ entityType, option, name, id, nearestToPlayer, executionMode, sessionId, maxAgeMs, instanceId, playerName, port }) => {
+    try {
+        const session = getAgentSession(sessionId);
+        if (session?.status === "stopped" || session?.status === "paused") {
+            return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
+        }
+        const selectedStep = {
+            tool: "interact_with",
+            arguments: { entityType, option, name, id, nearestToPlayer: nearestToPlayer ?? true },
+        };
+        const result = await runActivityStep({
+            label: "skill_interact",
+            step: selectedStep,
+            executionMode: executionMode ?? session?.executionMode ?? "dry_run",
+            session,
+            target: { instanceId, playerName, port },
+            maxAgeMs,
+        });
+        return jsonTool({ ...result, session: publicAgentSession(session) });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running skill_interact", e) }] };
+    }
+});
+server.tool("skill_acquire", "Acquire an item through a bounded universal activity. Phase 1 supports woodcutting/log acquisition first.", {
+    itemName: z.string().describe("Item to acquire, for example Logs, Oak logs, Willow logs"),
+    quantity: z.number().describe("Quantity to acquire in this call"),
+    method: z.string().optional().describe("Acquisition method, for example woodcutting or gather"),
+    maxSteps: z.number().optional().describe("Maximum interactions, default quantity*4 capped at 20"),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+    ...clientTargetSchema(),
+}, async ({ itemName, quantity, method, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
+    try {
+        const session = getAgentSession(sessionId);
+        if (session?.status === "stopped" || session?.status === "paused") {
+            return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
+        }
+        const normalizedMethod = String(method ?? "woodcutting").toLowerCase();
+        const item = logsItemName(itemName);
+        if (!normalizedMethod.includes("woodcut") && !normalizedMethod.includes("gather") && !String(item).toLowerCase().includes("log")) {
+            return jsonTool({
+                status: "UNSUPPORTED_ACTIVITY",
+                willExecute: false,
+                executed: false,
+                selectedStep: null,
+                verification: { verified: false },
+                stopReason: "Phase 1 skill_acquire supports log acquisition by woodcutting/gathering only.",
+                session: publicAgentSession(session),
+            });
+        }
+        const resolved = await resolveActivityClient({ instanceId, playerName, port });
+        if (resolved.status !== "READY") {
+            return jsonTool({ status: resolved.status, willExecute: false, executed: false, selectedStep: null, verification: { verified: false, reason: resolved.reason }, stopReason: resolved.reason, clients: resolved.clients, session: publicAgentSession(session) });
+        }
+        const baseURL = resolved.baseURL;
+        const startedSnapshot = await getSnapshotForBase(baseURL, true);
+        const startQuantity = inventoryQuantity(startedSnapshot, item);
+        const targetQuantity = startQuantity + Math.max(1, quantity);
+        const mode = executionMode ?? session?.executionMode ?? "dry_run";
+        const limit = mode === "execute" ? Math.max(1, Math.min(20, maxSteps ?? Math.max(1, quantity * 4))) : 1;
+        const attempts = [];
+        let finalQuantity = startQuantity;
+        let stopReason;
+        for (let attempt = 0; attempt < limit; attempt += 1) {
+            const currentSnapshot = await getSnapshotForBase(baseURL, true);
+            const currentQuantity = inventoryQuantity(currentSnapshot, item);
+            finalQuantity = currentQuantity;
+            if (currentQuantity >= targetQuantity) {
+                break;
+            }
+            const selectedStep = {
+                tool: "perform_until",
+                arguments: {
+                    actionEntityType: "object",
+                    actionName: treeNameForItem(itemName, method),
+                    actionOption: "Chop down",
+                    nearestToPlayer: true,
+                    condition: "inventory_quantity_at_least",
+                    inventoryItemName: item,
+                    inventoryQuantityAtLeast: targetQuantity,
+                },
+            };
+            const result = await runActivityStep({
+                label: "skill_acquire",
+                step: selectedStep,
+                executionMode: mode,
+                session,
+                target: { instanceId, playerName, port },
+                verification: {
+                    startedAt: Date.now(),
+                    inventoryItemName: item,
+                    inventoryQuantityAtLeast: Math.min(targetQuantity, currentQuantity + 1),
+                    timeoutMs: 14000,
+                    pollMs: 700,
+                },
+            });
+            attempts.push(result);
+            if (mode !== "execute") {
+                stopReason = "DRY_RUN_ONLY";
+                break;
+            }
+            if (result.stopReason) {
+                stopReason = result.stopReason;
+                break;
+            }
+            finalQuantity = inventoryQuantity(await getSnapshotForBase(baseURL, true), item);
+        }
+        const completed = finalQuantity >= targetQuantity;
+        return jsonTool({
+            status: completed ? "ACTIVITY_COMPLETED" : mode === "execute" ? "ACTIVITY_INCOMPLETE" : "DRY_RUN_READY",
+            willExecute: mode === "execute",
+            executed: attempts.some((attempt) => attempt.executed),
+            itemName: item,
+            quantityRequested: quantity,
+            startQuantity,
+            targetQuantity,
+            finalQuantity,
+            attempts,
+            selectedStep: attempts.at(-1)?.selectedStep ?? null,
+            verification: attempts.at(-1)?.verification ?? { verified: completed },
+            stopReason: completed ? undefined : stopReason ?? "Target quantity was not reached within maxSteps.",
+            session: publicAgentSession(session),
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running skill_acquire", e) }] };
+    }
+});
+server.tool("skill_train", "Train a skill through a bounded universal activity. Phase 1 supports woodcutting via log acquisition.", {
+    skill: z.string().describe("Skill name, for example woodcutting"),
+    targetLevel: z.number().optional(),
+    targetXp: z.number().optional(),
+    method: z.string().optional(),
+    maxSteps: z.number().optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+    ...clientTargetSchema(),
+}, async ({ skill, targetLevel, targetXp, method, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
+    try {
+        const normalizedSkill = skill.toLowerCase();
+        const session = getAgentSession(sessionId);
+        if (normalizedSkill !== "woodcutting") {
+            return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "Phase 1 skill_train supports woodcutting first.", session: publicAgentSession(session) });
+        }
+        const resolved = await resolveActivityClient({ instanceId, playerName, port });
+        if (resolved.status !== "READY") {
+            return jsonTool({ status: resolved.status, willExecute: false, executed: false, selectedStep: null, verification: { verified: false, reason: resolved.reason }, stopReason: resolved.reason, clients: resolved.clients, session: publicAgentSession(session) });
+        }
+        const snapshot = await getSnapshotForBase(resolved.baseURL, true);
+        const currentLevel = skillLevel(snapshot, normalizedSkill);
+        if (targetLevel !== undefined && currentLevel !== undefined && currentLevel >= targetLevel) {
+            return jsonTool({ status: "ACTIVITY_COMPLETED", willExecute: false, executed: false, currentLevel, targetLevel, selectedStep: null, verification: { verified: true, reason: "Target level is already reached." }, stopReason: undefined, session: publicAgentSession(session) });
+        }
+        const result = await runActivityStep({
+            label: "skill_train",
+            step: {
+                tool: "perform_until",
+                arguments: {
+                    actionEntityType: "object",
+                    actionName: treeNameForItem(undefined, method),
+                    actionOption: "Chop down",
+                    nearestToPlayer: true,
+                    condition: "inventory_full",
+                },
+            },
+            executionMode: executionMode ?? session?.executionMode ?? "dry_run",
+            session,
+            target: { instanceId, playerName, port },
+            verification: {
+                startedAt: Date.now(),
+                inventoryItemName: logsItemName(method),
+                inventoryQuantityAtLeast: inventoryQuantity(snapshot, logsItemName(method)) + 1,
+                timeoutMs: 14000,
+                pollMs: 700,
+            },
+        });
+        return jsonTool({ ...result, skill: normalizedSkill, currentLevel, targetLevel, targetXp, session: publicAgentSession(session) });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running skill_train", e) }] };
+    }
+});
+server.tool("skill_travel", "Travel to a local-scene world tile through the safe walk action primitive. Named/global destinations arrive in Phase 6.", {
+    destinationName: z.string().optional(),
+    worldX: z.number().optional(),
+    worldY: z.number().optional(),
+    plane: z.number().optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+    ...clientTargetSchema(),
+}, async ({ destinationName, worldX, worldY, plane, executionMode, sessionId, instanceId, playerName, port }) => {
+    try {
+        const session = getAgentSession(sessionId);
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+            return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "Phase 1 skill_travel requires worldX/worldY. Named/global destinations arrive in Phase 6.", destinationName, session: publicAgentSession(session) });
+        }
+        const result = await runActivityStep({
+            label: "skill_travel",
+            step: { tool: "invoke_walk_action", arguments: { worldX, worldY, plane } },
+            executionMode: executionMode ?? session?.executionMode ?? "dry_run",
+            session,
+            target: { instanceId, playerName, port },
+            verification: { startedAt: Date.now(), expectedWorldX: worldX, expectedWorldY: worldY, expectedPlane: plane, locationRadius: 1, timeoutMs: 10000, pollMs: 500 },
+        });
+        return jsonTool({ ...result, destinationName, session: publicAgentSession(session) });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running skill_travel", e) }] };
+    }
+});
+server.tool("skill_manage_inventory", "Phase 1 inventory abstraction placeholder with safe status reporting. Concrete bank/drop/eat policies are added after live bridge stabilization.", {
+    action: z.enum(["deposit_all", "keep_only", "use_on_target", "eat_when_low", "drop"]),
+    itemName: z.string().optional(),
+    quantity: z.number().optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+    ...clientTargetSchema(),
+}, async ({ action, itemName, quantity, executionMode, sessionId }) => {
+    const session = getAgentSession(sessionId);
+    return jsonTool({
+        status: "UNSUPPORTED_ACTIVITY",
+        willExecute: executionMode === "execute",
+        executed: false,
+        selectedStep: null,
+        verification: { verified: false },
+        action,
+        itemName,
+        quantity,
+        stopReason: "Phase 1 exposes skill_manage_inventory for the public interface, but concrete inventory policies are deferred until bank/drop/eat verification is hardened.",
+        session: publicAgentSession(session),
+    });
+});
+server.tool("skill_earn_gp", "Phase 1 GP abstraction placeholder. It can suggest log acquisition but GE/shop selling arrives in the economy phase.", {
+    amount: z.number().describe("GP amount to earn"),
+    allowedMethods: z.array(z.string()).optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+}, async ({ amount, allowedMethods, executionMode, sessionId }) => {
+    const session = getAgentSession(sessionId);
+    return jsonTool({
+        status: "PLANNED_ONLY",
+        willExecute: false,
+        executed: false,
+        selectedStep: {
+            tool: "skill_acquire",
+            arguments: { itemName: "Logs", quantity: 28, method: "woodcutting", executionMode: "dry_run" },
+        },
+        verification: { verified: false, reason: "GE/shop selling is not implemented in Phase 1." },
+        amount,
+        allowedMethods,
+        requestedExecutionMode: executionMode,
+        stopReason: "Phase 1 can gather starter resources, but earning verified GP requires the Phase 7 economy/trading module.",
+        session: publicAgentSession(session),
+    });
+});
+server.tool("skill_combat", "Fight a visible NPC through bounded Attack interactions with HP-aware verification. Looting is best-effort for nearby ground items.", {
+    target: z.string().describe("NPC target name, for example Chicken or Cow"),
+    killCount: z.number().optional().describe("Target number of attack cycles/kills, default 1"),
+    style: z.string().optional(),
+    eatThreshold: z.number().optional().describe("Stop if HP is at or below this value before the next attack"),
+    loot: z.boolean().optional(),
+    lootName: z.string().optional().describe("Ground item to take after combat, default Bones when loot=true"),
+    maxSteps: z.number().optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional(),
+    sessionId: z.string().optional(),
+    ...clientTargetSchema(),
+}, async ({ target, killCount, style, eatThreshold, loot, lootName, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
+    try {
+        const session = getAgentSession(sessionId);
+        const mode = executionMode ?? session?.executionMode ?? "dry_run";
+        const resolved = await resolveActivityClient({ instanceId, playerName, port });
+        if (resolved.status !== "READY") {
+            return jsonTool({ status: resolved.status, willExecute: false, executed: false, selectedStep: null, verification: { verified: false, reason: resolved.reason }, stopReason: resolved.reason, clients: resolved.clients, session: publicAgentSession(session) });
+        }
+        const limit = mode === "execute" ? Math.max(1, Math.min(20, maxSteps ?? killCount ?? 1)) : 1;
+        const attempts = [];
+        let stopReason;
+        for (let attempt = 0; attempt < limit; attempt += 1) {
+            const snapshot = await getSnapshotForBase(resolved.baseURL, true);
+            const hp = Number(snapshot.state?.health);
+            if (eatThreshold !== undefined && Number.isFinite(hp) && hp <= eatThreshold) {
+                stopReason = `HP ${hp} is at or below eatThreshold ${eatThreshold}.`;
+                break;
+            }
+            const attack = await runActivityStep({
+                label: "skill_combat",
+                step: { tool: "interact_with", arguments: { entityType: "npc", name: target, option: "Attack", nearestToPlayer: true } },
+                executionMode: mode,
+                session,
+                target: { instanceId, playerName, port },
+                verification: { startedAt: Date.now(), expectIdle: true, timeoutMs: 25000, pollMs: 800 },
+            });
+            attempts.push({ type: "attack", ...attack });
+            if (mode !== "execute") {
+                stopReason = "DRY_RUN_ONLY";
+                break;
+            }
+            if (attack.stopReason) {
+                stopReason = attack.stopReason;
+                break;
+            }
+            if (loot) {
+                const lootResult = await runActivityStep({
+                    label: "skill_combat_loot",
+                    step: { tool: "interact_with", arguments: { entityType: "ground_item", name: lootName ?? "Bones", option: "Take", nearestToPlayer: true } },
+                    executionMode: mode,
+                    session,
+                    target: { instanceId, playerName, port },
+                    verification: { startedAt: Date.now(), inventoryItemName: lootName ?? "Bones", inventoryQuantityAtLeast: 1, timeoutMs: 5000, pollMs: 500 },
+                    maxAgeMs: 1500,
+                });
+                attempts.push({ type: "loot", ...lootResult });
+            }
+        }
+        return jsonTool({
+            status: stopReason && stopReason !== "DRY_RUN_ONLY" ? "ACTIVITY_INCOMPLETE" : mode === "execute" ? "ACTIVITY_COMPLETED_OR_IN_PROGRESS" : "DRY_RUN_READY",
+            willExecute: mode === "execute",
+            executed: attempts.some((attempt) => attempt.executed),
+            target,
+            style,
+            killCount: killCount ?? 1,
+            attempts,
+            selectedStep: attempts.at(-1)?.selectedStep ?? null,
+            verification: attempts.at(-1)?.verification ?? { verified: false },
+            stopReason,
+            session: publicAgentSession(session),
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running skill_combat", e) }] };
     }
 });
 server.tool("get_game_state", "Get current player state, location, and health", { ...clientTargetSchema() }, async ({ instanceId, playerName, port }) => {

@@ -12,6 +12,19 @@ const requiredTools = [
   "validate_prepared_step",
   "run_agent_cycle",
   "execute_agent_step",
+  "agent_start_goal",
+  "agent_status",
+  "agent_stop",
+  "agent_pause",
+  "agent_resume",
+  "agent_history",
+  "skill_interact",
+  "skill_acquire",
+  "skill_train",
+  "skill_manage_inventory",
+  "skill_travel",
+  "skill_earn_gp",
+  "skill_combat",
   "diagnose_runtime",
   "list_clients",
   "select_client",
@@ -310,6 +323,82 @@ try {
     throw new Error(`execute_agent_step dry_run should use plugin dryRun for raw invoke actions: ${JSON.stringify(executeDryRun.actionResult)}`);
   }
 
+  const startGoalResult = await withTimeout(
+    client.callTool({
+      name: "agent_start_goal",
+      arguments: { goal: "smoke test gateway session", executionMode: "dry_run" },
+    }),
+    requestTimeoutMs,
+    "agent_start_goal",
+  );
+  const startedGoal = parseJsonToolResult(startGoalResult, "agent_start_goal");
+  if (startedGoal.status !== "SESSION_CREATED" || !startedGoal.session?.id || startedGoal.willExecute !== false) {
+    throw new Error(`Unexpected agent_start_goal result: ${JSON.stringify(startedGoal)}`);
+  }
+
+  const statusResult = await withTimeout(
+    client.callTool({ name: "agent_status", arguments: { sessionId: startedGoal.session.id } }),
+    requestTimeoutMs,
+    "agent_status",
+  );
+  const agentStatus = parseJsonToolResult(statusResult, "agent_status");
+  if (agentStatus.status !== "SESSION_FOUND" || agentStatus.session?.id !== startedGoal.session.id) {
+    throw new Error(`Unexpected agent_status result: ${JSON.stringify(agentStatus)}`);
+  }
+
+  const skillAcquireResult = await withTimeout(
+    client.callTool({
+      name: "skill_acquire",
+      arguments: {
+        itemName: "Logs",
+        quantity: 1,
+        method: "woodcutting",
+        executionMode: "dry_run",
+        sessionId: startedGoal.session.id,
+      },
+    }),
+    requestTimeoutMs,
+    "skill_acquire dry_run",
+  );
+  const skillAcquire = parseJsonToolResult(skillAcquireResult, "skill_acquire dry_run");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "DRY_RUN_READY", "ACTIVITY_COMPLETED"].includes(skillAcquire.status)) {
+    throw new Error(`Unexpected skill_acquire dry_run result: ${JSON.stringify(skillAcquire)}`);
+  }
+  if (skillAcquire.willExecute !== false || skillAcquire.executed !== false) {
+    throw new Error(`skill_acquire dry_run must not execute: ${JSON.stringify(skillAcquire)}`);
+  }
+
+  const skillCombatResult = await withTimeout(
+    client.callTool({
+      name: "skill_combat",
+      arguments: {
+        target: "Chicken",
+        killCount: 1,
+        executionMode: "dry_run",
+        sessionId: startedGoal.session.id,
+      },
+    }),
+    requestTimeoutMs,
+    "skill_combat dry_run",
+  );
+  const skillCombat = parseJsonToolResult(skillCombatResult, "skill_combat dry_run");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "DRY_RUN_READY", "ACTIVITY_COMPLETED_OR_IN_PROGRESS", "ACTIVITY_INCOMPLETE"].includes(skillCombat.status)) {
+    throw new Error(`Unexpected skill_combat dry_run result: ${JSON.stringify(skillCombat)}`);
+  }
+  if (skillCombat.willExecute !== false || skillCombat.executed !== false) {
+    throw new Error(`skill_combat dry_run must not execute: ${JSON.stringify(skillCombat)}`);
+  }
+
+  const stopGoalResult = await withTimeout(
+    client.callTool({ name: "agent_stop", arguments: { sessionId: startedGoal.session.id, reason: "smoke complete" } }),
+    requestTimeoutMs,
+    "agent_stop",
+  );
+  const stoppedGoal = parseJsonToolResult(stopGoalResult, "agent_stop");
+  if (stoppedGoal.status !== "SESSION_STOPPED" || stoppedGoal.session?.status !== "stopped") {
+    throw new Error(`Unexpected agent_stop result: ${JSON.stringify(stoppedGoal)}`);
+  }
+
   let screenshotChecked = false;
   let observeScreenshotChecked = false;
   let pathfindingStatusChecked = false;
@@ -400,6 +489,9 @@ try {
     observeStatus: observation.status,
     cycleStatus: cycle.status,
     executeDryRunStatus: executeDryRun.status,
+    agentSessionStatus: agentStatus.session.status,
+    skillAcquireStatus: skillAcquire.status,
+    skillCombatStatus: skillCombat.status,
     planStatus: plan.status,
     prepareStatus: prepared.status,
     validateStatus: validated.status,

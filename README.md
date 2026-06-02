@@ -89,22 +89,24 @@ For normal play loops:
 1. Start with `observe_game` when you want the AI's whole read-only perception packet in one call: compact context, optional plan/package, and optional screenshot metadata/image. It never executes actions.
 2. Use `run_agent_cycle` for one safe control-loop pass: observe, plan, select the next step, and validate it without executing.
 3. Use `execute_agent_step` when you want exactly one validated step to run. It defaults to `executionMode: "dry_run"` and real execution requires `executionMode: "execute"` plus `confirmExecution: "EXECUTE_ONE_STEP"`. For `perform_until` plans, it performs only one loop interaction and then returns control for verification.
-4. Use `get_agent_context` when you only need the compact state bundle: identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
-5. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything. It covers common safe routines such as woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
-6. Use `prepare_agent_step` when you want the next plan packaged with safety flags, the first action, baseline guidance, and verification guidance.
-7. Use `validate_prepared_step` immediately before acting when you need a fresh target check or a `dryRun:true` validation for raw `invoke_*` params.
-8. Read `osrs://client/identity` and `osrs://snapshot/latest` when you need the full raw context.
-9. Run `diagnose_runtime` after rebuilding the plugin or when a Java endpoint reports 404; it will tell you if RuneLite is still running an older plugin copy.
-10. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.
-11. Use `perform_until` for repeated skilling loops, such as chopping until inventory full.
-12. Use `handle_dialogue` for NPC/player dialogue.
-13. Use `eat_food_when` for HP safety.
-14. For risky actions, call `mark_action_baseline` before acting, then `verify_last_action` to prove snapshot deltas such as inventory, location, dialogue, chat, or entity-count changes.
-15. Verify single expected conditions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
-16. Use `get_screenshot` or `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
-17. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
-18. Use `get_pathfinding_status` before non-trivial navigation to see whether only loaded-scene A* is available or a future global path bridge is loaded.
-19. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
+4. Use `agent_start_goal`, `agent_status`, `agent_stop`, `agent_pause`, `agent_resume`, and `agent_history` to manage a Phase 1 in-memory agent session. These tools do not run full-auto loops yet.
+5. Use Universal Activity tools for bounded player-like actions: `skill_interact`, `skill_acquire`, `skill_train`, `skill_travel`, `skill_combat`, `skill_manage_inventory`, and `skill_earn_gp`. Phase 1 supports log acquisition/woodcutting and simple NPC combat first; unsupported domains return explicit blockers.
+6. Use `get_agent_context` when you only need the compact state bundle: identity, runtime freshness, player state, risks, nearby targets, dialogue, chat, and recommended checks.
+7. Use `plan_next_action` when you want a conservative ordered tool-call plan for an objective before executing anything. It covers common safe routines such as woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
+8. Use `prepare_agent_step` when you want the next plan packaged with safety flags, the first action, baseline guidance, and verification guidance.
+9. Use `validate_prepared_step` immediately before acting when you need a fresh target check or a `dryRun:true` validation for raw `invoke_*` params.
+10. Read `osrs://client/identity` and `osrs://snapshot/latest` when you need the full raw context.
+11. Run `diagnose_runtime` after rebuilding the plugin or when a Java endpoint reports 404; it will tell you if RuneLite is still running an older plugin copy.
+12. Prefer `interact_with` or `click_*` with an `option` so the MCP server opens the context menu and invokes RuneLite's real menu params.
+13. Use `perform_until` for repeated skilling loops, such as chopping until inventory full.
+14. Use `handle_dialogue` for NPC/player dialogue.
+15. Use `eat_food_when` for HP safety.
+16. For risky actions, call `mark_action_baseline` before acting, then `verify_last_action` to prove snapshot deltas such as inventory, location, dialogue, chat, or entity-count changes.
+17. Verify single expected conditions with `verify_after_action`, `wait_until_idle`, `wait_until_location`, `wait_for_chat_message`, or `get_recent_events`.
+18. Use `get_screenshot` or `capture_canvas_screenshot` for visual confirmation around tricky widgets or suspicious coordinates.
+19. Use `get_widgets` with a narrow filter when a complex interface needs generic widget ids, actions, bounds, and click coordinates.
+20. Use `get_pathfinding_status` before non-trivial navigation to see whether only loaded-scene A* is available or a future global path bridge is loaded.
+21. Use `walk_route_to` when the destination tile is known; use `calculate_path_to` for inspection and `walk_path_to` for one cautious step.
 
 Raw `move_mouse_and_click` should be the last resort.
 
