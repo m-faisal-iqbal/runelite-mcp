@@ -41,6 +41,7 @@ const actionBaselines = new Map();
 const agentSessions = new Map();
 let activeAgentSessionId;
 const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
+const RUN_AUTONOMY_CONFIRMATION = "RUN_AUTONOMY";
 const EXECUTABLE_AGENT_TOOLS = new Set([
     "invoke_menu_action",
     "invoke_walk_action",
@@ -1491,6 +1492,9 @@ function publicAgentSession(session) {
         selectedClient: session.selectedClient,
         stepCount: session.stepCount,
         stopReason: session.stopReason,
+        goalState: session.goalState,
+        lastSelectedStep: session.lastSelectedStep,
+        lastVerification: session.lastVerification,
         historyCount: session.history.length,
         lastEvents: session.history.slice(-10),
     };
@@ -1513,6 +1517,137 @@ function recordAgentEvent(session, type, data) {
 }
 function jsonTool(data) {
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+function requestedObjectiveCount(objective) {
+    const match = String(objective ?? "").match(/\b(\d{1,3})\b/);
+    if (!match) {
+        return undefined;
+    }
+    const count = Number(match[1]);
+    return Number.isFinite(count) && count > 0 ? Math.min(count, 28) : undefined;
+}
+function objectiveInventoryItem(objective) {
+    const text = String(objective ?? "").toLowerCase();
+    if (text.includes("oak")) {
+        return "Oak logs";
+    }
+    if (text.includes("willow")) {
+        return "Willow logs";
+    }
+    if (text.includes("maple")) {
+        return "Maple logs";
+    }
+    if (text.includes("yew")) {
+        return "Yew logs";
+    }
+    if (text.includes("log") || text.includes("tree") || text.includes("chop") || text.includes("woodcut")) {
+        return "Logs";
+    }
+    if (text.includes("bone") || text.includes("chicken") || text.includes("cow") || text.includes("combat") || text.includes("kill") || text.includes("attack")) {
+        return text.includes("bone") || text.includes("loot") ? "Bones" : undefined;
+    }
+    return undefined;
+}
+function initializeSessionGoalState(session, snapshot) {
+    if (session.goalState) {
+        return;
+    }
+    const targetItemName = objectiveInventoryItem(session.goal);
+    const requestedQuantity = requestedObjectiveCount(session.goal);
+    const startQuantity = targetItemName && snapshot ? inventoryQuantity(snapshot, targetItemName) : undefined;
+    session.goalState = {
+        targetItemName,
+        requestedQuantity,
+        startQuantity,
+        targetQuantity: targetItemName && requestedQuantity !== undefined && startQuantity !== undefined
+            ? Math.min(28, startQuantity + requestedQuantity)
+            : undefined,
+    };
+}
+function evaluateSessionGoal(session, snapshot) {
+    initializeSessionGoalState(session, snapshot);
+    const targetItemName = session.goalState?.targetItemName;
+    const targetQuantity = session.goalState?.targetQuantity;
+    if (!targetItemName || targetQuantity === undefined || !snapshot) {
+        return { complete: false, reason: "No Phase 2 inventory completion heuristic applies to this objective." };
+    }
+    const currentQuantity = inventoryQuantity(snapshot, targetItemName);
+    return {
+        complete: currentQuantity >= targetQuantity,
+        targetItemName,
+        currentQuantity,
+        targetQuantity,
+        reason: currentQuantity >= targetQuantity
+            ? `${targetItemName} target reached.`
+            : `${targetItemName} ${currentQuantity}/${targetQuantity}.`,
+    };
+}
+function inferVerificationForStep(step, snapshot) {
+    const args = step?.arguments ?? {};
+    if (step?.tool === "perform_until") {
+        if (args.condition === "inventory_quantity_at_least" && (args.inventoryItemName || args.inventoryItemId)) {
+            const currentQuantity = inventoryQuantity(snapshot, args.inventoryItemName, args.inventoryItemId);
+            const requestedTarget = Number(args.inventoryQuantityAtLeast);
+            return {
+                startedAt: Date.now(),
+                inventoryItemName: args.inventoryItemName,
+                inventoryItemId: args.inventoryItemId,
+                inventoryQuantityAtLeast: Number.isFinite(requestedTarget)
+                    ? Math.min(requestedTarget, currentQuantity + 1)
+                    : currentQuantity + 1,
+                timeoutMs: 14000,
+                pollMs: 700,
+            };
+        }
+        return {
+            startedAt: Date.now(),
+            expectIdle: true,
+            timeoutMs: 14000,
+            pollMs: 700,
+        };
+    }
+    if (step?.tool === "interact_with") {
+        const option = String(args.option ?? "").toLowerCase();
+        if (option === "take") {
+            const currentQuantity = inventoryQuantity(snapshot, args.name, args.id);
+            return {
+                startedAt: Date.now(),
+                inventoryItemName: args.name,
+                inventoryItemId: args.id,
+                inventoryQuantityAtLeast: currentQuantity + 1,
+                timeoutMs: 6000,
+                pollMs: 500,
+            };
+        }
+        if (option === "attack") {
+            return {
+                startedAt: Date.now(),
+                expectIdle: true,
+                timeoutMs: 25000,
+                pollMs: 800,
+            };
+        }
+        if (option.includes("talk")) {
+            return {
+                startedAt: Date.now(),
+                dialogueType: "NPC",
+                timeoutMs: 8000,
+                pollMs: 500,
+            };
+        }
+    }
+    if (step?.tool === "invoke_walk_action") {
+        return {
+            startedAt: Date.now(),
+            expectedWorldX: args.worldX,
+            expectedWorldY: args.worldY,
+            expectedPlane: args.plane,
+            locationRadius: 1,
+            timeoutMs: 10000,
+            pollMs: 500,
+        };
+    }
+    return undefined;
 }
 async function resolveActivityClient(target = {}) {
     const clients = await discoverClients();
@@ -1538,6 +1673,56 @@ async function resolveActivityClient(target = {}) {
         port: target.port ?? client.port,
     };
     return { status: "READY", clients, client, baseURL, targetClient };
+}
+async function prepareAutonomyStep(args) {
+    const resolved = await resolveActivityClient(args.target);
+    if (resolved.status !== "READY") {
+        const plan = {
+            mode: resolved.status === "NO_CLIENT" ? "start_runtime" : "select_client",
+            steps: [actionStep(resolved.status === "NO_CLIENT" ? "diagnose_runtime" : "select_client", resolved.reason, {}, { priority: "blocker" })],
+            notes: ["agent_run_goal does not start, close, restart, click, or invoke RuneLite outside execute_agent_step-compatible actions."],
+        };
+        return {
+            status: resolved.status,
+            clients: resolved.clients,
+            reason: resolved.reason,
+            plan,
+            package: buildAgentStepPackage({ status: resolved.status, readiness: { risks: [String(resolved.status).toLowerCase()] } }, plan, args.goal, args.maxPreviewSteps ?? 5),
+            selectedStep: null,
+        };
+    }
+    const baseURL = resolved.baseURL;
+    const runtime = args.includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(resolved.client);
+    const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
+    const snapshot = await getSnapshotForBase(baseURL, true);
+    const context = buildAgentContext(baseURL, resolved.client, snapshot, runtime, {
+        objective: args.goal,
+        includeNearbyLimit: args.includeNearbyLimit ?? 8,
+        includeInventoryLimit: args.includeInventoryLimit ?? 28,
+        streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
+    });
+    const plan = buildNextActionPlan(context, snapshot, args.goal);
+    const stepPackage = buildAgentStepPackage(context, plan, args.goal, args.maxPreviewSteps ?? 5);
+    const selectedStep = args.stepChoice === "nextStep"
+        ? stepPackage.nextStep
+        : stepPackage.firstAction ?? stepPackage.nextStep;
+    return {
+        status: "READY",
+        clients: resolved.clients,
+        client: resolved.client,
+        baseURL,
+        targetClient: resolved.targetClient,
+        runtime,
+        pathfindingStatus,
+        snapshot,
+        context,
+        plan,
+        package: stepPackage,
+        selectedStep,
+    };
 }
 async function waitForActivityVerification(baseURL, args) {
     const timeout = Math.max(1, args.timeoutMs ?? 8000);
@@ -2542,7 +2727,7 @@ server.tool("execute_agent_step", "Validate and optionally execute exactly one p
         return { content: [{ type: "text", text: errorText("executing agent step", e) }] };
     }
 });
-server.tool("agent_start_goal", "Create an in-memory agent goal session. This does not execute actions; Phase 2 adds full autonomous running.", {
+server.tool("agent_start_goal", "Create an in-memory agent goal session. Use agent_run_goal for the bounded Phase 2 autonomy loop.", {
     goal: z.string().describe("High-level gameplay goal to track"),
     executionMode: z.enum(["dry_run", "execute"]).optional().describe("Default execution mode for this session, default dry_run"),
     instanceId: z.string().optional(),
@@ -2649,6 +2834,282 @@ server.tool("agent_history", "Read recent in-memory agent session events.", {
         events: session ? session.history.slice(-max) : [],
         stopReason: session ? session.stopReason : "No active agent session exists.",
     });
+});
+server.tool("agent_run_goal", `Run a bounded Phase 2 observe-plan-execute-verify loop for an agent goal. Defaults to dry-run; real execution requires confirmExecution='${RUN_AUTONOMY_CONFIRMATION}'.`, {
+    goal: z.string().optional().describe("High-level gameplay goal. Required unless sessionId points to an existing session."),
+    sessionId: z.string().optional(),
+    executionMode: z.enum(["dry_run", "execute"]).optional().describe("dry_run validates/previews only. execute performs bounded real actions when armed."),
+    confirmExecution: z.string().optional().describe(`Required arming phrase for executionMode=execute: ${RUN_AUTONOMY_CONFIRMATION}`),
+    maxSteps: z.number().optional().describe("Maximum loop iterations. Defaults to 1 for dry-run and 3 for execute; capped at 25."),
+    maxMinutes: z.number().optional().describe("Maximum wall-clock runtime for this call. Defaults to 2; capped at 15."),
+    stepChoice: z.enum(["firstAction", "nextStep"]).optional().describe("Which prepared step to select each iteration. Defaults to firstAction when available."),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics before each planning iteration, default true"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby entries to include in context, default 8"),
+    includeInventoryLimit: z.number().optional().describe("Maximum inventory entries to include, default 28"),
+    maxPreviewSteps: z.number().optional().describe("Maximum plan preview steps to include, default 5"),
+    maxAgeMs: z.number().optional().describe("Maximum target age accepted by snapshot target validators, default 1200"),
+    tickAligned: z.boolean().optional().describe("For raw invoke_* actions, wait for the next OSRS game tick before real execution"),
+    tickTimeoutMs: z.number().optional().describe("Maximum wait for tickAligned raw actions in milliseconds, default 1800"),
+    ...clientTargetSchema(),
+}, async ({ goal, sessionId, executionMode, confirmExecution, maxSteps, maxMinutes, stepChoice, includeDiagnostics, includeNearbyLimit, includeInventoryLimit, maxPreviewSteps, maxAgeMs, tickAligned, tickTimeoutMs, instanceId, playerName, port, }) => {
+    try {
+        let session = getAgentSession(sessionId);
+        const goalText = goal ?? session?.goal;
+        if (!goalText) {
+            return jsonTool({
+                status: "NO_GOAL",
+                willExecute: false,
+                executed: false,
+                selectedStep: null,
+                verification: { verified: false },
+                stopReason: "Pass goal or sessionId for an existing agent session.",
+                session: publicAgentSession(session),
+            });
+        }
+        const mode = executionMode ?? session?.executionMode ?? "dry_run";
+        const wantsExecution = mode === "execute";
+        if (wantsExecution && confirmExecution !== RUN_AUTONOMY_CONFIRMATION) {
+            return jsonTool({
+                status: "AUTONOMY_NOT_ARMED",
+                willExecute: false,
+                executed: false,
+                selectedStep: null,
+                verification: { verified: false },
+                requiredConfirmation: RUN_AUTONOMY_CONFIRMATION,
+                stopReason: "executionMode='execute' was requested, but the full-autonomy arming phrase was missing or incorrect.",
+                session: publicAgentSession(session),
+            });
+        }
+        const selectedClient = {
+            instanceId: instanceId ?? session?.selectedClient?.instanceId,
+            playerName: playerName ?? session?.selectedClient?.playerName,
+            port: port ?? session?.selectedClient?.port,
+        };
+        if (!session) {
+            const now = Date.now();
+            session = {
+                id: makeAgentSessionId(),
+                goal: goalText,
+                status: "created",
+                executionMode: mode,
+                createdAt: now,
+                updatedAt: now,
+                selectedClient,
+                stepCount: 0,
+                history: [],
+            };
+            agentSessions.set(session.id, session);
+            activeAgentSessionId = session.id;
+            recordAgentEvent(session, "session_created", { goal: goalText, executionMode: mode, selectedClient });
+        }
+        if (session.status === "stopped" || session.status === "paused") {
+            return jsonTool({
+                status: "SESSION_NOT_RUNNING",
+                willExecute: false,
+                executed: false,
+                selectedStep: null,
+                verification: { verified: false },
+                stopReason: session.stopReason ?? `Session is ${session.status}.`,
+                session: publicAgentSession(session),
+            });
+        }
+        session.goal = goalText;
+        session.executionMode = mode;
+        session.selectedClient = selectedClient;
+        session.status = "running";
+        session.stopReason = undefined;
+        recordAgentEvent(session, "autonomy_started", { goal: goalText, executionMode: mode, selectedClient });
+        const stepLimit = Math.max(1, Math.min(25, Math.floor(maxSteps ?? (wantsExecution ? 3 : 1))));
+        const timeLimitMs = Math.max(1, Math.min(15, maxMinutes ?? 2)) * 60_000;
+        const startedAt = Date.now();
+        const iterations = [];
+        let stopReason = wantsExecution ? "MAX_STEPS_REACHED" : "DRY_RUN_ONLY";
+        let selectedStep = null;
+        let verification = { verified: false };
+        let finalContext;
+        let finalProgress;
+        for (let index = 0; index < stepLimit; index += 1) {
+            if (Date.now() - startedAt > timeLimitMs) {
+                stopReason = "MAX_TIME_REACHED";
+                break;
+            }
+            if (session.status === "stopped" || session.status === "paused") {
+                stopReason = session.stopReason ?? `Session is ${session.status}.`;
+                break;
+            }
+            const prepared = await prepareAutonomyStep({
+                goal: goalText,
+                target: session.selectedClient ?? {},
+                includeDiagnostics,
+                includeNearbyLimit,
+                includeInventoryLimit,
+                maxPreviewSteps,
+                stepChoice,
+            });
+            if (prepared.status !== "READY") {
+                selectedStep = prepared.selectedStep;
+                verification = { verified: false, reason: prepared.reason };
+                stopReason = prepared.reason;
+                session.status = "blocked";
+                session.stopReason = stopReason;
+                recordAgentEvent(session, "autonomy_blocked", prepared);
+                iterations.push({
+                    index,
+                    status: prepared.status,
+                    willExecute: false,
+                    executed: false,
+                    plan: prepared.plan,
+                    package: prepared.package,
+                    selectedStep,
+                    verification,
+                    stopReason,
+                });
+                break;
+            }
+            session.selectedClient = prepared.targetClient;
+            initializeSessionGoalState(session, prepared.snapshot);
+            const preProgress = evaluateSessionGoal(session, prepared.snapshot);
+            finalContext = prepared.context;
+            finalProgress = preProgress;
+            if (preProgress.complete) {
+                stopReason = undefined;
+                verification = { verified: true, progress: preProgress };
+                session.status = "completed";
+                session.stopReason = undefined;
+                iterations.push({
+                    index,
+                    status: "GOAL_ALREADY_COMPLETE",
+                    willExecute: false,
+                    executed: false,
+                    context: prepared.context,
+                    plan: prepared.plan,
+                    package: prepared.package,
+                    selectedStep: null,
+                    verification,
+                    stopReason: undefined,
+                });
+                break;
+            }
+            selectedStep = prepared.selectedStep;
+            if (!selectedStep) {
+                stopReason = "No step was selected by the planner.";
+                verification = { verified: false, reason: stopReason };
+                session.status = "blocked";
+                session.stopReason = stopReason;
+                iterations.push({
+                    index,
+                    status: "AUTONOMY_BLOCKED",
+                    willExecute: false,
+                    executed: false,
+                    context: prepared.context,
+                    plan: prepared.plan,
+                    package: prepared.package,
+                    selectedStep: null,
+                    verification,
+                    stopReason,
+                });
+                break;
+            }
+            if (!EXECUTABLE_AGENT_TOOLS.has(selectedStep.tool)) {
+                stopReason = `agent_run_goal can execute only supported safe action tools. ${selectedStep.tool} is not currently supported.`;
+                verification = { verified: false, reason: stopReason };
+                session.status = "blocked";
+                session.stopReason = stopReason;
+                iterations.push({
+                    index,
+                    status: "AUTONOMY_BLOCKED",
+                    willExecute: false,
+                    executed: false,
+                    context: prepared.context,
+                    plan: prepared.plan,
+                    package: prepared.package,
+                    selectedStep,
+                    verification,
+                    stopReason,
+                    supportedTools: Array.from(EXECUTABLE_AGENT_TOOLS),
+                });
+                break;
+            }
+            const result = await runActivityStep({
+                label: "agent_run_goal",
+                step: selectedStep,
+                executionMode: mode,
+                session,
+                target: session.selectedClient,
+                verification: inferVerificationForStep(selectedStep, prepared.snapshot),
+                maxAgeMs,
+                tickAligned,
+                tickTimeoutMs,
+            });
+            verification = result.verification;
+            session.lastSelectedStep = selectedStep;
+            session.lastVerification = verification;
+            session.lastResult = result;
+            iterations.push({
+                index,
+                context: prepared.context,
+                plan: prepared.plan,
+                package: prepared.package,
+                progressBefore: preProgress,
+                ...result,
+            });
+            if (!wantsExecution) {
+                stopReason = "DRY_RUN_ONLY";
+                break;
+            }
+            if (result.stopReason) {
+                stopReason = result.stopReason;
+                session.status = "blocked";
+                session.stopReason = stopReason;
+                break;
+            }
+            const afterSnapshot = await getSnapshotForBase(prepared.baseURL, true);
+            const postProgress = evaluateSessionGoal(session, afterSnapshot);
+            finalProgress = postProgress;
+            if (postProgress.complete) {
+                stopReason = undefined;
+                verification = { verified: true, progress: postProgress };
+                session.status = "completed";
+                session.stopReason = undefined;
+                recordAgentEvent(session, "autonomy_completed", { progress: postProgress });
+                break;
+            }
+        }
+        if (session.status === "running" && wantsExecution && stopReason === "MAX_STEPS_REACHED") {
+            session.stopReason = stopReason;
+        }
+        if (!wantsExecution && session.status === "running") {
+            session.stopReason = undefined;
+        }
+        const executed = iterations.some((iteration) => iteration.executed);
+        const responseStatus = session.status === "completed"
+            ? "AUTONOMY_COMPLETED"
+            : stopReason === "DRY_RUN_ONLY"
+                ? "AUTONOMY_DRY_RUN_READY"
+                : session.status === "blocked"
+                    ? "AUTONOMY_BLOCKED"
+                    : "AUTONOMY_RAN";
+        return jsonTool({
+            status: responseStatus,
+            willExecute: wantsExecution,
+            executed,
+            goal: goalText,
+            selectedStep,
+            verification,
+            stopReason,
+            iterations,
+            iterationCount: iterations.length,
+            maxSteps: stepLimit,
+            elapsedMs: Date.now() - startedAt,
+            finalProgress,
+            finalContext,
+            session: publicAgentSession(session),
+            armingRequired: wantsExecution ? undefined : RUN_AUTONOMY_CONFIRMATION,
+        });
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: errorText("running autonomous agent goal", e) }] };
+    }
 });
 server.tool("skill_interact", "Universal one-step interaction with a visible NPC, object, player, or ground item through the safe agent step primitive.", {
     entityType: z.enum(["npc", "object", "ground_item", "player"]),

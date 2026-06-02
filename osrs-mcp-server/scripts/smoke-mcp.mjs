@@ -18,6 +18,7 @@ const requiredTools = [
   "agent_pause",
   "agent_resume",
   "agent_history",
+  "agent_run_goal",
   "skill_interact",
   "skill_acquire",
   "skill_train",
@@ -344,6 +345,27 @@ try {
   const agentStatus = parseJsonToolResult(statusResult, "agent_status");
   if (agentStatus.status !== "SESSION_FOUND" || agentStatus.session?.id !== startedGoal.session.id) {
     throw new Error(`Unexpected agent_status result: ${JSON.stringify(agentStatus)}`);
+  }
+
+  const runGoalResult = await withTimeout(
+    client.callTool({
+      name: "agent_run_goal",
+      arguments: {
+        goal: "chop 1 normal tree",
+        executionMode: "dry_run",
+        maxSteps: 1,
+        sessionId: startedGoal.session.id,
+      },
+    }),
+    requestTimeoutMs,
+    "agent_run_goal dry_run",
+  );
+  const runGoal = parseJsonToolResult(runGoalResult, "agent_run_goal dry_run");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "AUTONOMY_DRY_RUN_READY", "AUTONOMY_BLOCKED", "AUTONOMY_COMPLETED"].includes(runGoal.status)) {
+    throw new Error(`Unexpected agent_run_goal dry_run result: ${JSON.stringify(runGoal)}`);
+  }
+  if (runGoal.willExecute !== false || runGoal.executed !== false) {
+    throw new Error(`agent_run_goal dry_run must not execute: ${JSON.stringify(runGoal)}`);
   }
 
   const skillAcquireResult = await withTimeout(
