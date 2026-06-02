@@ -38,6 +38,10 @@ type AgentSession = {
   selectedClient?: ClientTarget;
   stepCount: number;
   stopReason?: string;
+  goalState?: any;
+  lastSelectedStep?: any;
+  lastVerification?: any;
+  lastResult?: any;
   history: AgentSessionEvent[];
 };
 
@@ -72,6 +76,7 @@ const actionBaselines = new Map<string, ActionBaseline>();
 const agentSessions = new Map<string, AgentSession>();
 let activeAgentSessionId: string | undefined;
 const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
+const RUN_AUTONOMY_CONFIRMATION = "RUN_AUTONOMY";
 const EXECUTABLE_AGENT_TOOLS = new Set([
   "invoke_menu_action",
   "invoke_walk_action",
@@ -1875,6 +1880,9 @@ function publicAgentSession(session: AgentSession | undefined) {
     selectedClient: session.selectedClient,
     stepCount: session.stepCount,
     stopReason: session.stopReason,
+    goalState: session.goalState,
+    lastSelectedStep: session.lastSelectedStep,
+    lastVerification: session.lastVerification,
     historyCount: session.history.length,
     lastEvents: session.history.slice(-10),
   };
@@ -1902,6 +1910,145 @@ function jsonTool(data: any): any {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+function requestedObjectiveCount(objective?: string): number | undefined {
+  const match = String(objective ?? "").match(/\b(\d{1,3})\b/);
+  if (!match) {
+    return undefined;
+  }
+  const count = Number(match[1]);
+  return Number.isFinite(count) && count > 0 ? Math.min(count, 28) : undefined;
+}
+
+function objectiveInventoryItem(objective?: string): string | undefined {
+  const text = String(objective ?? "").toLowerCase();
+  if (text.includes("oak")) {
+    return "Oak logs";
+  }
+  if (text.includes("willow")) {
+    return "Willow logs";
+  }
+  if (text.includes("maple")) {
+    return "Maple logs";
+  }
+  if (text.includes("yew")) {
+    return "Yew logs";
+  }
+  if (text.includes("log") || text.includes("tree") || text.includes("chop") || text.includes("woodcut")) {
+    return "Logs";
+  }
+  if (text.includes("bone") || text.includes("chicken") || text.includes("cow") || text.includes("combat") || text.includes("kill") || text.includes("attack")) {
+    return text.includes("bone") || text.includes("loot") ? "Bones" : undefined;
+  }
+  return undefined;
+}
+
+function initializeSessionGoalState(session: AgentSession, snapshot?: RuneLiteSnapshot) {
+  if (session.goalState) {
+    return;
+  }
+  const targetItemName = objectiveInventoryItem(session.goal);
+  const requestedQuantity = requestedObjectiveCount(session.goal);
+  const startQuantity = targetItemName && snapshot ? inventoryQuantity(snapshot, targetItemName) : undefined;
+  session.goalState = {
+    targetItemName,
+    requestedQuantity,
+    startQuantity,
+    targetQuantity: targetItemName && requestedQuantity !== undefined && startQuantity !== undefined
+      ? Math.min(28, startQuantity + requestedQuantity)
+      : undefined,
+  };
+}
+
+function evaluateSessionGoal(session: AgentSession, snapshot?: RuneLiteSnapshot) {
+  initializeSessionGoalState(session, snapshot);
+  const targetItemName = session.goalState?.targetItemName;
+  const targetQuantity = session.goalState?.targetQuantity;
+  if (!targetItemName || targetQuantity === undefined || !snapshot) {
+    return { complete: false, reason: "No Phase 2 inventory completion heuristic applies to this objective." };
+  }
+  const currentQuantity = inventoryQuantity(snapshot, targetItemName);
+  return {
+    complete: currentQuantity >= targetQuantity,
+    targetItemName,
+    currentQuantity,
+    targetQuantity,
+    reason: currentQuantity >= targetQuantity
+      ? `${targetItemName} target reached.`
+      : `${targetItemName} ${currentQuantity}/${targetQuantity}.`,
+  };
+}
+
+function inferVerificationForStep(step: any, snapshot: RuneLiteSnapshot): Parameters<typeof waitForActivityVerification>[1] | undefined {
+  const args = step?.arguments ?? {};
+  if (step?.tool === "perform_until") {
+    if (args.condition === "inventory_quantity_at_least" && (args.inventoryItemName || args.inventoryItemId)) {
+      const currentQuantity = inventoryQuantity(snapshot, args.inventoryItemName, args.inventoryItemId);
+      const requestedTarget = Number(args.inventoryQuantityAtLeast);
+      return {
+        startedAt: Date.now(),
+        inventoryItemName: args.inventoryItemName,
+        inventoryItemId: args.inventoryItemId,
+        inventoryQuantityAtLeast: Number.isFinite(requestedTarget)
+          ? Math.min(requestedTarget, currentQuantity + 1)
+          : currentQuantity + 1,
+        timeoutMs: 14000,
+        pollMs: 700,
+      };
+    }
+    return {
+      startedAt: Date.now(),
+      expectIdle: true,
+      timeoutMs: 14000,
+      pollMs: 700,
+    };
+  }
+
+  if (step?.tool === "interact_with") {
+    const option = String(args.option ?? "").toLowerCase();
+    if (option === "take") {
+      const currentQuantity = inventoryQuantity(snapshot, args.name, args.id);
+      return {
+        startedAt: Date.now(),
+        inventoryItemName: args.name,
+        inventoryItemId: args.id,
+        inventoryQuantityAtLeast: currentQuantity + 1,
+        timeoutMs: 6000,
+        pollMs: 500,
+      };
+    }
+    if (option === "attack") {
+      return {
+        startedAt: Date.now(),
+        expectIdle: true,
+        timeoutMs: 25000,
+        pollMs: 800,
+      };
+    }
+    if (option.includes("talk")) {
+      return {
+        startedAt: Date.now(),
+        dialogueType: "NPC",
+        timeoutMs: 8000,
+        pollMs: 500,
+      };
+    }
+  }
+
+  if (step?.tool === "invoke_walk_action") {
+    return {
+      startedAt: Date.now(),
+      expectedWorldX: args.worldX,
+      expectedWorldY: args.worldY,
+      expectedPlane: args.plane,
+      locationRadius: 1,
+      timeoutMs: 10000,
+      pollMs: 500,
+    };
+  }
+
+  return undefined;
+}
+
 async function resolveActivityClient(target: ClientTarget = {}) {
   const clients = await discoverClients();
   if (clients.length === 0) {
@@ -1926,6 +2073,72 @@ async function resolveActivityClient(target: ClientTarget = {}) {
     port: target.port ?? client.port,
   };
   return { status: "READY", clients, client, baseURL, targetClient };
+}
+
+async function prepareAutonomyStep(args: {
+  goal: string;
+  target: ClientTarget;
+  includeDiagnostics?: boolean;
+  includeNearbyLimit?: number;
+  includeInventoryLimit?: number;
+  maxPreviewSteps?: number;
+  stepChoice?: "firstAction" | "nextStep";
+}) {
+  const resolved = await resolveActivityClient(args.target);
+  if (resolved.status !== "READY") {
+    const plan = {
+      mode: resolved.status === "NO_CLIENT" ? "start_runtime" : "select_client",
+      steps: [actionStep(
+        resolved.status === "NO_CLIENT" ? "diagnose_runtime" : "select_client",
+        resolved.reason,
+        {},
+        { priority: "blocker" }
+      )],
+      notes: ["agent_run_goal does not start, close, restart, click, or invoke RuneLite outside execute_agent_step-compatible actions."],
+    };
+    return {
+      status: resolved.status,
+      clients: resolved.clients,
+      reason: resolved.reason,
+      plan,
+      package: buildAgentStepPackage({ status: resolved.status, readiness: { risks: [String(resolved.status).toLowerCase()] } }, plan, args.goal, args.maxPreviewSteps ?? 5),
+      selectedStep: null,
+    };
+  }
+
+  const baseURL = resolved.baseURL as string;
+  const runtime = args.includeDiagnostics === false
+    ? { status: "not_checked" }
+    : await diagnoseClientRuntime(resolved.client);
+  const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
+  const snapshot = await getSnapshotForBase(baseURL, true);
+  const context = buildAgentContext(baseURL, resolved.client, snapshot, runtime, {
+    objective: args.goal,
+    includeNearbyLimit: args.includeNearbyLimit ?? 8,
+    includeInventoryLimit: args.includeInventoryLimit ?? 28,
+    streamStatus: snapshotStreamStatus(baseURL),
+    pathfindingStatus,
+  });
+  const plan = buildNextActionPlan(context, snapshot, args.goal);
+  const stepPackage = buildAgentStepPackage(context, plan, args.goal, args.maxPreviewSteps ?? 5);
+  const selectedStep = args.stepChoice === "nextStep"
+    ? stepPackage.nextStep
+    : stepPackage.firstAction ?? stepPackage.nextStep;
+
+  return {
+    status: "READY",
+    clients: resolved.clients,
+    client: resolved.client,
+    baseURL,
+    targetClient: resolved.targetClient as ClientTarget,
+    runtime,
+    pathfindingStatus,
+    snapshot,
+    context,
+    plan,
+    package: stepPackage,
+    selectedStep,
+  };
 }
 
 async function waitForActivityVerification(baseURL: string, args: {
