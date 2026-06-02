@@ -10,6 +10,7 @@ export const EXPECTED_PLUGIN_ENDPOINTS = [
     "/api/stream",
     "/api/events",
     "/api/path",
+    "/api/path/status",
     "/api/widgets",
     "/api/identity",
 ];

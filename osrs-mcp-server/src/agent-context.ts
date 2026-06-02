@@ -5,6 +5,7 @@ export type AgentContextArgs = {
   includeNearbyLimit?: number;
   includeInventoryLimit?: number;
   streamStatus?: any;
+  pathfindingStatus?: any;
 };
 
 function sortByDistance<T extends RuneLiteTarget>(items: T[]): T[] {
@@ -111,6 +112,9 @@ export function buildAgentContext(baseURL: string, client: any, snapshot: RuneLi
   if (inventorySlotsUsed(snapshot) >= 28) {
     risks.push("inventory_full");
   }
+  if (args.pathfindingStatus?.supportsLocalPathfinding === false) {
+    risks.push("pathfinding_unavailable");
+  }
 
   const recommendedNext = [];
   if (runtime?.status && runtime.status !== "ok" && runtime.status !== "not_checked") {
@@ -124,6 +128,9 @@ export function buildAgentContext(baseURL: string, client: any, snapshot: RuneLi
   }
   if (dialogueType && dialogueType !== "NONE") {
     recommendedNext.push("Use handle_dialogue or get_widgets with a focused filter before other actions.");
+  }
+  if (args.pathfindingStatus?.supportsGlobalPathfinding === false) {
+    recommendedNext.push("Navigation currently has loaded-scene pathfinding only; use calculate_path_to/walk_path_to for local movement and expect fallback for off-scene routes.");
   }
   recommendedNext.push("Before the next risky action, call mark_action_baseline; afterward call verify_last_action.");
   recommendedNext.push("Prefer interact_with/click_* with option for in-client menu actions.");
@@ -175,6 +182,9 @@ export function buildAgentContext(baseURL: string, client: any, snapshot: RuneLi
       players: summarizeTargets(snapshot.players, Math.min(nearbyLimit, 5)),
     },
     recentChat: recentMessages(snapshot).slice(-8),
+    navigation: {
+      pathfinding: args.pathfindingStatus,
+    },
     stream: args.streamStatus,
   };
 }

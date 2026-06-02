@@ -25,6 +25,7 @@ const endpoints = [
   "/api/stream",
   "/api/events",
   "/api/path",
+  "/api/path/status",
   "/api/widgets",
   "/api/identity",
 ];

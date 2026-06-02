@@ -32,6 +32,10 @@ const readOnlyEndpoints = [
   "/debug/coordinates",
 ];
 
+const optionalReadOnlyEndpoints = [
+  "/path/status",
+];
+
 const dryRunActionChecks = [
   {
     name: "menu",
@@ -110,6 +114,17 @@ assert(Number(identity.apiVersion) >= 3, `Expected apiVersion >= 3, got ${identi
 
 const reads = {};
 for (const endpoint of readOnlyEndpoints) {
+  const response = await api.get(endpoint);
+  reads[endpoint] = {
+    status: response.status,
+    topLevelKeys: response.data && typeof response.data === "object" ? Object.keys(response.data).slice(0, 12) : [],
+  };
+}
+
+for (const endpoint of optionalReadOnlyEndpoints) {
+  if (!endpointPaths.has(`/api${endpoint.split("?")[0]}`)) {
+    continue;
+  }
   const response = await api.get(endpoint);
   reads[endpoint] = {
     status: response.status,

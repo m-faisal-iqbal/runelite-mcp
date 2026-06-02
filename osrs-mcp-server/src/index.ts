@@ -48,6 +48,17 @@ const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS, async (
   return (await runeliteApi(baseURL).get("/snapshot")).data as RuneLiteSnapshot;
 });
 const actionBaselines = new Map<string, ActionBaseline>();
+const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
+const EXECUTABLE_AGENT_TOOLS = new Set([
+  "invoke_menu_action",
+  "invoke_walk_action",
+  "invoke_widget_action",
+  "interact_with",
+  "perform_until",
+  "click_object",
+  "click_npc",
+  "click_ground_item",
+]);
 
 function runeliteApi(baseURL = selectedRuneliteApi) {
   return axios.create({
@@ -145,6 +156,42 @@ async function getSnapshotForTarget(target: ClientTarget = {}, force = false) {
     baseURL,
     snapshot: await getSnapshotForBase(baseURL, force),
   };
+}
+
+async function getPathfindingStatusForTarget(target: ClientTarget = {}) {
+  return getPathfindingStatusForBase(await resolveRuneliteApi(target));
+}
+
+async function getPathfindingStatusForBase(baseURL: string) {
+  const api = runeliteApi(baseURL);
+  try {
+    const res = await api.get("/path/status");
+    return { ...res.data, statusEndpointAvailable: true };
+  } catch (error: any) {
+    const oldPluginPathStatusFallback =
+      error?.response?.status === 404 ||
+      (error?.response?.status === 400 &&
+        error?.response?.data?.error === "BAD_REQUEST" &&
+        String(error?.response?.data?.message ?? "").includes("worldX and worldY"));
+    if (!oldPluginPathStatusFallback) {
+      throw error;
+    }
+
+    const identity = (await api.get("/identity")).data;
+    return {
+      status: identity?.supportsLocalPathfinding === true ? "LOCAL_SCENE_READY" : "UNAVAILABLE",
+      provider: identity?.pathfindingProvider ?? "runelite_collision_map",
+      supportsLocalPathfinding: identity?.supportsLocalPathfinding === true,
+      supportsGlobalPathfinding: identity?.supportsGlobalPathfinding === true,
+      supportsShortestPathBridge: identity?.supportsShortestPathBridge === true,
+      scope: identity?.pathfindingScope ?? "loaded_scene",
+      globalProvider: identity?.supportsGlobalPathfinding === true ? "unknown" : "none",
+      shortestPathBridgeStatus: identity?.supportsShortestPathBridge === true ? "UNKNOWN" : "NOT_CONFIGURED",
+      statusEndpointAvailable: false,
+      baseURL,
+      note: "Running plugin does not expose /api/path/status yet; this fallback is derived from /api/identity. Rebuild/reload RuneLite to expose detailed pathfinding status.",
+    };
+  }
 }
 
 async function assertClientReady(baseURL: string) {
@@ -728,13 +775,16 @@ server.registerPrompt(
           "1. Start with get_agent_context; it bundles identity, runtime freshness, state, risks, nearby targets, UI, chat, and recommended checks.",
           "2. Use plan_next_action when you want a conservative ordered tool-call plan for the current objective before acting.",
           "3. Run diagnose_runtime if get_agent_context reports stale runtime, 404/missing endpoint, or after rebuilding the plugin.",
-          "4. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
-          "5. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
-          "6. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
-          "7. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
-          "8. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
-          "9. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
-          "10. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
+          "4. Use run_agent_cycle for a read-only observe-plan-validate pass, then execute_agent_step for one explicitly armed action.",
+          "5. execute_agent_step defaults to dry_run; real execution requires executionMode='execute' and confirmExecution='EXECUTE_ONE_STEP'.",
+          "6. For perform_until plans, execute_agent_step performs only one loop interaction, then returns control for verification.",
+          "7. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
+          "8. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
+          "9. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
+          "10. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
+          "11. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
+          "12. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
+          "13. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
         ].join("\n"),
       },
     }],
@@ -1579,6 +1629,211 @@ async function validatePreparedStep(baseURL: string, snapshot: RuneLiteSnapshot,
   };
 }
 
+function stepTargetArgs(stepArgs: any, target: ClientTarget): any {
+  return {
+    ...stepArgs,
+    instanceId: stepArgs.instanceId ?? target.instanceId,
+    playerName: stepArgs.playerName ?? target.playerName,
+    port: stepArgs.port ?? target.port,
+  };
+}
+
+function clickToolEntityType(tool: string): "object" | "npc" | "ground_item" | undefined {
+  switch (tool) {
+    case "click_object":
+      return "object";
+    case "click_npc":
+      return "npc";
+    case "click_ground_item":
+      return "ground_item";
+    default:
+      return undefined;
+  }
+}
+
+async function dryRunAgentStep(baseURL: string, step: any, target: ClientTarget) {
+  const tool = step?.tool;
+  const stepArgs = stepTargetArgs(step?.arguments ?? {}, target);
+  if (tool === "invoke_menu_action") {
+    return invokeMenuAction(baseURL, { ...stepArgs, dryRun: true, tickAligned: false });
+  }
+  if (tool === "invoke_walk_action") {
+    return invokeWalkAction(baseURL, { ...stepArgs, dryRun: true, tickAligned: false });
+  }
+  if (tool === "invoke_widget_action") {
+    return invokeWidgetAction(baseURL, { ...stepArgs, dryRun: true, tickAligned: false });
+  }
+  if (tool === "interact_with" || clickToolEntityType(tool)) {
+    return {
+      success: true,
+      dryRun: true,
+      actionMode: "validation_only",
+      reason: "This target interaction uses the live context menu and cannot be fully dry-run without moving/clicking. execute_agent_step validated the target snapshot and did not click.",
+      plannedInteraction: {
+        tool,
+        entityType: stepArgs.entityType ?? clickToolEntityType(tool),
+        name: stepArgs.name,
+        id: stepArgs.id,
+        option: stepArgs.option,
+        nearestToPlayer: stepArgs.nearestToPlayer ?? true,
+      },
+    };
+  }
+  if (tool === "perform_until") {
+    const snapshot = await getSnapshotForBase(baseURL, true);
+    const startedAt = Date.now();
+    const beforeCondition = conditionMet(snapshot, {
+      condition: stepArgs.condition,
+      startedAt,
+      inventoryItemName: stepArgs.inventoryItemName,
+      inventoryItemId: stepArgs.inventoryItemId,
+      inventoryQuantityAtLeast: stepArgs.inventoryQuantityAtLeast,
+      chatContains: stepArgs.chatContains,
+      chatType: stepArgs.chatType,
+      caseSensitive: stepArgs.caseSensitive,
+      entityType: stepArgs.entityType,
+      entityName: stepArgs.entityName,
+      entityId: stepArgs.entityId,
+      worldX: stepArgs.worldX,
+      worldY: stepArgs.worldY,
+      plane: stepArgs.plane,
+      radius: stepArgs.radius,
+    });
+    return {
+      success: true,
+      dryRun: true,
+      actionMode: "perform_until_one_iteration_preview",
+      reason: beforeCondition.met
+        ? "The stop condition is already met; no interaction would be performed."
+        : "execute_agent_step would perform exactly one interaction from this loop, then return control for verification.",
+      beforeCondition,
+      plannedInteraction: {
+        tool: "interact_with",
+        entityType: stepArgs.actionEntityType,
+        name: stepArgs.actionName,
+        id: stepArgs.actionId,
+        option: stepArgs.actionOption,
+        nearestToPlayer: stepArgs.nearestToPlayer ?? true,
+      },
+    };
+  }
+  return {
+    success: false,
+    dryRun: true,
+    reason: `execute_agent_step does not support dry-running ${tool}.`,
+  };
+}
+
+async function executeAgentStepAction(baseURL: string, step: any, target: ClientTarget, args: {
+  tickAligned?: boolean;
+  tickTimeoutMs?: number;
+}) {
+  const tool = step?.tool;
+  const stepArgs = stepTargetArgs(step?.arguments ?? {}, target);
+  if (!EXECUTABLE_AGENT_TOOLS.has(tool)) {
+    return {
+      success: false,
+      executed: false,
+      reason: `execute_agent_step can only execute one supported action tool, not ${tool}.`,
+    };
+  }
+
+  if (tool === "invoke_menu_action") {
+    return invokeMenuAction(baseURL, {
+      ...stepArgs,
+      dryRun: false,
+      tickAligned: stepArgs.tickAligned ?? args.tickAligned,
+      tickTimeoutMs: stepArgs.tickTimeoutMs ?? args.tickTimeoutMs,
+    });
+  }
+  if (tool === "invoke_walk_action") {
+    return invokeWalkAction(baseURL, {
+      ...stepArgs,
+      dryRun: false,
+      tickAligned: stepArgs.tickAligned ?? args.tickAligned,
+      tickTimeoutMs: stepArgs.tickTimeoutMs ?? args.tickTimeoutMs,
+    });
+  }
+  if (tool === "invoke_widget_action") {
+    return invokeWidgetAction(baseURL, {
+      ...stepArgs,
+      dryRun: false,
+      tickAligned: stepArgs.tickAligned ?? args.tickAligned,
+      tickTimeoutMs: stepArgs.tickTimeoutMs ?? args.tickTimeoutMs,
+    });
+  }
+  if (tool === "perform_until") {
+    const startedAt = Date.now();
+    const snapshot = await getSnapshotForBase(baseURL, true);
+    const beforeCondition = conditionMet(snapshot, {
+      condition: stepArgs.condition,
+      startedAt,
+      inventoryItemName: stepArgs.inventoryItemName,
+      inventoryItemId: stepArgs.inventoryItemId,
+      inventoryQuantityAtLeast: stepArgs.inventoryQuantityAtLeast,
+      chatContains: stepArgs.chatContains,
+      chatType: stepArgs.chatType,
+      caseSensitive: stepArgs.caseSensitive,
+      entityType: stepArgs.entityType,
+      entityName: stepArgs.entityName,
+      entityId: stepArgs.entityId,
+      worldX: stepArgs.worldX,
+      worldY: stepArgs.worldY,
+      plane: stepArgs.plane,
+      radius: stepArgs.radius,
+    });
+    if (beforeCondition.met) {
+      return {
+        success: true,
+        executed: false,
+        actionMode: "perform_until_condition_already_met",
+        beforeCondition,
+        reason: "The stop condition was already met, so execute_agent_step did not perform an interaction.",
+      };
+    }
+    const action = await interactWithTarget({
+      entityType: stepArgs.actionEntityType,
+      name: stepArgs.actionName,
+      id: stepArgs.actionId,
+      option: stepArgs.actionOption,
+      nearestToPlayer: stepArgs.nearestToPlayer ?? true,
+      instanceId: stepArgs.instanceId,
+      playerName: stepArgs.playerName,
+      port: stepArgs.port,
+    });
+    return {
+      success: true,
+      executed: true,
+      actionMode: "perform_until_one_iteration",
+      beforeCondition,
+      action,
+      nextInstruction: "This executed one iteration only. Verify the result before calling execute_agent_step again.",
+    };
+  }
+
+  const entityType = stepArgs.entityType ?? clickToolEntityType(tool);
+  if (!entityType) {
+    return {
+      success: false,
+      executed: false,
+      reason: `No entity type could be inferred for ${tool}.`,
+    };
+  }
+  if (!stepArgs.option) {
+    return {
+      success: false,
+      executed: false,
+      reason: `${tool} requires an option when executed through execute_agent_step so it can use the context-menu/in-client action path instead of a blind coordinate click.`,
+    };
+  }
+
+  return interactWithTarget({
+    ...stepArgs,
+    entityType,
+    option: stepArgs.option,
+  });
+}
+
 // --- State Reading Tools ---
 
 server.tool(
@@ -1637,12 +1892,14 @@ server.tool(
       const runtime = includeDiagnostics === false
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
       const snapshot = await getSnapshotForBase(baseURL, true);
       const context = buildAgentContext(baseURL, client, snapshot, runtime, {
         objective,
         includeNearbyLimit,
         includeInventoryLimit,
         streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
       });
       return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
     } catch (e: any) {
@@ -1746,12 +2003,14 @@ server.tool(
       const runtime = includeDiagnostics === false
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
       const snapshot = await getSnapshotForBase(baseURL, forceRefresh !== false);
       const context = buildAgentContext(baseURL, client, snapshot, runtime, {
         objective,
         includeNearbyLimit,
         includeInventoryLimit,
         streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
       });
 
       const shouldPlan = includePlan ?? Boolean(objective);
@@ -1880,12 +2139,14 @@ server.tool(
       const runtime = includeDiagnostics === false
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
       const snapshot = await getSnapshotForBase(baseURL, true);
       const context = buildAgentContext(baseURL, client, snapshot, runtime, {
         objective,
         includeNearbyLimit: includeNearbyLimit ?? 6,
         includeInventoryLimit: 12,
         streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
       });
       const plan = buildNextActionPlan(context, snapshot, objective);
       return {
@@ -1969,12 +2230,14 @@ server.tool(
       const runtime = includeDiagnostics === false
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
       const snapshot = await getSnapshotForBase(baseURL, true);
       const context = buildAgentContext(baseURL, client, snapshot, runtime, {
         objective,
         includeNearbyLimit: includeNearbyLimit ?? 6,
         includeInventoryLimit: 12,
         streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
       });
       const plan = buildNextActionPlan(context, snapshot, objective);
       const stepPackage = buildAgentStepPackage(context, plan, objective, maxPreviewSteps ?? 5);
@@ -2057,12 +2320,14 @@ server.tool(
       const runtime = includeDiagnostics === false
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
       const snapshot = await getSnapshotForBase(baseURL, true);
       const context = buildAgentContext(baseURL, client, snapshot, runtime, {
         objective,
         includeNearbyLimit: includeNearbyLimit ?? 6,
         includeInventoryLimit: 12,
         streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
       });
 
       let stepToValidate = step;
@@ -2198,12 +2463,14 @@ server.tool(
       const runtime = includeDiagnostics === false
         ? { status: "not_checked" }
         : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
       const snapshot = await getSnapshotForBase(baseURL, true);
       const context = buildAgentContext(baseURL, client, snapshot, runtime, {
         objective,
         includeNearbyLimit,
         includeInventoryLimit,
         streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
       });
       const plan = buildNextActionPlan(context, snapshot, objective);
       const stepPackage = buildAgentStepPackage(context, plan, objective, maxPreviewSteps ?? 5);
@@ -2266,6 +2533,274 @@ server.tool(
       return { content };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("running agent cycle", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "execute_agent_step",
+  "Validate and optionally execute exactly one prepared gameplay step. Defaults to dry-run; real execution requires confirmExecution='EXECUTE_ONE_STEP'.",
+  {
+    objective: z.string().optional().describe("Objective to prepare from when step is omitted, for example 'chop 5 normal trees'"),
+    step: z.any().optional().describe("A step object from prepare_agent_step.package.firstAction/nextStep or plan_next_action.plan.steps[]"),
+    stepChoice: z.enum(["firstAction", "nextStep"]).optional().describe("When preparing from objective, choose firstAction by default or nextStep explicitly."),
+    executionMode: z.enum(["dry_run", "execute"]).optional().describe("dry_run validates/previews only. execute performs exactly one action if confirmExecution is EXECUTE_ONE_STEP."),
+    confirmExecution: z.string().optional().describe("Required arming phrase for executionMode=execute: EXECUTE_ONE_STEP"),
+    baselineBeforeAction: z.boolean().optional().describe("Capture a verification baseline immediately before a real action, default true"),
+    includePostActionSnapshot: z.boolean().optional().describe("Refresh and include a compact post-action snapshot summary after real execution, default true"),
+    includeDiagnostics: z.boolean().optional().describe("Run runtime endpoint/feature diagnostics before preparing/executing, default true"),
+    includeNearbyLimit: z.number().optional().describe("Maximum nearby entries to include in context, default 8"),
+    includeInventoryLimit: z.number().optional().describe("Maximum inventory entries to include, default 28"),
+    maxPreviewSteps: z.number().optional().describe("Maximum prepared package plan steps to preview, default 5"),
+    maxAgeMs: z.number().optional().describe("Maximum target age accepted by snapshot target validators, default 1200"),
+    tickAligned: z.boolean().optional().describe("For raw invoke_* actions, wait for the next OSRS game tick before real execution"),
+    tickTimeoutMs: z.number().optional().describe("Maximum wait for tickAligned raw actions in milliseconds, default 1800"),
+    ...clientTargetSchema(),
+  },
+  async ({
+    objective,
+    step,
+    stepChoice,
+    executionMode,
+    confirmExecution,
+    baselineBeforeAction,
+    includePostActionSnapshot,
+    includeDiagnostics,
+    includeNearbyLimit,
+    includeInventoryLimit,
+    maxPreviewSteps,
+    maxAgeMs,
+    tickAligned,
+    tickTimeoutMs,
+    instanceId,
+    playerName,
+    port,
+  }) => {
+    try {
+      const wantsExecution = executionMode === "execute";
+      const clients = await discoverClients();
+      if (clients.length === 0) {
+        const plan = {
+          mode: "start_runtime",
+          steps: [actionStep("diagnose_runtime", "No RuneLite MCP plugin client was discovered; start/load RuneLite before executing an agent step.", {}, { priority: "blocker" })],
+          notes: ["execute_agent_step never starts, closes, or restarts RuneLite."],
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NO_CLIENT",
+              willExecute: false,
+              executed: false,
+              plan,
+              package: buildAgentStepPackage({ status: "NO_CLIENT", readiness: { risks: ["no_client"] } }, plan, objective, maxPreviewSteps ?? 5),
+              validation: { valid: false, willExecute: false, reason: "No active RuneLite MCP plugin client was discovered." },
+            }, null, 2)
+          }]
+        };
+      }
+
+      const client = selectDiscoveredClient(clients, { instanceId, playerName, port }, selectedRuneliteApi, selectedClientInstanceId);
+      if (!client) {
+        const plan = {
+          mode: "select_client",
+          steps: [actionStep("select_client", "Multiple RuneLite clients are active; select the intended account/window before acting.", {}, { priority: "blocker" })],
+          notes: ["Pass port, instanceId, or playerName to execute_agent_step when multiple clients are open."],
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "NEEDS_CLIENT_SELECTION",
+              willExecute: false,
+              executed: false,
+              clients,
+              plan,
+              package: buildAgentStepPackage({ status: "NEEDS_CLIENT_SELECTION", readiness: { risks: ["needs_client_selection"] } }, plan, objective, maxPreviewSteps ?? 5),
+              validation: { valid: false, willExecute: false, reason: "Select the intended RuneLite client before executing a gameplay step." },
+            }, null, 2)
+          }]
+        };
+      }
+
+      const targetClient = {
+        instanceId: instanceId ?? client.instanceId,
+        playerName,
+        port: port ?? client.port,
+      };
+      const baseURL = baseUrlForClient(client);
+      const runtime = includeDiagnostics === false
+        ? { status: "not_checked" }
+        : await diagnoseClientRuntime(client);
+      const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
+      const snapshot = await getSnapshotForBase(baseURL, true);
+      const context = buildAgentContext(baseURL, client, snapshot, runtime, {
+        objective,
+        includeNearbyLimit,
+        includeInventoryLimit,
+        streamStatus: snapshotStreamStatus(baseURL),
+        pathfindingStatus,
+      });
+      const plan = buildNextActionPlan(context, snapshot, objective);
+      const stepPackage = buildAgentStepPackage(context, plan, objective, maxPreviewSteps ?? 5);
+      const selectedStep = step ?? (stepChoice === "nextStep"
+        ? stepPackage.nextStep
+        : stepPackage.firstAction ?? stepPackage.nextStep);
+      const validation = selectedStep
+        ? await validatePreparedStep(baseURL, snapshot, selectedStep, {
+          dryRunRawActions: true,
+          maxAgeMs,
+        })
+        : {
+          valid: false,
+          willExecute: false,
+          reason: "No step was selected by the planner.",
+        };
+
+      if (!validation.valid) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "EXECUTION_BLOCKED",
+              willExecute: false,
+              executed: false,
+              context,
+              plan,
+              package: stepPackage,
+              selectedStep,
+              validation,
+              reason: "The selected step did not pass current-state validation.",
+              nextInstruction: "Refresh observation or resolve the validation reason before attempting execution.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      if (!EXECUTABLE_AGENT_TOOLS.has(selectedStep.tool)) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "EXECUTION_BLOCKED",
+              willExecute: false,
+              executed: false,
+              context,
+              plan,
+              package: stepPackage,
+              selectedStep,
+              validation,
+              reason: `execute_agent_step can execute only one supported action tool. ${selectedStep.tool} is not currently supported.`,
+              supportedTools: Array.from(EXECUTABLE_AGENT_TOOLS),
+            }, null, 2)
+          }]
+        };
+      }
+
+      if (!wantsExecution) {
+        const dryRunResult = await dryRunAgentStep(baseURL, selectedStep, targetClient);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "DRY_RUN_READY",
+              willExecute: false,
+              executed: false,
+              context,
+              plan,
+              package: stepPackage,
+              selectedStep,
+              validation,
+              actionResult: dryRunResult,
+              armingRequired: EXECUTE_AGENT_STEP_CONFIRMATION,
+              nextInstruction: "To execute exactly this one validated step, call execute_agent_step again with executionMode='execute' and confirmExecution='EXECUTE_ONE_STEP', then verify afterward.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      if (confirmExecution !== EXECUTE_AGENT_STEP_CONFIRMATION) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              objective,
+              status: "EXECUTION_NOT_ARMED",
+              willExecute: false,
+              executed: false,
+              context,
+              plan,
+              package: stepPackage,
+              selectedStep,
+              validation,
+              requiredConfirmation: EXECUTE_AGENT_STEP_CONFIRMATION,
+              reason: "executionMode='execute' was requested, but the arming phrase was missing or incorrect.",
+            }, null, 2)
+          }]
+        };
+      }
+
+      let baseline: any = null;
+      if (baselineBeforeAction !== false) {
+        const baselineSnapshot = await getSnapshotForBase(baseURL, true);
+        baseline = {
+          baseURL,
+          capturedAt: Date.now(),
+          note: `execute_agent_step:${selectedStep.tool}`,
+        };
+        actionBaselines.set(baseURL, {
+          ...baseline,
+          snapshot: baselineSnapshot,
+        });
+      }
+
+      const actionResult = await executeAgentStepAction(baseURL, selectedStep, targetClient, {
+        tickAligned,
+        tickTimeoutMs,
+      });
+      const postActionSnapshot = includePostActionSnapshot === false
+        ? undefined
+        : await getSnapshotForBase(baseURL, true);
+      const postActionSummary = postActionSnapshot
+        ? {
+          capturedAt: (postActionSnapshot as any).capturedAt,
+          ageMs: postActionSnapshot.ageMs,
+          tick: (postActionSnapshot as any).tick,
+          state: postActionSnapshot.state,
+          inventorySlotsUsed: inventorySlotsUsed(postActionSnapshot),
+          interfaceSummary: postActionSnapshot.interfaceSummary,
+        }
+        : undefined;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            objective,
+            status: "EXECUTED_ONE_STEP",
+            willExecute: true,
+            executed: true,
+            context,
+            plan,
+            package: stepPackage,
+            selectedStep,
+            validation,
+            baseline,
+            actionResult,
+            postActionSummary,
+            nextInstruction: stepPackage.verificationStep
+              ? `Verify with ${stepPackage.verificationStep.tool} or refresh get_agent_context before the next action.`
+              : "Verify with verify_last_action, verify_after_action, or get_agent_context before the next action.",
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("executing agent step", e) }] };
     }
   }
 );
@@ -2439,6 +2974,22 @@ server.tool("get_coordinate_debug", "Get RuneLite canvas origin, canvas size, DP
     return { content: [{ type: "text", text: errorText("fetching coordinate debug", e) }] };
   }
 });
+
+server.tool(
+  "get_pathfinding_status",
+  "Report current pathfinding capability: loaded-scene collision-map A*, global routing availability, and Shortest Path bridge readiness.",
+  {
+    ...clientTargetSchema(),
+  },
+  async ({ instanceId, playerName, port }) => {
+    try {
+      const status = await getPathfindingStatusForTarget({ instanceId, playerName, port });
+      return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("fetching pathfinding status", e) }] };
+    }
+  }
+);
 
 server.tool(
   "capture_canvas_screenshot",

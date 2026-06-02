@@ -11,7 +11,7 @@ This project has two parts:
   Builds the RuneLite plugin jar and TypeScript MCP server. It does not start or close RuneLite.
 
 - `cd osrs-mcp-server && npm run smoke:mcp`
-  Starts the built MCP server over stdio, verifies the expected tools/resources/prompts, calls `observe_game`, `run_agent_cycle`, `get_agent_context`, and `diagnose_runtime`, then closes the child process. This does not start or close RuneLite. Add `-- --live` only when a plugin-loaded RuneLite client is already open and should be required.
+  Starts the built MCP server over stdio, verifies the expected tools/resources/prompts, calls `observe_game`, `run_agent_cycle`, `execute_agent_step` in dry-run mode, `get_agent_context`, and `diagnose_runtime`, then closes the child process. This does not start or close RuneLite. Add `-- --live` only when a plugin-loaded RuneLite client is already open and should be required.
 
 - `cd osrs-mcp-server && npm run smoke:plugin`
   Checks a running RuneLite plugin over safe HTTP calls: API index, identity feature flags, `/state`, `/snapshot`, `/events`, coordinate diagnostics, and `dryRun: true` action validation. It does not click or invoke actions.
@@ -62,6 +62,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - Use `diagnose_runtime` after a rebuild/install or after a 404 from a newer endpoint. It reports stale running plugin copies and missing feature endpoints without restarting RuneLite.
 - Use `observe_game` for a single read-only perception packet before deciding: compact context, optional conservative plan/package, and optional screenshot metadata/image. It never executes gameplay actions.
 - Use `run_agent_cycle` for a single safe control-loop pass: observe, plan, select the next step, and validate it. It returns `willExecute: false` and does not click or invoke actions.
+- Use `execute_agent_step` for exactly one validated step. It defaults to dry-run; real execution requires `executionMode: "execute"` and `confirmExecution: "EXECUTE_ONE_STEP"`, captures a baseline by default, and returns post-action verification guidance. For `perform_until` plans it performs one loop interaction only, not the whole loop.
 - Use `get_agent_context` before planning a gameplay action. It returns one compact orientation bundle with runtime readiness, player state, risks, inventory, nearby targets, dialogue, chat, and recommended next checks.
 - Use `plan_next_action` when you want a conservative ordered list of MCP tool calls for the current objective without executing anything. It currently plans common routines for woodcutting, mining, fishing, banking/deposit, dialogue, combat opening, and ground-item pickup.
 - Use `prepare_agent_step` when you want the current context plus the next action packaged with safety flags, baseline guidance, and verification guidance. It never executes the action.
@@ -78,6 +79,7 @@ The plugin chooses the first free port from `8080` through `8090`. Use the MCP `
 - Use `mark_action_baseline` before risky actions and `verify_last_action` afterward when you need a concrete snapshot diff, such as inventory quantity, location, dialogue, chat, or entity-count changes.
 - `click_object`, `click_npc`, and `click_ground_item` accept an optional `option`; when set, they use the same hybrid `interact_with` path instead of a blind screen click.
 - `walk_to` now tries a loaded-scene in-client WALK action first in `auto` mode, then falls back to minimap click for farther tiles.
+- Use `get_pathfinding_status` to distinguish current loaded-scene collision-map A* from a future global Shortest Path bridge.
 - Use `invoke_menu_action`, `invoke_walk_action`, and `invoke_widget_action` directly only when you already have or are deliberately testing raw RuneLite action params. Prefer `dryRun: true` first. Use `wait_for_game_tick` or `tickAligned: true` when timing-sensitive actions should land just after a fresh OSRS game tick.
 - Click tools refuse stale coordinates and hidden/minimized canvases.
 - Prefer `click_object`, `click_npc`, `click_ground_item`, `click_inventory_slot`, `walk_to`, and `click_minimap_tile` over raw `move_mouse_and_click`.

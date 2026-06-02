@@ -11,6 +11,7 @@ const requiredTools = [
   "prepare_agent_step",
   "validate_prepared_step",
   "run_agent_cycle",
+  "execute_agent_step",
   "diagnose_runtime",
   "list_clients",
   "select_client",
@@ -28,6 +29,7 @@ const requiredTools = [
   "invoke_widget_action",
   "calculate_path_to",
   "walk_route_to",
+  "get_pathfinding_status",
   "capture_canvas_screenshot",
   "get_screenshot",
   "verify_after_action",
@@ -158,6 +160,12 @@ try {
   if (!["NO_CLIENT", "READY", "ATTENTION_NEEDED"].includes(context.status)) {
     throw new Error(`Unexpected get_agent_context status: ${context.status}`);
   }
+  if (context.status !== "NO_CLIENT" && context.navigation?.pathfinding?.supportsLocalPathfinding !== true) {
+    throw new Error(`get_agent_context missing pathfinding status: ${JSON.stringify(context.navigation?.pathfinding)}`);
+  }
+  if (live && context.status === "NO_CLIENT") {
+    throw new Error("Live smoke requested, but no RuneLite MCP plugin client was discovered");
+  }
 
   const observeResult = await withTimeout(
     client.callTool({
@@ -257,16 +265,69 @@ try {
     "validate_prepared_step",
   );
   const validated = parseJsonToolResult(validateResult, "validate_prepared_step");
-  if (validated.status !== "VALIDATED" || validated.validation?.willExecute !== false) {
+  if (validated.status === "NO_CLIENT") {
+    if (context.status !== "NO_CLIENT") {
+      throw new Error(`validate_prepared_step unexpectedly found no client: ${JSON.stringify(validated)}`);
+    }
+  } else if (validated.status !== "VALIDATED" || validated.validation?.willExecute !== false) {
     throw new Error(`Unexpected validate_prepared_step result: ${JSON.stringify(validated)}`);
-  }
-  if (validated.validation?.validationMode !== "client_thread_dry_run") {
+  } else if (validated.validation?.validationMode !== "client_thread_dry_run") {
     throw new Error(`validate_prepared_step should dry-run raw invoke action, got ${validated.validation?.validationMode}`);
+  }
+
+  const executeDryRunResult = await withTimeout(
+    client.callTool({
+      name: "execute_agent_step",
+      arguments: {
+        objective: "chop 5 normal trees",
+        includeDiagnostics: false,
+        executionMode: "dry_run",
+        step: {
+          tool: "invoke_menu_action",
+          arguments: {
+            param0: 0,
+            param1: 0,
+            menuAction: "WALK",
+            identifier: 0,
+            itemId: -1,
+            option: "Walk here",
+            target: "",
+          },
+        },
+      },
+    }),
+    requestTimeoutMs,
+    "execute_agent_step dry_run",
+  );
+  const executeDryRun = parseJsonToolResult(executeDryRunResult, "execute_agent_step dry_run");
+  if (executeDryRun.status === "NO_CLIENT") {
+    if (context.status !== "NO_CLIENT") {
+      throw new Error(`execute_agent_step unexpectedly found no client: ${JSON.stringify(executeDryRun)}`);
+    }
+  } else if (executeDryRun.status !== "DRY_RUN_READY" || executeDryRun.willExecute !== false || executeDryRun.executed !== false) {
+    throw new Error(`execute_agent_step dry_run must not execute: ${JSON.stringify(executeDryRun)}`);
+  } else if (executeDryRun.actionResult?.dryRun !== true) {
+    throw new Error(`execute_agent_step dry_run should use plugin dryRun for raw invoke actions: ${JSON.stringify(executeDryRun.actionResult)}`);
   }
 
   let screenshotChecked = false;
   let observeScreenshotChecked = false;
+  let pathfindingStatusChecked = false;
   if (live) {
+    const pathfindingStatusResult = await withTimeout(
+      client.callTool({
+        name: "get_pathfinding_status",
+        arguments: {},
+      }),
+      requestTimeoutMs,
+      "get_pathfinding_status",
+    );
+    const pathfindingStatus = parseJsonToolResult(pathfindingStatusResult, "get_pathfinding_status");
+    if (pathfindingStatus.supportsLocalPathfinding !== true || !pathfindingStatus.provider) {
+      throw new Error(`Unexpected get_pathfinding_status result: ${JSON.stringify(pathfindingStatus)}`);
+    }
+    pathfindingStatusChecked = true;
+
     const screenshotResult = await withTimeout(
       client.callTool({
         name: "get_screenshot",
@@ -338,11 +399,13 @@ try {
     agentContextStatus: context.status,
     observeStatus: observation.status,
     cycleStatus: cycle.status,
+    executeDryRunStatus: executeDryRun.status,
     planStatus: plan.status,
     prepareStatus: prepared.status,
     validateStatus: validated.status,
     screenshotChecked,
     observeScreenshotChecked,
+    pathfindingStatusChecked,
     diagnosedClients: diagnose.checkedClients,
   };
 } finally {

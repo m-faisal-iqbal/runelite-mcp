@@ -174,6 +174,7 @@ public class ApiServer {
         server.createContext("/api/stream", new StreamHandler());
         server.createContext("/api/context_menu", new ContextMenuHandler());
         server.createContext("/api/minimap", new MinimapHandler());
+        server.createContext("/api/path/status", new PathStatusHandler());
         server.createContext("/api/path", new PathHandler());
         server.createContext("/api/chat", new ChatHandler());
         server.createContext("/api/events", new EventsHandler());
@@ -452,6 +453,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
         endpoints.add(endpoint("/api/context_menu", "Current RuneLite right-click/context menu options with approximate screen coordinates when open."));
         endpoints.add(endpoint("/api/minimap", "Minimap bounds and optional world tile projection for walk tools."));
+        endpoints.add(endpoint("/api/path/status", "Pathfinding capability status, including local-scene A* and future global Shortest Path bridge readiness."));
         endpoints.add(endpoint("/api/path?worldX=3200&worldY=3200&plane=0", "Collision-aware local-scene A* path from player to a loaded-scene world tile."));
         endpoints.add(endpoint("/api/chat", "Recent buffered RuneLite chat/game messages for feedback and error detection."));
         endpoints.add(endpoint("/api/events", "Recent plugin event buffer including chat, animation changes, item-container changes, and widget loads."));
@@ -1656,6 +1658,49 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
+    private String buildPathfindingStatusJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("status", "LOCAL_SCENE_READY");
+        response.addProperty("provider", "runelite_collision_map");
+        response.addProperty("supportsLocalPathfinding", true);
+        response.addProperty("supportsGlobalPathfinding", false);
+        response.addProperty("supportsShortestPathBridge", false);
+        response.addProperty("globalProvider", "none");
+        response.addProperty("shortestPathBridgeStatus", "NOT_CONFIGURED");
+        response.addProperty("scope", "loaded_scene");
+        response.addProperty("note", "Current pathfinding uses RuneLite collision maps for the loaded scene only. Global routing still needs a Shortest Path plugin bridge.");
+
+        JsonArray scopes = new JsonArray();
+        scopes.add("loaded_scene");
+        response.add("availableScopes", scopes);
+
+        JsonArray missingCapabilities = new JsonArray();
+        missingCapabilities.add("global_shortest_path_route");
+        missingCapabilities.add("transports_doors_teleports");
+        missingCapabilities.add("off_scene_waypoints");
+        response.add("missingCapabilities", missingCapabilities);
+
+        WorldView worldView = client.getTopLevelWorldView();
+        Player player = client.getLocalPlayer();
+        response.addProperty("collisionMapAvailable", worldView != null && worldView.getCollisionMaps() != null);
+        if (worldView != null) {
+            response.addProperty("baseX", worldView.getBaseX());
+            response.addProperty("baseY", worldView.getBaseY());
+            response.addProperty("sceneSizeX", worldView.getSizeX());
+            response.addProperty("sceneSizeY", worldView.getSizeY());
+        }
+        if (player != null && player.getWorldLocation() != null) {
+            JsonObject playerJson = new JsonObject();
+            WorldPoint point = player.getWorldLocation();
+            playerJson.addProperty("worldX", point.getX());
+            playerJson.addProperty("worldY", point.getY());
+            playerJson.addProperty("plane", point.getPlane());
+            response.add("player", playerJson);
+        }
+        return gson.toJson(response);
+    }
+
     private void addPathEndpoint(JsonObject response, String prefix, WorldPoint worldPoint, int sceneX, int sceneY) {
         JsonObject endpoint = new JsonObject();
         endpoint.addProperty("worldX", worldPoint.getX());
@@ -2394,8 +2439,12 @@ public class ApiServer {
         response.addProperty("supportsEventBuffer", true);
         response.addProperty("supportsInClientActions", true);
         response.addProperty("supportsLocalPathfinding", true);
+        response.addProperty("supportsGlobalPathfinding", false);
+        response.addProperty("supportsShortestPathBridge", false);
         response.addProperty("supportsWidgetInspector", true);
         response.addProperty("supportsRuntimeDiagnostics", true);
+        response.addProperty("pathfindingProvider", "runelite_collision_map");
+        response.addProperty("pathfindingScope", "loaded_scene");
         response.addProperty("port", port);
         response.addProperty("baseUrl", getBaseUrl());
         response.addProperty("lastSeen", System.currentTimeMillis());
@@ -2794,6 +2843,13 @@ public class ApiServer {
             }
             WorldPoint targetPoint = new WorldPoint(worldX, worldY, plane);
             handleOnClientThread(t, () -> buildPathJson(System.currentTimeMillis(), targetPoint, maxNodes));
+        }
+    }
+
+    class PathStatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            handleOnClientThread(t, () -> buildPathfindingStatusJson(System.currentTimeMillis()));
         }
     }
 
