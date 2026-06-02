@@ -1,0 +1,4 @@
+osrs-mcp-server/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

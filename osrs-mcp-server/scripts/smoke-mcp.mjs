@@ -19,6 +19,18 @@ const requiredTools = [
   "agent_resume",
   "agent_history",
   "agent_run_goal",
+  "agent_memory_status",
+  "agent_memory_sessions",
+  "memory_get_profile",
+  "memory_get_goal",
+  "memory_record_observation",
+  "memory_record_action",
+  "knowledge_query",
+  "knowledge_get_method",
+  "knowledge_get_location",
+  "knowledge_get_quest",
+  "knowledge_get_monster",
+  "knowledge_get_gear",
   "skill_interact",
   "skill_acquire",
   "skill_train",
@@ -54,6 +66,8 @@ const requiredResources = [
   "osrs://snapshot/latest",
   "osrs://events/recent",
   "osrs://client/identity",
+  "osrs://memory/profile",
+  "osrs://knowledge/index",
 ];
 
 const requiredPrompts = [
@@ -123,6 +137,7 @@ const serverPath = args.get("server") ?? fileURLToPath(new URL("../build/index.j
 const serverCwd = fileURLToPath(new URL("..", import.meta.url));
 const requestTimeoutMs = Number(args.get("timeout-ms") ?? 10000);
 const live = args.get("live") === "true";
+const nonLiveTarget = live ? {} : { port: 65535 };
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -131,7 +146,7 @@ const transport = new StdioClientTransport({
   stderr: "pipe",
   env: {
     ...process.env,
-    OSRS_API_TIMEOUT_MS: process.env.OSRS_API_TIMEOUT_MS ?? "300",
+    OSRS_API_TIMEOUT_MS: process.env.OSRS_API_TIMEOUT_MS ?? (live ? "1500" : "300"),
     OSRS_SNAPSHOT_CACHE_TTL_MS: process.env.OSRS_SNAPSHOT_CACHE_TTL_MS ?? "0",
   },
 });
@@ -165,16 +180,16 @@ try {
   const contextResult = await withTimeout(
     client.callTool({
       name: "get_agent_context",
-      arguments: { includeDiagnostics: false },
+      arguments: { includeDiagnostics: false, ...nonLiveTarget },
     }),
     requestTimeoutMs,
     "get_agent_context",
   );
   const context = parseJsonToolResult(contextResult, "get_agent_context");
-  if (!["NO_CLIENT", "READY", "ATTENTION_NEEDED"].includes(context.status)) {
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "READY", "ATTENTION_NEEDED"].includes(context.status)) {
     throw new Error(`Unexpected get_agent_context status: ${context.status}`);
   }
-  if (context.status !== "NO_CLIENT" && context.navigation?.pathfinding?.supportsLocalPathfinding !== true) {
+  if (["READY", "ATTENTION_NEEDED"].includes(context.status) && context.navigation?.pathfinding?.supportsLocalPathfinding !== true) {
     throw new Error(`get_agent_context missing pathfinding status: ${JSON.stringify(context.navigation?.pathfinding)}`);
   }
   if (live && context.status === "NO_CLIENT") {
@@ -184,7 +199,7 @@ try {
   const observeResult = await withTimeout(
     client.callTool({
       name: "observe_game",
-      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false, includePlan: true },
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false, includePlan: true, ...nonLiveTarget },
     }),
     requestTimeoutMs,
     "observe_game",
@@ -203,7 +218,7 @@ try {
   const cycleResult = await withTimeout(
     client.callTool({
       name: "run_agent_cycle",
-      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false },
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false, ...nonLiveTarget },
     }),
     requestTimeoutMs,
     "run_agent_cycle",
@@ -229,7 +244,7 @@ try {
   const planResult = await withTimeout(
     client.callTool({
       name: "plan_next_action",
-      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false },
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false, ...nonLiveTarget },
     }),
     requestTimeoutMs,
     "plan_next_action",
@@ -242,7 +257,7 @@ try {
   const prepareResult = await withTimeout(
     client.callTool({
       name: "prepare_agent_step",
-      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false },
+      arguments: { objective: "chop 5 normal trees", includeDiagnostics: false, ...nonLiveTarget },
     }),
     requestTimeoutMs,
     "prepare_agent_step",
@@ -261,6 +276,7 @@ try {
       arguments: {
         objective: "chop 5 normal trees",
         includeDiagnostics: false,
+        ...nonLiveTarget,
         step: {
           tool: "invoke_menu_action",
           arguments: {
@@ -280,8 +296,12 @@ try {
   );
   const validated = parseJsonToolResult(validateResult, "validate_prepared_step");
   if (validated.status === "NO_CLIENT") {
-    if (context.status !== "NO_CLIENT") {
+    if (live && context.status !== "NO_CLIENT") {
       throw new Error(`validate_prepared_step unexpectedly found no client: ${JSON.stringify(validated)}`);
+    }
+  } else if (validated.status === "NEEDS_CLIENT_SELECTION") {
+    if (live) {
+      throw new Error(`validate_prepared_step needs client selection during live smoke: ${JSON.stringify(validated)}`);
     }
   } else if (validated.status !== "VALIDATED" || validated.validation?.willExecute !== false) {
     throw new Error(`Unexpected validate_prepared_step result: ${JSON.stringify(validated)}`);
@@ -296,6 +316,7 @@ try {
         objective: "chop 5 normal trees",
         includeDiagnostics: false,
         executionMode: "dry_run",
+        ...nonLiveTarget,
         step: {
           tool: "invoke_menu_action",
           arguments: {
@@ -315,8 +336,12 @@ try {
   );
   const executeDryRun = parseJsonToolResult(executeDryRunResult, "execute_agent_step dry_run");
   if (executeDryRun.status === "NO_CLIENT") {
-    if (context.status !== "NO_CLIENT") {
+    if (live && context.status !== "NO_CLIENT") {
       throw new Error(`execute_agent_step unexpectedly found no client: ${JSON.stringify(executeDryRun)}`);
+    }
+  } else if (executeDryRun.status === "NEEDS_CLIENT_SELECTION") {
+    if (live) {
+      throw new Error(`execute_agent_step needs client selection during live smoke: ${JSON.stringify(executeDryRun)}`);
     }
   } else if (executeDryRun.status !== "DRY_RUN_READY" || executeDryRun.willExecute !== false || executeDryRun.executed !== false) {
     throw new Error(`execute_agent_step dry_run must not execute: ${JSON.stringify(executeDryRun)}`);
@@ -355,6 +380,7 @@ try {
         executionMode: "dry_run",
         maxSteps: 1,
         sessionId: startedGoal.session.id,
+        ...nonLiveTarget,
       },
     }),
     requestTimeoutMs,
@@ -377,6 +403,7 @@ try {
         method: "woodcutting",
         executionMode: "dry_run",
         sessionId: startedGoal.session.id,
+        ...nonLiveTarget,
       },
     }),
     requestTimeoutMs,
@@ -398,6 +425,7 @@ try {
         killCount: 1,
         executionMode: "dry_run",
         sessionId: startedGoal.session.id,
+        ...nonLiveTarget,
       },
     }),
     requestTimeoutMs,
@@ -419,6 +447,76 @@ try {
   const stoppedGoal = parseJsonToolResult(stopGoalResult, "agent_stop");
   if (stoppedGoal.status !== "SESSION_STOPPED" || stoppedGoal.session?.status !== "stopped") {
     throw new Error(`Unexpected agent_stop result: ${JSON.stringify(stoppedGoal)}`);
+  }
+
+  const memoryStatusResult = await withTimeout(
+    client.callTool({ name: "agent_memory_status", arguments: {} }),
+    requestTimeoutMs,
+    "agent_memory_status",
+  );
+  const memoryStatus = parseJsonToolResult(memoryStatusResult, "agent_memory_status");
+  if (memoryStatus.status !== "READY" || memoryStatus.sessionCount < 1 || memoryStatus.eventCount < 1) {
+    throw new Error(`Unexpected agent_memory_status result: ${JSON.stringify(memoryStatus)}`);
+  }
+
+  const memorySessionsResult = await withTimeout(
+    client.callTool({ name: "agent_memory_sessions", arguments: { limit: 10 } }),
+    requestTimeoutMs,
+    "agent_memory_sessions",
+  );
+  const memorySessions = parseJsonToolResult(memorySessionsResult, "agent_memory_sessions");
+  if (!memorySessions.sessions?.some((session) => session.id === startedGoal.session.id)) {
+    throw new Error(`agent_memory_sessions did not include smoke session: ${JSON.stringify(memorySessions)}`);
+  }
+
+  const memoryObservationResult = await withTimeout(
+    client.callTool({ name: "memory_record_observation", arguments: { sessionId: startedGoal.session.id, note: "smoke observation", observation: { ok: true } } }),
+    requestTimeoutMs,
+    "memory_record_observation",
+  );
+  const memoryObservation = parseJsonToolResult(memoryObservationResult, "memory_record_observation");
+  if (memoryObservation.status !== "OBSERVATION_RECORDED" || memoryObservation.executed !== false) {
+    throw new Error(`Unexpected memory_record_observation result: ${JSON.stringify(memoryObservation)}`);
+  }
+
+  const memoryActionResult = await withTimeout(
+    client.callTool({ name: "memory_record_action", arguments: { sessionId: startedGoal.session.id, action: { tool: "smoke" }, result: { ok: true }, lesson: "memory smoke action" } }),
+    requestTimeoutMs,
+    "memory_record_action",
+  );
+  const memoryAction = parseJsonToolResult(memoryActionResult, "memory_record_action");
+  if (memoryAction.status !== "ACTION_RECORDED" || memoryAction.executed !== false) {
+    throw new Error(`Unexpected memory_record_action result: ${JSON.stringify(memoryAction)}`);
+  }
+
+  const memoryGoalResult = await withTimeout(
+    client.callTool({ name: "memory_get_goal", arguments: { sessionId: startedGoal.session.id, limit: 20 } }),
+    requestTimeoutMs,
+    "memory_get_goal",
+  );
+  const memoryGoal = parseJsonToolResult(memoryGoalResult, "memory_get_goal");
+  if (memoryGoal.status !== "GOAL_FOUND" || !memoryGoal.journal?.some((entry) => entry.kind === "action")) {
+    throw new Error(`Unexpected memory_get_goal result: ${JSON.stringify(memoryGoal)}`);
+  }
+
+  const memoryProfileResult = await withTimeout(
+    client.callTool({ name: "memory_get_profile", arguments: { forceRefresh: false } }),
+    requestTimeoutMs,
+    "memory_get_profile",
+  );
+  const memoryProfile = parseJsonToolResult(memoryProfileResult, "memory_get_profile");
+  if (!["PROFILE_FOUND", "NO_PROFILE"].includes(memoryProfile.status) || memoryProfile.executed !== false) {
+    throw new Error(`Unexpected memory_get_profile result: ${JSON.stringify(memoryProfile)}`);
+  }
+
+  const knowledgeMethodResult = await withTimeout(
+    client.callTool({ name: "knowledge_get_method", arguments: { skill: "magic", targetLevel: 50, currentLevel: 1, preference: "safe" } }),
+    requestTimeoutMs,
+    "knowledge_get_method",
+  );
+  const knowledgeMethod = parseJsonToolResult(knowledgeMethodResult, "knowledge_get_method");
+  if (knowledgeMethod.status !== "METHOD_FOUND" || !knowledgeMethod.result?.dependencyTree?.length) {
+    throw new Error(`Unexpected knowledge_get_method result: ${JSON.stringify(knowledgeMethod)}`);
   }
 
   let screenshotChecked = false;
@@ -512,6 +610,12 @@ try {
     cycleStatus: cycle.status,
     executeDryRunStatus: executeDryRun.status,
     agentSessionStatus: agentStatus.session.status,
+    agentRunGoalStatus: runGoal.status,
+    memoryStatus: memoryStatus.status,
+    memorySessionCount: memoryStatus.sessionCount,
+    memoryEventCount: memoryStatus.eventCount,
+    memoryJournalCount: memoryAction.persistence?.journalCount,
+    knowledgeMagicMethod: knowledgeMethod.result?.method?.id,
     skillAcquireStatus: skillAcquire.status,
     skillCombatStatus: skillCombat.status,
     planStatus: plan.status,

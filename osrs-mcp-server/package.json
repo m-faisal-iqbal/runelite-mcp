@@ -12,6 +12,8 @@
     "smoke:plugin": "node scripts/smoke-plugin.mjs",
     "smoke:planner": "node scripts/smoke-planner.mjs",
     "smoke:agent-context": "node scripts/smoke-agent-context.mjs",
+    "smoke:agent-memory": "node scripts/smoke-agent-memory.mjs",
+    "smoke:knowledge": "node scripts/smoke-knowledge.mjs",
     "smoke:runtime-modules": "node scripts/smoke-runtime-modules.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
@@ -19,7 +21,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "latest",
     "@nut-tree-fork/nut-js": "^4.2.6",
-    "axios": "^1.6.7"
+    "@types/sql.js": "^1.4.11",
+    "axios": "^1.6.7",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",

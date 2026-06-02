@@ -9,6 +9,13 @@ import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree
 import { apiBaseFromPort, StateCache, type ClientTarget, type LocalPathResult, type PathStep, type RuneLiteSnapshot, type RuneLiteTarget } from "./client.js";
 import { actionStep, buildAgentStepPackage, buildNextActionPlan } from "./planner.js";
 import { buildAgentContext } from "./agent-context.js";
+import { AgentMemoryStore } from "./agent-memory.js";
+import {
+  getKnowledgeRecord,
+  getMethodKnowledge,
+  knowledgeSummary,
+  queryKnowledge,
+} from "./knowledge-base.js";
 import { discoverClients as discoverRuntimeClients, selectDiscoveredClient } from "./client-discovery.js";
 import { diagnoseClientRuntime as diagnoseRuntimeClient, EXPECTED_PLUGIN_API_VERSION } from "./runtime-diagnostics.js";
 import { chooseLocalPathStep, tileDistance, withStraightLineFallback } from "./navigation.js";
@@ -75,6 +82,8 @@ const stateCache = new StateCache(SNAPSHOT_CACHE_TTL_MS, API_TIMEOUT_MS, async (
 const actionBaselines = new Map<string, ActionBaseline>();
 const agentSessions = new Map<string, AgentSession>();
 let activeAgentSessionId: string | undefined;
+const agentMemory = new AgentMemoryStore();
+let agentMemoryLoaded = false;
 const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
 const RUN_AUTONOMY_CONFIRMATION = "RUN_AUTONOMY";
 const EXECUTABLE_AGENT_TOOLS = new Set([
@@ -1895,15 +1904,94 @@ function getAgentSession(sessionId?: string) {
   return activeAgentSessionId ? agentSessions.get(activeAgentSessionId) : undefined;
 }
 
+function storedSessionFromAgent(session: AgentSession) {
+  return {
+    id: session.id,
+    goal: session.goal,
+    status: session.status,
+    executionMode: session.executionMode,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    selectedClient: session.selectedClient,
+    stepCount: session.stepCount,
+    stopReason: session.stopReason,
+    goalState: session.goalState,
+    lastSelectedStep: session.lastSelectedStep,
+    lastVerification: session.lastVerification,
+    lastResult: session.lastResult,
+  };
+}
+
+function persistAgentSession(session: AgentSession | undefined) {
+  if (!session) {
+    return;
+  }
+  agentMemory.upsertSession(storedSessionFromAgent(session)).catch((error: any) => {
+    console.error(`Agent memory session persistence failed: ${error?.message ?? String(error)}`);
+  });
+}
+
+async function ensureAgentMemoryLoaded() {
+  if (agentMemoryLoaded) {
+    return;
+  }
+  await agentMemory.ensureReady();
+  const storedSessions = await agentMemory.listSessions({ limit: 100 });
+  for (const stored of storedSessions.reverse()) {
+    if (agentSessions.has(stored.id)) {
+      continue;
+    }
+    const events = await agentMemory.getEvents(stored.id, 500);
+    const restoredStatus = stored.status === "running" ? "paused" : stored.status;
+    const session: AgentSession = {
+      id: stored.id,
+      goal: stored.goal,
+      status: ["created", "running", "paused", "stopped", "completed", "blocked"].includes(restoredStatus)
+        ? restoredStatus as AgentSessionStatus
+        : "paused",
+      executionMode: stored.executionMode,
+      createdAt: stored.createdAt,
+      updatedAt: stored.updatedAt,
+      selectedClient: stored.selectedClient,
+      stepCount: stored.stepCount,
+      stopReason: stored.status === "running"
+        ? "Restored after MCP server restart; resume explicitly before continuing."
+        : stored.stopReason,
+      goalState: stored.goalState,
+      lastSelectedStep: stored.lastSelectedStep,
+      lastVerification: stored.lastVerification,
+      lastResult: stored.lastResult,
+      history: events.map((event) => ({ at: event.at, type: event.type, data: event.data })),
+    };
+    agentSessions.set(session.id, session);
+    if (stored.status === "running") {
+      persistAgentSession(session);
+    }
+  }
+  const newestRunnable = Array.from(agentSessions.values())
+    .filter((session) => session.status !== "stopped" && session.status !== "completed")
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  const newestAny = Array.from(agentSessions.values()).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  activeAgentSessionId = activeAgentSessionId ?? newestRunnable?.id ?? newestAny?.id;
+  agentMemoryLoaded = true;
+}
+
 function recordAgentEvent(session: AgentSession | undefined, type: string, data?: any) {
   if (!session) {
     return;
   }
   session.updatedAt = Date.now();
-  session.history.push({ at: session.updatedAt, type, data });
+  const event = { at: session.updatedAt, type, data };
+  session.history.push(event);
   if (session.history.length > 500) {
     session.history.splice(0, session.history.length - 500);
   }
+  agentMemory.upsertSession(storedSessionFromAgent(session)).catch((error: any) => {
+    console.error(`Agent memory session persistence failed: ${error?.message ?? String(error)}`);
+  });
+  agentMemory.appendEvent({ sessionId: session.id, ...event }).catch((error: any) => {
+    console.error(`Agent memory event persistence failed: ${error?.message ?? String(error)}`);
+  });
 }
 
 function jsonTool(data: any): any {
@@ -1974,8 +2062,60 @@ function evaluateSessionGoal(session: AgentSession, snapshot?: RuneLiteSnapshot)
     targetQuantity,
     reason: currentQuantity >= targetQuantity
       ? `${targetItemName} target reached.`
-      : `${targetItemName} ${currentQuantity}/${targetQuantity}.`,
+    : `${targetItemName} ${currentQuantity}/${targetQuantity}.`,
   };
+}
+
+function memoryProfileFromSnapshot(baseURL: string, snapshot: RuneLiteSnapshot) {
+  const skills = Object.fromEntries(Object.entries(snapshot.skills ?? {}).map(([name, value]: [string, any]) => [
+    name,
+    {
+      level: value?.level,
+      boostedLevel: value?.boostedLevel,
+      xp: value?.xp,
+    },
+  ]));
+  return {
+    observedAt: Date.now(),
+    baseURL,
+    playerName: snapshot.state?.name,
+    status: snapshot.state?.status,
+    world: (snapshot as any).world,
+    location: snapshot.state?.location,
+    health: snapshot.state?.health,
+    runEnergy: snapshot.state?.runEnergy,
+    combat: (snapshot as any).combat,
+    skills,
+    inventory: {
+      slotsUsed: inventorySlotsUsed(snapshot),
+      freeSlots: Math.max(0, 28 - inventorySlotsUsed(snapshot)),
+      items: (snapshot.inventory ?? [])
+        .filter((item: any) => item && item.id && item.id !== -1)
+        .map((item: any) => ({ slot: item.slot, id: item.id, name: item.name, quantity: item.quantity })),
+    },
+    equipment: snapshot.equipment ?? [],
+    bankAvailable: Array.isArray(snapshot.bank),
+    bankSlotsKnown: Array.isArray(snapshot.bank) ? snapshot.bank.length : undefined,
+    interfaceSummary: snapshot.interfaceSummary,
+  };
+}
+
+async function refreshMemoryProfile(target: ClientTarget = {}) {
+  const { baseURL, snapshot } = await getSnapshotForTarget(target, true);
+  const profile = memoryProfileFromSnapshot(baseURL, snapshot);
+  const stored = await agentMemory.updateProfile(profile);
+  await agentMemory.appendJournal({
+    at: stored.updatedAt,
+    kind: "observation",
+    data: {
+      source: "profile_refresh",
+      playerName: profile.playerName,
+      status: profile.status,
+      location: profile.location,
+      inventorySlotsUsed: profile.inventory.slotsUsed,
+    },
+  });
+  return stored;
 }
 
 function inferVerificationForStep(step: any, snapshot: RuneLiteSnapshot): Parameters<typeof waitForActivityVerification>[1] | undefined {
@@ -2090,7 +2230,7 @@ async function prepareAutonomyStep(args: {
       mode: resolved.status === "NO_CLIENT" ? "start_runtime" : "select_client",
       steps: [actionStep(
         resolved.status === "NO_CLIENT" ? "diagnose_runtime" : "select_client",
-        resolved.reason,
+        resolved.reason ?? "RuneLite client selection is not ready.",
         {},
         { priority: "blocker" }
       )],
@@ -3326,6 +3466,7 @@ server.tool(
     port: z.number().optional(),
   },
   async ({ goal, executionMode, instanceId, playerName, port }) => {
+    await ensureAgentMemoryLoaded();
     const now = Date.now();
     const session: AgentSession = {
       id: makeAgentSessionId(),
@@ -3358,13 +3499,16 @@ server.tool(
     sessionId: z.string().optional(),
   },
   async ({ sessionId }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
+    const memoryStatus = await agentMemory.status();
     return jsonTool({
       status: session ? "SESSION_FOUND" : "NO_SESSION",
       willExecute: false,
       executed: false,
       activeSessionId: activeAgentSessionId,
       session: publicAgentSession(session),
+      persistence: memoryStatus,
       stopReason: session ? session.stopReason : "No active agent session exists.",
     });
   }
@@ -3378,6 +3522,7 @@ server.tool(
     reason: z.string().optional(),
   },
   async ({ sessionId, reason }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
     if (!session) {
       return jsonTool({
@@ -3408,6 +3553,7 @@ server.tool(
     reason: z.string().optional(),
   },
   async ({ sessionId, reason }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
     if (!session) {
       return jsonTool({ status: "NO_SESSION", willExecute: false, executed: false, stopReason: "No active agent session exists." });
@@ -3426,6 +3572,7 @@ server.tool(
     sessionId: z.string().optional(),
   },
   async ({ sessionId }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
     if (!session) {
       return jsonTool({ status: "NO_SESSION", willExecute: false, executed: false, stopReason: "No active agent session exists." });
@@ -3446,15 +3593,359 @@ server.tool(
     limit: z.number().optional().describe("Maximum events to return, default 50"),
   },
   async ({ sessionId, limit }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
     const max = Math.max(1, Math.min(500, limit ?? 50));
+    const persistentEvents = session ? await agentMemory.getEvents(session.id, max) : [];
     return jsonTool({
       status: session ? "SESSION_FOUND" : "NO_SESSION",
       willExecute: false,
       executed: false,
       session: publicAgentSession(session),
-      events: session ? session.history.slice(-max) : [],
+      events: persistentEvents.length
+        ? persistentEvents.map((event) => ({ at: event.at, type: event.type, data: event.data, persisted: true }))
+        : session ? session.history.slice(-max) : [],
+      persistence: await agentMemory.status(),
       stopReason: session ? session.stopReason : "No active agent session exists.",
+    });
+  }
+);
+
+server.tool(
+  "agent_memory_status",
+  "Inspect the Phase 3 persistent agent memory database status and counts.",
+  {},
+  async () => {
+    await ensureAgentMemoryLoaded();
+    return jsonTool({
+      ...(await agentMemory.status()),
+      willExecute: false,
+      executed: false,
+      activeSessionId: activeAgentSessionId,
+      loadedSessionCount: agentSessions.size,
+    });
+  }
+);
+
+server.tool(
+  "agent_memory_sessions",
+  "List recent persisted agent sessions from the Phase 3 SQLite memory store.",
+  {
+    limit: z.number().optional().describe("Maximum sessions to return, default 20"),
+    status: z.string().optional().describe("Optional exact status filter such as completed, stopped, paused, blocked"),
+    goalContains: z.string().optional().describe("Optional case-insensitive goal text filter"),
+  },
+  async ({ limit, status, goalContains }) => {
+    await ensureAgentMemoryLoaded();
+    const sessions = await agentMemory.listSessions({ limit: limit ?? 20, status, goalContains });
+    return jsonTool({
+      status: "MEMORY_SESSIONS",
+      willExecute: false,
+      executed: false,
+      sessions,
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.registerResource(
+  "memory-profile",
+  "osrs://memory/profile",
+  {
+    title: "Persistent OSRS Agent Memory Profile",
+    description: "Latest durable account/profile snapshot stored by the Phase 3 memory ledger.",
+    mimeType: "application/json",
+  },
+  async () => {
+    const uri = "osrs://memory/profile";
+    await ensureAgentMemoryLoaded();
+    const profile = await agentMemory.getProfile();
+    return resourceText(uri, {
+      status: profile ? "PROFILE_FOUND" : "NO_PROFILE",
+      profile,
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.registerResource(
+  "knowledge-index",
+  "osrs://knowledge/index",
+  {
+    title: "Curated OSRS Knowledge Index",
+    description: "Phase 4 local curated OSRS knowledge summary, counts, scope, and starter query hints.",
+    mimeType: "application/json",
+  },
+  async () => {
+    return resourceText("osrs://knowledge/index", {
+      status: "KNOWLEDGE_READY",
+      ...knowledgeSummary(),
+    });
+  }
+);
+
+server.tool(
+  "knowledge_query",
+  "Search the Phase 4 curated local OSRS knowledge base across methods, locations, quests, monsters, and gear.",
+  {
+    query: z.string().describe("Search text, for example '50 Magic', 'Lumbridge cows', 'Cook assistant', or 'starter gear'"),
+    kind: z.enum(["method", "location", "quest", "monster", "gear"]).optional().describe("Optional knowledge kind filter"),
+    members: z.boolean().optional().describe("Optional members/F2P filter"),
+    limit: z.number().optional().describe("Maximum results, default 10"),
+  },
+  async ({ query, kind, members, limit }) => {
+    return jsonTool({
+      status: "KNOWLEDGE_RESULTS",
+      willExecute: false,
+      executed: false,
+      query,
+      kind,
+      members,
+      summary: knowledgeSummary(),
+      results: queryKnowledge({ query, kind, members, limit }),
+    });
+  }
+);
+
+server.tool(
+  "knowledge_get_method",
+  "Get a curated OSRS training/combat/economy method with requirements, locations, dependency tree, and recommended MCP tools.",
+  {
+    methodId: z.string().optional().describe("Exact method id such as magic.fire_strike_f2p"),
+    skill: z.string().optional().describe("Skill/domain such as woodcutting, magic, mining, fishing, combat, economy"),
+    activity: z.string().optional().describe("Activity or goal text, for example '50 Magic', 'oak logs', 'starter gp'"),
+    currentLevel: z.number().optional().describe("Current level for the relevant skill, default 1"),
+    targetLevel: z.number().optional().describe("Target level when relevant"),
+    preference: z.string().optional().describe("Preference such as fastest, cheap, profit, safe, starter"),
+  },
+  async ({ methodId, skill, activity, currentLevel, targetLevel, preference }) => {
+    const result = getMethodKnowledge({ methodId, skill, activity, currentLevel, targetLevel, preference });
+    return jsonTool({
+      status: result ? "METHOD_FOUND" : "METHOD_NOT_FOUND",
+      willExecute: false,
+      executed: false,
+      query: { methodId, skill, activity, currentLevel, targetLevel, preference },
+      result,
+      stopReason: result ? undefined : "No curated method matched this query yet.",
+    });
+  }
+);
+
+server.tool(
+  "knowledge_get_location",
+  "Get curated OSRS location knowledge by id/name, including contained resources, banks, transport, and risks.",
+  {
+    idOrName: z.string().describe("Location id or name, for example lumbridge_cows or Draynor Village willow trees"),
+  },
+  async ({ idOrName }) => {
+    const record = getKnowledgeRecord("location", idOrName);
+    return jsonTool({
+      status: record ? "LOCATION_FOUND" : "LOCATION_NOT_FOUND",
+      willExecute: false,
+      executed: false,
+      location: record,
+      stopReason: record ? undefined : "No curated location matched this id/name yet.",
+    });
+  }
+);
+
+server.tool(
+  "knowledge_get_quest",
+  "Get curated OSRS quest knowledge by id/name, including requirements, step outline, rewards, and risks.",
+  {
+    idOrName: z.string().describe("Quest id or name, for example tutorial_island or Cook's Assistant"),
+  },
+  async ({ idOrName }) => {
+    const record = getKnowledgeRecord("quest", idOrName);
+    return jsonTool({
+      status: record ? "QUEST_FOUND" : "QUEST_NOT_FOUND",
+      willExecute: false,
+      executed: false,
+      quest: record,
+      stopReason: record ? undefined : "No curated quest matched this id/name yet.",
+    });
+  }
+);
+
+server.tool(
+  "knowledge_get_monster",
+  "Get curated OSRS monster knowledge by id/name, including locations, weaknesses, useful drops, tactics, and risks.",
+  {
+    idOrName: z.string().describe("Monster id or name, for example chicken, cow, Grizzly bear, or Hill Giant"),
+  },
+  async ({ idOrName }) => {
+    const record = getKnowledgeRecord("monster", idOrName);
+    return jsonTool({
+      status: record ? "MONSTER_FOUND" : "MONSTER_NOT_FOUND",
+      willExecute: false,
+      executed: false,
+      monster: record,
+      stopReason: record ? undefined : "No curated monster matched this id/name yet.",
+    });
+  }
+);
+
+server.tool(
+  "knowledge_get_gear",
+  "Get curated OSRS gear knowledge by id/name, including requirements, item set, use cases, and upgrade path.",
+  {
+    idOrName: z.string().describe("Gear id or name, for example starter_magic_f2p or Starter F2P melee gear"),
+  },
+  async ({ idOrName }) => {
+    const record = getKnowledgeRecord("gear", idOrName);
+    return jsonTool({
+      status: record ? "GEAR_FOUND" : "GEAR_NOT_FOUND",
+      willExecute: false,
+      executed: false,
+      gear: record,
+      stopReason: record ? undefined : "No curated gear matched this id/name yet.",
+    });
+  }
+);
+
+server.tool(
+  "memory_get_profile",
+  "Read the persistent account/profile memory. Optionally refresh it from the live RuneLite snapshot first.",
+  {
+    forceRefresh: z.boolean().optional().describe("Refresh profile from the live RuneLite snapshot before returning it, default false"),
+    ...clientTargetSchema(),
+  },
+  async ({ forceRefresh, instanceId, playerName, port }) => {
+    await ensureAgentMemoryLoaded();
+    let refreshError: string | undefined;
+    if (forceRefresh) {
+      try {
+        await refreshMemoryProfile({ instanceId, playerName, port });
+      } catch (error: any) {
+        refreshError = error?.message ?? String(error);
+      }
+    }
+    const profile = await agentMemory.getProfile();
+    return jsonTool({
+      status: profile ? "PROFILE_FOUND" : "NO_PROFILE",
+      willExecute: false,
+      executed: false,
+      profile,
+      refreshError,
+      persistence: await agentMemory.status(),
+      resource: "osrs://memory/profile",
+    });
+  }
+);
+
+server.tool(
+  "memory_get_goal",
+  "Read a persisted goal/session with recent events and journal entries.",
+  {
+    sessionId: z.string().optional(),
+    limit: z.number().optional().describe("Maximum events/journal rows to return, default 50"),
+  },
+  async ({ sessionId, limit }) => {
+    await ensureAgentMemoryLoaded();
+    const session = getAgentSession(sessionId);
+    const max = Math.max(1, Math.min(500, limit ?? 50));
+    const events = session ? await agentMemory.getEvents(session.id, max) : [];
+    const journal = session ? await agentMemory.listJournal({ sessionId: session.id, limit: max }) : [];
+    return jsonTool({
+      status: session ? "GOAL_FOUND" : "NO_GOAL",
+      willExecute: false,
+      executed: false,
+      activeSessionId: activeAgentSessionId,
+      session: publicAgentSession(session),
+      events,
+      journal,
+      persistence: await agentMemory.status(),
+      stopReason: session ? session.stopReason : "No active or matching persisted goal session exists.",
+    });
+  }
+);
+
+server.tool(
+  "memory_record_observation",
+  "Record a durable observation/lesson in the Phase 3 memory journal, optionally including the current live snapshot summary.",
+  {
+    note: z.string().optional(),
+    observation: z.any().optional(),
+    includeSnapshot: z.boolean().optional().describe("Attach a compact live snapshot/profile observation, default false"),
+    sessionId: z.string().optional(),
+    ...clientTargetSchema(),
+  },
+  async ({ note, observation, includeSnapshot, sessionId, instanceId, playerName, port }) => {
+    await ensureAgentMemoryLoaded();
+    const session = getAgentSession(sessionId);
+    let snapshotProfile: any;
+    let snapshotError: string | undefined;
+    if (includeSnapshot) {
+      try {
+        const refreshed = await refreshMemoryProfile({ instanceId, playerName, port });
+        snapshotProfile = refreshed.data;
+      } catch (error: any) {
+        snapshotError = error?.message ?? String(error);
+      }
+    }
+    const at = Date.now();
+    const data = {
+      note,
+      observation,
+      snapshotProfile,
+      snapshotError,
+    };
+    await agentMemory.appendJournal({
+      at,
+      kind: "observation",
+      sessionId: session?.id,
+      goal: session?.goal,
+      data,
+    });
+    recordAgentEvent(session, "memory_observation", data);
+    return jsonTool({
+      status: "OBSERVATION_RECORDED",
+      willExecute: false,
+      executed: false,
+      at,
+      session: publicAgentSession(session),
+      data,
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.tool(
+  "memory_record_action",
+  "Record a durable action result, lesson, or strategy note in the Phase 3 memory journal.",
+  {
+    goal: z.string().optional(),
+    action: z.any().describe("Action/tool/strategy that was attempted or considered"),
+    result: z.any().optional(),
+    lesson: z.string().optional(),
+    sessionId: z.string().optional(),
+  },
+  async ({ goal, action, result, lesson, sessionId }) => {
+    await ensureAgentMemoryLoaded();
+    const session = getAgentSession(sessionId);
+    const at = Date.now();
+    const data = {
+      action,
+      result,
+      lesson,
+    };
+    await agentMemory.appendJournal({
+      at,
+      kind: "action",
+      sessionId: session?.id,
+      goal: goal ?? session?.goal,
+      data,
+    });
+    recordAgentEvent(session, "memory_action", data);
+    return jsonTool({
+      status: "ACTION_RECORDED",
+      willExecute: false,
+      executed: false,
+      at,
+      session: publicAgentSession(session),
+      goal: goal ?? session?.goal,
+      data,
+      persistence: await agentMemory.status(),
     });
   }
 );
@@ -3499,6 +3990,7 @@ server.tool(
     port,
   }) => {
     try {
+      await ensureAgentMemoryLoaded();
       let session = getAgentSession(sessionId);
       const goalText = goal ?? session?.goal;
       if (!goalText) {
@@ -3574,7 +4066,7 @@ server.tool(
       const timeLimitMs = Math.max(1, Math.min(15, maxMinutes ?? 2)) * 60_000;
       const startedAt = Date.now();
       const iterations: any[] = [];
-      let stopReason = wantsExecution ? "MAX_STEPS_REACHED" : "DRY_RUN_ONLY";
+      let stopReason: string | undefined = wantsExecution ? "MAX_STEPS_REACHED" : "DRY_RUN_ONLY";
       let selectedStep: any = null;
       let verification: any = { verified: false };
       let finalContext: any;
@@ -3585,7 +4077,8 @@ server.tool(
           stopReason = "MAX_TIME_REACHED";
           break;
         }
-        if (session.status === "stopped" || session.status === "paused") {
+        const currentStatus = session.status as AgentSessionStatus;
+        if (currentStatus === "stopped" || currentStatus === "paused") {
           stopReason = session.stopReason ?? `Session is ${session.status}.`;
           break;
         }
@@ -3602,8 +4095,8 @@ server.tool(
 
         if (prepared.status !== "READY") {
           selectedStep = prepared.selectedStep;
-          verification = { verified: false, reason: prepared.reason };
-          stopReason = prepared.reason;
+          verification = { verified: false, reason: prepared.reason ?? "RuneLite client is not ready." };
+          stopReason = prepared.reason ?? "RuneLite client is not ready.";
           session.status = "blocked";
           session.stopReason = stopReason;
           recordAgentEvent(session, "autonomy_blocked", prepared);
@@ -3622,8 +4115,9 @@ server.tool(
         }
 
         session.selectedClient = prepared.targetClient;
-        initializeSessionGoalState(session, prepared.snapshot);
-        const preProgress = evaluateSessionGoal(session, prepared.snapshot);
+        const preparedSnapshot = prepared.snapshot as RuneLiteSnapshot;
+        initializeSessionGoalState(session, preparedSnapshot);
+        const preProgress = evaluateSessionGoal(session, preparedSnapshot);
         finalContext = prepared.context;
         finalProgress = preProgress;
         if (preProgress.complete) {
@@ -3694,7 +4188,7 @@ server.tool(
           executionMode: mode,
           session,
           target: session.selectedClient,
-          verification: inferVerificationForStep(selectedStep, prepared.snapshot),
+          verification: inferVerificationForStep(selectedStep, preparedSnapshot),
           maxAgeMs,
           tickAligned,
           tickTimeoutMs,
@@ -3751,6 +4245,13 @@ server.tool(
           : session.status === "blocked"
             ? "AUTONOMY_BLOCKED"
             : "AUTONOMY_RAN";
+      recordAgentEvent(session, "autonomy_finished", {
+        status: responseStatus,
+        executed,
+        iterationCount: iterations.length,
+        stopReason,
+        finalProgress,
+      });
 
       return jsonTool({
         status: responseStatus,
@@ -3791,6 +4292,7 @@ server.tool(
   },
   async ({ entityType, option, name, id, nearestToPlayer, executionMode, sessionId, maxAgeMs, instanceId, playerName, port }) => {
     try {
+      await ensureAgentMemoryLoaded();
       const session = getAgentSession(sessionId);
       if (session?.status === "stopped" || session?.status === "paused") {
         return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
@@ -3828,6 +4330,7 @@ server.tool(
   },
   async ({ itemName, quantity, method, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
+      await ensureAgentMemoryLoaded();
       const session = getAgentSession(sessionId);
       if (session?.status === "stopped" || session?.status === "paused") {
         return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
@@ -3942,6 +4445,7 @@ server.tool(
   },
   async ({ skill, targetLevel, targetXp, method, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
+      await ensureAgentMemoryLoaded();
       const normalizedSkill = skill.toLowerCase();
       const session = getAgentSession(sessionId);
       if (normalizedSkill !== "woodcutting") {
@@ -4000,6 +4504,7 @@ server.tool(
   },
   async ({ destinationName, worldX, worldY, plane, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
+      await ensureAgentMemoryLoaded();
       const session = getAgentSession(sessionId);
       if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
         return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "Phase 1 skill_travel requires worldX/worldY. Named/global destinations arrive in Phase 6.", destinationName, session: publicAgentSession(session) });
@@ -4031,6 +4536,7 @@ server.tool(
     ...clientTargetSchema(),
   },
   async ({ action, itemName, quantity, executionMode, sessionId }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
     return jsonTool({
       status: "UNSUPPORTED_ACTIVITY",
@@ -4057,6 +4563,7 @@ server.tool(
     sessionId: z.string().optional(),
   },
   async ({ amount, allowedMethods, executionMode, sessionId }) => {
+    await ensureAgentMemoryLoaded();
     const session = getAgentSession(sessionId);
     return jsonTool({
       status: "PLANNED_ONLY",
@@ -4093,6 +4600,7 @@ server.tool(
   },
   async ({ target, killCount, style, eatThreshold, loot, lootName, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
+      await ensureAgentMemoryLoaded();
       const session = getAgentSession(sessionId);
       const mode = executionMode ?? session?.executionMode ?? "dry_run";
       const resolved = await resolveActivityClient({ instanceId, playerName, port });
