@@ -2,6 +2,7 @@ param(
   [switch]$RestartRuneLite,
   [switch]$BuildOnly,
   [switch]$InstallOnly,
+  [switch]$StopStandaloneMcpServer,
   [int]$MaxMemoryMb = 512
 )
 
@@ -237,9 +238,14 @@ function Build-Server {
 }
 
 function Stop-StaleMcpServers {
+  if (-not $StopStandaloneMcpServer) {
+    Write-Step "Leaving MCP stdio server processes running. Pass -StopStandaloneMcpServer only for manually-started stale servers."
+    return
+  }
+
   $servers = @(Get-OsrsMcpServerProcesses)
   if ($servers.Count -gt 0) {
-    Write-Step "Stopping stale standalone MCP server processes. Codex starts this stdio server from config when needed."
+    Write-Step "Stopping manually-started standalone MCP server processes."
     $servers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
   }
 }

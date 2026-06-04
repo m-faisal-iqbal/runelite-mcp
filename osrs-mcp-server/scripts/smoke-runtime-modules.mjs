@@ -55,6 +55,7 @@ try {
     supportsConcurrentStreams: true,
     supportsEventBuffer: true,
     supportsInClientActions: true,
+    supportsDirectMenuActions: true,
     supportsLocalPathfinding: true,
     supportsWidgetInspector: true,
   }, 1000);
@@ -74,6 +75,7 @@ try {
   assert.equal(stale.status, "needs_reload");
   assert.equal(stale.staleRuntime, true);
   assert(stale.missingIdentityFlags.includes("supportsInClientActions"));
+  assert(stale.missingIdentityFlags.includes("supportsDirectMenuActions"));
 
   console.log(JSON.stringify({
     ok: true,

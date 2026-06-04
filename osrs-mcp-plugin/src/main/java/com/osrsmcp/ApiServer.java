@@ -10,9 +10,12 @@ import com.sun.net.httpserver.HttpServer;
 import net.runelite.api.Client;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
+import net.runelite.api.ObjectComposition;
 import net.runelite.api.Prayer;
 import net.runelite.api.Quest;
 import net.runelite.api.GameObject;
@@ -174,6 +177,7 @@ public class ApiServer {
         server.createContext("/api/stream", new StreamHandler());
         server.createContext("/api/context_menu", new ContextMenuHandler());
         server.createContext("/api/minimap", new MinimapHandler());
+        server.createContext("/api/minimap/icons", new MinimapIconsHandler());
         server.createContext("/api/path/status", new PathStatusHandler());
         server.createContext("/api/path", new PathHandler());
         server.createContext("/api/chat", new ChatHandler());
@@ -453,6 +457,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
         endpoints.add(endpoint("/api/context_menu", "Current RuneLite right-click/context menu options with approximate screen coordinates when open."));
         endpoints.add(endpoint("/api/minimap", "Minimap bounds and optional world tile projection for walk tools."));
+        endpoints.add(endpoint("/api/minimap/icons", "Compact semantic minimap perception: local player, visible players/NPCs, hint arrows, and named scene POIs projected to minimap/screen coordinates."));
         endpoints.add(endpoint("/api/path/status", "Pathfinding capability status, including local-scene A* and future global Shortest Path bridge readiness."));
         endpoints.add(endpoint("/api/path?worldX=3200&worldY=3200&plane=0", "Collision-aware local-scene A* path from player to a loaded-scene world tile."));
         endpoints.add(endpoint("/api/chat", "Recent buffered RuneLite chat/game messages for feedback and error detection."));
@@ -866,6 +871,116 @@ public class ApiServer {
         response.addProperty("entityKey", key.toString());
     }
 
+    private MenuAction indexedMenuAction(String entityType, int actionIndex) {
+        switch (entityType) {
+            case "object":
+                switch (actionIndex) {
+                    case 0: return MenuAction.GAME_OBJECT_FIRST_OPTION;
+                    case 1: return MenuAction.GAME_OBJECT_SECOND_OPTION;
+                    case 2: return MenuAction.GAME_OBJECT_THIRD_OPTION;
+                    case 3: return MenuAction.GAME_OBJECT_FOURTH_OPTION;
+                    case 4: return MenuAction.GAME_OBJECT_FIFTH_OPTION;
+                    default: return null;
+                }
+            case "npc":
+                switch (actionIndex) {
+                    case 0: return MenuAction.NPC_FIRST_OPTION;
+                    case 1: return MenuAction.NPC_SECOND_OPTION;
+                    case 2: return MenuAction.NPC_THIRD_OPTION;
+                    case 3: return MenuAction.NPC_FOURTH_OPTION;
+                    case 4: return MenuAction.NPC_FIFTH_OPTION;
+                    default: return null;
+                }
+            case "ground_item":
+                switch (actionIndex) {
+                    case 0: return MenuAction.GROUND_ITEM_FIRST_OPTION;
+                    case 1: return MenuAction.GROUND_ITEM_SECOND_OPTION;
+                    case 2: return MenuAction.GROUND_ITEM_THIRD_OPTION;
+                    case 3: return MenuAction.GROUND_ITEM_FOURTH_OPTION;
+                    case 4: return MenuAction.GROUND_ITEM_FIFTH_OPTION;
+                    default: return null;
+                }
+            default:
+                return null;
+        }
+    }
+
+    private void addInventoryMenuActionParams(JsonObject response, String[] actions, int itemId, int slot, int widgetId, String itemName) {
+        JsonArray actionArray = new JsonArray();
+        boolean selectedDefault = false;
+        if (actions != null) {
+            for (int i = 0; i < actions.length && i < 5; i++) {
+                String action = actions[i];
+                if (action == null || action.trim().isEmpty()) {
+                    continue;
+                }
+
+                JsonObject actionObj = new JsonObject();
+                actionObj.addProperty("option", action);
+                actionObj.addProperty("actionIndex", i + 1);
+                actionObj.addProperty("menuAction", MenuAction.CC_OP_LOW_PRIORITY.name());
+                actionObj.addProperty("identifier", i + 3);
+                actionObj.addProperty("param0", slot);
+                actionObj.addProperty("param1", widgetId);
+                actionObj.addProperty("itemId", itemId);
+                actionObj.addProperty("target", "<col=ff9040>" + (itemName != null ? itemName : "") + "</col>");
+                actionArray.add(actionObj);
+
+                if (!selectedDefault) {
+                    response.addProperty("option", action);
+                    response.addProperty("actionIndex", i + 1);
+                    response.addProperty("menuAction", MenuAction.CC_OP_LOW_PRIORITY.name());
+                    response.addProperty("identifier", i + 3);
+                    response.addProperty("param0", slot);
+                    response.addProperty("param1", widgetId);
+                    response.addProperty("itemId", itemId);
+                    response.addProperty("target", "<col=ff9040>" + (itemName != null ? itemName : "") + "</col>");
+                    selectedDefault = true;
+                }
+            }
+        }
+        response.add("menuActions", actionArray);
+    }
+
+    private void addMenuActionParams(JsonObject response, String entityType, String[] actions, int identifier, int param0, int param1, int itemId) {
+        JsonArray actionArray = new JsonArray();
+        boolean selectedDefault = false;
+        if (actions != null) {
+            for (int i = 0; i < actions.length && i < 5; i++) {
+                String action = actions[i];
+                if (action == null || action.trim().isEmpty()) {
+                    continue;
+                }
+                MenuAction menuAction = indexedMenuAction(entityType, i);
+                if (menuAction == null) {
+                    continue;
+                }
+
+                JsonObject actionObj = new JsonObject();
+                actionObj.addProperty("option", action);
+                actionObj.addProperty("actionIndex", i + 1);
+                actionObj.addProperty("menuAction", menuAction.name());
+                actionObj.addProperty("identifier", identifier);
+                actionObj.addProperty("param0", param0);
+                actionObj.addProperty("param1", param1);
+                actionObj.addProperty("itemId", itemId);
+                actionArray.add(actionObj);
+
+                if (!selectedDefault) {
+                    response.addProperty("option", action);
+                    response.addProperty("actionIndex", i + 1);
+                    response.addProperty("menuAction", menuAction.name());
+                    response.addProperty("identifier", identifier);
+                    response.addProperty("param0", param0);
+                    response.addProperty("param1", param1);
+                    response.addProperty("itemId", itemId);
+                    selectedDefault = true;
+                }
+            }
+        }
+        response.add("menuActions", actionArray);
+    }
+
     public void addChatMessage(String type, String name, String sender, String message, int timestamp) {
         JsonObject chatMessage = new JsonObject();
         chatMessage.addProperty("tick", gameTick);
@@ -981,6 +1096,10 @@ public class ApiServer {
             npcObj.addProperty("plane", wp.getPlane());
             addDistanceToPlayer(npcObj, wp);
             addEntityKey(npcObj, "npc", npc.getId(), name, wp, npc.getIndex());
+            NPCComposition npcComposition = npc.getTransformedComposition();
+            if (npcComposition != null) {
+                addMenuActionParams(npcObj, "npc", npcComposition.getActions(), npc.getIndex(), 0, 0, -1);
+            }
 
             addRawLocalPoint(npcObj, npc.getLocalLocation(), false, "localPoint");
             addCanvasCoordinateFromShape(npcObj, npc.getConvexHull(), "convexHull");
@@ -1076,6 +1195,19 @@ public class ApiServer {
                     jsonObj.addProperty("plane", wp.getPlane());
                     addDistanceToPlayer(jsonObj, wp);
                     addEntityKey(jsonObj, "object", obj.getId(), name, wp, null);
+                    LocalPoint objectLocalPoint = obj.getLocalLocation();
+                    ObjectComposition objectComposition = client.getObjectDefinition(obj.getId());
+                    if (objectLocalPoint != null && objectComposition != null) {
+                        addMenuActionParams(
+                            jsonObj,
+                            "object",
+                            objectComposition.getActions(),
+                            obj.getId(),
+                            objectLocalPoint.getSceneX(),
+                            objectLocalPoint.getSceneY(),
+                            -1
+                        );
+                    }
 
                     addRawLocalPoint(jsonObj, obj.getLocalLocation(), false, "localPoint");
                     addCanvasCoordinateFromShape(jsonObj, obj.getClickbox(), "clickbox");
@@ -1115,6 +1247,18 @@ public class ApiServer {
                     jsonObj.addProperty("plane", wp.getPlane());
                     addDistanceToPlayer(jsonObj, wp);
                     addEntityKey(jsonObj, "groundItem", item.getId(), name, wp, null);
+                    LocalPoint itemLocalPoint = tile.getLocalLocation();
+                    if (itemLocalPoint != null) {
+                        addMenuActionParams(
+                            jsonObj,
+                            "ground_item",
+                            new String[] { "Take" },
+                            item.getId(),
+                            itemLocalPoint.getSceneX(),
+                            itemLocalPoint.getSceneY(),
+                            item.getId()
+                        );
+                    }
 
                     addRawLocalPoint(jsonObj, tile.getLocalLocation(), true, "tileLocalPoint");
                     response.add(jsonObj);
@@ -1166,16 +1310,35 @@ public class ApiServer {
         return gson.toJson(response);
     }
 
-    private void addInventorySlotCoordinates(JsonObject itemObj, int slot) {
+    private void addInventorySlotMetadata(JsonObject itemObj, Item item, int slot) {
         Widget inventoryWidget = client.getWidget(WidgetInfo.INVENTORY);
         if (inventoryWidget == null || inventoryWidget.isHidden()) {
             return;
+        }
+
+        itemObj.addProperty("inventoryWidgetId", inventoryWidget.getId());
+        itemObj.addProperty("inventoryParam0Slot", slot);
+        itemObj.addProperty("inventoryParam1WidgetId", inventoryWidget.getId());
+
+        ItemComposition itemComposition = client.getItemDefinition(item.getId());
+        if (itemComposition != null) {
+            addInventoryMenuActionParams(
+                itemObj,
+                itemComposition.getInventoryActions(),
+                item.getId(),
+                slot,
+                inventoryWidget.getId(),
+                itemComposition.getName()
+            );
         }
 
         Widget[] children = inventoryWidget.getDynamicChildren();
         if (children == null || slot < 0 || slot >= children.length || children[slot] == null) {
             return;
         }
+
+        itemObj.addProperty("slotWidgetId", children[slot].getId());
+        itemObj.addProperty("slotIndex", slot);
 
         Rectangle bounds = children[slot].getBounds();
         if (bounds == null || bounds.isEmpty()) {
@@ -1201,7 +1364,7 @@ public class ApiServer {
                     itemObj.addProperty("name", getItemName(item.getId()));
                     itemObj.addProperty("quantity", item.getQuantity());
                     itemObj.addProperty("slot", i);
-                    addInventorySlotCoordinates(itemObj, i);
+                    addInventorySlotMetadata(itemObj, item, i);
                     response.add(itemObj);
                 }
             }
@@ -1566,6 +1729,230 @@ public class ApiServer {
         }
 
         return gson.toJson(response);
+    }
+
+    private String buildMinimapIconsJson(long capturedAt, int maxEntities) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        int limit = Math.max(1, Math.min(maxEntities, 200));
+        response.addProperty("maxEntities", limit);
+
+        Widget minimap = firstVisibleWidget(
+            WidgetInfo.RESIZABLE_MINIMAP_DRAW_AREA,
+            WidgetInfo.RESIZABLE_MINIMAP_STONES_DRAW_AREA,
+            WidgetInfo.FIXED_VIEWPORT_MINIMAP_DRAW_AREA,
+            WidgetInfo.FIXED_VIEWPORT_MINIMAP
+        );
+        if (minimap != null) {
+            addBounds(response, "minimapBounds", minimap.getBounds());
+        } else {
+            response.addProperty("coordinateWarning", "MINIMAP_WIDGET_UNAVAILABLE");
+        }
+        response.addProperty("mapAngle", client.getMapAngle());
+        response.addProperty("minimapZoom", client.getMinimapZoom());
+
+        JsonArray icons = new JsonArray();
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            response.addProperty("status", "NOT_LOGGED_IN");
+            response.add("icons", icons);
+            response.addProperty("count", 0);
+            return gson.toJson(response);
+        }
+
+        response.addProperty("status", "LOGGED_IN");
+        Player localPlayer = client.getLocalPlayer();
+        if (localPlayer != null) {
+            JsonObject playerIcon = buildActorMinimapIcon("localPlayer", "self", localPlayer.getName(), -1, localPlayer.getWorldLocation(), localPlayer.getLocalLocation(), capturedAt);
+            playerIcon.addProperty("isLocalPlayer", true);
+            icons.add(playerIcon);
+        }
+
+        int visiblePlayerCount = 0;
+        for (Player player : client.getPlayers()) {
+            if (player == null || player == localPlayer || icons.size() >= limit) {
+                continue;
+            }
+            JsonObject playerIcon = buildActorMinimapIcon("player", "player_dot", player.getName(), player.getCombatLevel(), player.getWorldLocation(), player.getLocalLocation(), capturedAt);
+            playerIcon.addProperty("combatLevel", player.getCombatLevel());
+            playerIcon.addProperty("animation", player.getAnimation());
+            visiblePlayerCount++;
+            icons.add(playerIcon);
+        }
+        response.addProperty("visiblePlayerCount", visiblePlayerCount);
+        response.addProperty("visiblePlayerThreat", visiblePlayerCount > 0);
+
+        for (NPC npc : client.getNpcs()) {
+            if (npc == null || icons.size() >= limit) {
+                continue;
+            }
+            String name = getNpcName(npc);
+            JsonObject npcIcon = buildActorMinimapIcon("npc", "npc_dot", name, npc.getId(), npc.getWorldLocation(), npc.getLocalLocation(), capturedAt);
+            npcIcon.addProperty("index", npc.getIndex());
+            npcIcon.addProperty("animation", npc.getAnimation());
+            npcIcon.addProperty("isDead", npc.isDead());
+            npcIcon.addProperty("healthRatio", npc.getHealthRatio());
+            icons.add(npcIcon);
+        }
+
+        addHintArrowIcon(icons, capturedAt, limit);
+        addScenePoiMinimapIcons(icons, capturedAt, limit);
+
+        response.add("icons", icons);
+        response.addProperty("count", icons.size());
+        return gson.toJson(response);
+    }
+
+    private JsonObject buildActorMinimapIcon(String type, String semantic, String name, int id, WorldPoint worldPoint, LocalPoint localPoint, long capturedAt) {
+        JsonObject icon = new JsonObject();
+        addCaptureMeta(icon, capturedAt);
+        icon.addProperty("type", type);
+        icon.addProperty("semantic", semantic);
+        icon.addProperty("name", name != null ? name : "");
+        icon.addProperty("id", id);
+        addWorldLocation(icon, worldPoint);
+        addDistanceToPlayer(icon, worldPoint);
+        addMinimapProjection(icon, localPoint);
+        return icon;
+    }
+
+    private void addHintArrowIcon(JsonArray icons, long capturedAt, int limit) {
+        if (icons.size() >= limit) {
+            return;
+        }
+
+        NPC hintNpc = client.getHintArrowNpc();
+        if (hintNpc != null) {
+            JsonObject icon = buildActorMinimapIcon("hintArrow", "hint_npc", getNpcName(hintNpc), hintNpc.getId(), hintNpc.getWorldLocation(), hintNpc.getLocalLocation(), capturedAt);
+            icons.add(icon);
+            return;
+        }
+
+        Player hintPlayer = client.getHintArrowPlayer();
+        if (hintPlayer != null) {
+            JsonObject icon = buildActorMinimapIcon("hintArrow", "hint_player", hintPlayer.getName(), hintPlayer.getCombatLevel(), hintPlayer.getWorldLocation(), hintPlayer.getLocalLocation(), capturedAt);
+            icons.add(icon);
+            return;
+        }
+
+        WorldPoint hintPoint = client.getHintArrowPoint();
+        if (hintPoint != null) {
+            JsonObject icon = new JsonObject();
+            addCaptureMeta(icon, capturedAt);
+            icon.addProperty("type", "hintArrow");
+            icon.addProperty("semantic", "hint_tile");
+            addWorldLocation(icon, hintPoint);
+            addDistanceToPlayer(icon, hintPoint);
+            addMinimapProjection(icon, LocalPoint.fromWorld(client, hintPoint));
+            icons.add(icon);
+        }
+    }
+
+    private void addScenePoiMinimapIcons(JsonArray icons, long capturedAt, int limit) {
+        if (client.getScene() == null || client.getScene().getTiles() == null || client.getPlane() < 0 || icons.size() >= limit) {
+            return;
+        }
+
+        Tile[][] tiles = client.getScene().getTiles()[client.getPlane()];
+        Map<String, Boolean> seen = new HashMap<>();
+        for (Tile[] column : tiles) {
+            if (column == null || icons.size() >= limit) {
+                continue;
+            }
+            for (Tile tile : column) {
+                if (tile == null || tile.getGameObjects() == null || icons.size() >= limit) {
+                    continue;
+                }
+                for (GameObject obj : tile.getGameObjects()) {
+                    if (obj == null || obj.getId() <= 0 || icons.size() >= limit) {
+                        continue;
+                    }
+                    String name = getObjectName(obj.getId());
+                    String category = categorizeScenePoi(name);
+                    if (category == null) {
+                        continue;
+                    }
+                    WorldPoint worldPoint = obj.getWorldLocation();
+                    if (worldPoint == null) {
+                        continue;
+                    }
+                    String key = category + ":" + name + ":" + worldPoint.getX() + ":" + worldPoint.getY() + ":" + worldPoint.getPlane();
+                    if (seen.containsKey(key)) {
+                        continue;
+                    }
+                    seen.put(key, true);
+
+                    JsonObject icon = new JsonObject();
+                    addCaptureMeta(icon, capturedAt);
+                    icon.addProperty("type", "scenePoi");
+                    icon.addProperty("semantic", category);
+                    icon.addProperty("name", name);
+                    icon.addProperty("id", obj.getId());
+                    addWorldLocation(icon, worldPoint);
+                    addDistanceToPlayer(icon, worldPoint);
+                    addMinimapProjection(icon, obj.getLocalLocation());
+                    icons.add(icon);
+                }
+            }
+        }
+    }
+
+    private String categorizeScenePoi(String name) {
+        if (name == null || name.isEmpty() || "null".equalsIgnoreCase(name)) {
+            return null;
+        }
+
+        String lower = name.toLowerCase();
+        if (lower.contains("bank booth") || lower.contains("bank chest") || lower.contains("bank deposit") || lower.contains("deposit box")) {
+            return "bank";
+        }
+        if (lower.contains("altar")) {
+            return "altar";
+        }
+        if (lower.contains("furnace")) {
+            return "furnace";
+        }
+        if (lower.contains("anvil")) {
+            return "anvil";
+        }
+        if (lower.contains("range") || lower.contains("stove") || lower.contains("fire")) {
+            return "cooking";
+        }
+        if (lower.equals("tree") || lower.contains("oak") || lower.contains("willow") || lower.contains("yew")) {
+            return "resource_tree";
+        }
+        if (lower.contains("mining rocks") || lower.contains("rocks")) {
+            return "resource_rocks";
+        }
+        if (lower.contains("door") || lower.contains("gate")) {
+            return "door";
+        }
+        return null;
+    }
+
+    private void addWorldLocation(JsonObject response, WorldPoint worldPoint) {
+        if (worldPoint == null) {
+            return;
+        }
+
+        response.addProperty("worldX", worldPoint.getX());
+        response.addProperty("worldY", worldPoint.getY());
+        response.addProperty("plane", worldPoint.getPlane());
+    }
+
+    private void addMinimapProjection(JsonObject response, LocalPoint localPoint) {
+        if (localPoint == null) {
+            response.addProperty("coordinateWarning", "LOCAL_POINT_UNAVAILABLE");
+            return;
+        }
+
+        Point minimapPoint = Perspective.localToMinimap(client, localPoint);
+        if (minimapPoint == null) {
+            response.addProperty("coordinateWarning", "OUTSIDE_MINIMAP_RANGE");
+            return;
+        }
+
+        response.addProperty("coordinateSource", "minimapProjection");
+        addCanvasAndScreenCoordinates(response, minimapPoint.getX(), minimapPoint.getY());
     }
 
     private String buildPathJson(long capturedAt, WorldPoint targetPoint, int maxNodes) {
@@ -2434,10 +2821,11 @@ public class ApiServer {
     private String buildIdentityJson() {
         JsonObject response = new JsonObject();
         response.addProperty("instanceId", instanceId);
-        response.addProperty("apiVersion", 3);
+        response.addProperty("apiVersion", 5);
         response.addProperty("supportsConcurrentStreams", true);
         response.addProperty("supportsEventBuffer", true);
         response.addProperty("supportsInClientActions", true);
+        response.addProperty("supportsDirectMenuActions", true);
         response.addProperty("supportsLocalPathfinding", true);
         response.addProperty("supportsGlobalPathfinding", false);
         response.addProperty("supportsShortestPathBridge", false);
@@ -2826,6 +3214,15 @@ public class ApiServer {
             }
             WorldPoint targetPoint = target;
             handleOnClientThread(t, () -> buildMinimapJson(System.currentTimeMillis(), targetPoint));
+        }
+    }
+
+    class MinimapIconsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            int maxEntities = getIntParam(params, "maxEntities", 80);
+            handleOnClientThread(t, () -> buildMinimapIconsJson(System.currentTimeMillis(), maxEntities));
         }
     }
 

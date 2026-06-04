@@ -1,4 +1,8 @@
 osrs-mcp-server/data/
+osrs-agent-brain/node_modules/
+osrs-agent-brain/build/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# plan

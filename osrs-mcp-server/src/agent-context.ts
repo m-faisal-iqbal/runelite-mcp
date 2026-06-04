@@ -68,6 +68,8 @@ function summarizeTargets(targets: RuneLiteTarget[] | undefined, limit: number) 
       distanceToPlayer: target.distanceToPlayer,
       coordinateSource: target.coordinateSource,
       clickable: hasScreenPoint(target) && !target.coordinateWarning,
+      directMenuReady: Boolean(target.menuAction && Number.isFinite(target.param0) && Number.isFinite(target.param1)),
+      menuAction: target.menuAction,
       ageMs: target.ageMs,
     }));
 }
@@ -148,11 +150,13 @@ export function buildAgentContext(baseURL: string, client: any, snapshot: RuneLi
       world: client?.world ?? state.world,
       focused: client?.windowActive,
       canvasShowing: client?.canvasShowing,
+      supportsDirectMenuActions: client?.supportsDirectMenuActions === true,
     },
     readiness: {
       loggedIn: state.status === "LOGGED_IN",
       stateStatus: state.status,
       canUseInClientActions: state.status === "LOGGED_IN" && runtime?.status === "ok",
+      canUseDirectMenuActions: state.status === "LOGGED_IN" && runtime?.status === "ok" && client?.supportsDirectMenuActions === true,
       osClickFallbackReady: state.status === "LOGGED_IN" && client?.canvasShowing !== false && client?.windowActive !== false && client?.windowMinimized !== true,
       risks,
       recommendedNext,

@@ -1,0 +1,27 @@
+{
+  "name": "osrs-agent-brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "System 2 strategist brain for the OSRS Twin-Brain architecture.",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsx src/index.ts",
+    "smoke:mcp": "tsx src/smoke-mcp.ts",
+    "smoke:prompt": "tsx src/smoke-prompt.ts",
+    "smoke:strategist": "tsx src/smoke-strategist.ts",
+    "smoke:wiki": "tsx src/smoke-wiki.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "openai": "latest",
+    "tavily": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "tsx": "latest",
+    "typescript": "^5.3.3"
+  }
+}

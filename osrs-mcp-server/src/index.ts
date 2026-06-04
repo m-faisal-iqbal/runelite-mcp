@@ -9,7 +9,7 @@ import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree
 import { apiBaseFromPort, StateCache, type ClientTarget, type LocalPathResult, type PathStep, type RuneLiteSnapshot, type RuneLiteTarget } from "./client.js";
 import { actionStep, buildAgentStepPackage, buildNextActionPlan } from "./planner.js";
 import { buildAgentContext } from "./agent-context.js";
-import { AgentMemoryStore } from "./agent-memory.js";
+import { AgentMemoryStore, strategyCacheKey } from "./agent-memory.js";
 import {
   getKnowledgeRecord,
   getMethodKnowledge,
@@ -18,8 +18,10 @@ import {
 } from "./knowledge-base.js";
 import { discoverClients as discoverRuntimeClients, selectDiscoveredClient } from "./client-discovery.js";
 import { diagnoseClientRuntime as diagnoseRuntimeClient, EXPECTED_PLUGIN_API_VERSION } from "./runtime-diagnostics.js";
-import { chooseLocalPathStep, tileDistance, withStraightLineFallback } from "./navigation.js";
+import { calculateStraightLineSteps, chooseLocalPathStep, tileDistance, withStraightLineFallback } from "./navigation.js";
 import { buildSemanticInterface, findSemanticControls, planQuestStep } from "./semantic-interface.js";
+import { ReflexEngine, type LoadedReflexPolicy, type ReflexExecutionMode, type ReflexPolicy, type ReflexStep } from "./engine/ReflexEngine.js";
+import { findTransportNode, nearestTransportNode, planTransportRoute, transportGraphSummary } from "./transport-graph.js";
 
 type ActionBaseline = {
   baseURL: string;
@@ -87,6 +89,8 @@ const agentMemory = new AgentMemoryStore();
 let agentMemoryLoaded = false;
 const EXECUTE_AGENT_STEP_CONFIRMATION = "EXECUTE_ONE_STEP";
 const RUN_AUTONOMY_CONFIRMATION = "RUN_AUTONOMY";
+const LOAD_POLICY_EXECUTE_CONFIRMATION = "LOAD_POLICY_EXECUTE";
+const NAVIGATE_EXECUTE_CONFIRMATION = "NAVIGATE_ONE_STEP";
 const EXECUTE_SEMANTIC_CONTROL_CONFIRMATION = "EXECUTE_SEMANTIC_CONTROL";
 const EXECUTABLE_AGENT_TOOLS = new Set([
   "invoke_menu_action",
@@ -97,6 +101,9 @@ const EXECUTABLE_AGENT_TOOLS = new Set([
   "click_object",
   "click_npc",
   "click_ground_item",
+  "deposit_inventory_item",
+  "withdraw_bank_item",
+  "drop_inventory_item",
 ]);
 
 function runeliteApi(baseURL = selectedRuneliteApi) {
@@ -831,6 +838,22 @@ server.registerResource(
   }
 );
 
+server.registerResource(
+  "transport-graph",
+  "osrs://transport/graph",
+  {
+    title: "OSRS Transport Graph",
+    description: "Curated F2P foundation graph of major locations and walking edges used by System 1 route planning.",
+    mimeType: "application/json",
+  },
+  async () => resourceText("osrs://transport/graph", {
+    status: "TRANSPORT_GRAPH_READY",
+    provider: "graphology_transport_graph",
+    callsLlm: false,
+    ...transportGraphSummary(),
+  })
+);
+
 server.registerPrompt(
   "experienced-player-loop",
   {
@@ -1041,9 +1064,42 @@ async function openContextMenuForTarget(args: OpenContextMenuArgs) {
 }
 
 async function interactWithTarget(args: OpenContextMenuArgs & { option: string; exact?: boolean }) {
+  const targetClient = { instanceId: args.instanceId, playerName: args.playerName, port: args.port };
+  const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
+  await assertClientLoggedIn(baseURL);
+  const expectedSource = args.coordinateSource ?? defaultCoordinateSourceForType(args.entityType);
+  const target = selectLiveTarget(
+    snapshot,
+    args.entityType,
+    args.name,
+    args.id,
+    args.nearestToPlayer ?? true,
+    args.coordinateSource
+  );
+  requireFreshClickable(target, args.maxAgeMs ?? 600, expectedSource);
+
+  const directAction = directMenuActionForTarget(target, args.option);
+  if (directAction) {
+    const actionResult = await invokeMenuAction(baseURL, directAction);
+    return {
+      actionMode: "direct_menu_action",
+      target: compactTarget(target),
+      selected: {
+        option: directAction.option,
+        menuAction: directAction.menuAction,
+        param0: directAction.param0,
+        param1: directAction.param1,
+        identifier: directAction.identifier,
+        itemId: directAction.itemId,
+      },
+      actionResult,
+    };
+  }
+
   const targetAndMenu = await openContextMenuForTarget(args);
   const selected = await selectContextMenuOption(args.option, args, args.exact);
   return {
+    actionMode: "os_context_menu_fallback",
     ...targetAndMenu,
     selected,
   };
@@ -1553,7 +1609,43 @@ function compactTarget(target: any) {
     coordinateSource: target.coordinateSource,
     screenX: target.screenX,
     screenY: target.screenY,
+    menuAction: target.menuAction,
+    identifier: target.identifier,
+    param0: target.param0,
+    param1: target.param1,
+    itemId: target.itemId,
     ageMs: target.ageMs,
+  };
+}
+
+function matchesOption(actual: unknown, requested: string) {
+  const actualText = String(actual ?? "").trim().toLowerCase();
+  const requestedText = requested.trim().toLowerCase();
+  return actualText === requestedText || actualText.replace(/-/g, " ") === requestedText.replace(/-/g, " ");
+}
+
+function directMenuActionForTarget(target: RuneLiteTarget, option: string) {
+  const actions = Array.isArray((target as any).menuActions) ? (target as any).menuActions : [];
+  const matchedAction = actions.find((action: any) => matchesOption(action?.option, option));
+  const source = matchedAction ?? (matchesOption(target.option, option) ? target : undefined);
+  if (!source) {
+    return undefined;
+  }
+  if (!Number.isFinite(source.param0) || !Number.isFinite(source.param1) || !source.menuAction) {
+    return undefined;
+  }
+  const identifier = Number.isFinite(source.identifier) ? source.identifier : source.id;
+  if (!Number.isFinite(identifier)) {
+    return undefined;
+  }
+  return {
+    param0: source.param0,
+    param1: source.param1,
+    menuAction: source.menuAction,
+    identifier,
+    itemId: Number.isFinite(source.itemId) ? source.itemId : -1,
+    option: source.option ?? option,
+    target: source.target ?? "",
   };
 }
 
@@ -1698,6 +1790,18 @@ async function validatePreparedStep(baseURL: string, snapshot: RuneLiteSnapshot,
     };
   }
 
+  if (tool === "drop_inventory_item") {
+    const item = findInventoryItem(snapshot, stepArgs.name, stepArgs.id, stepArgs.slot) as any;
+    const fresh = Boolean(item && Number.isFinite(item.slotScreenX) && Number.isFinite(item.slotScreenY) && (!item.ageMs || item.ageMs <= maxAgeMs));
+    return {
+      ...base,
+      valid: fresh,
+      validationMode: "inventory_drop_snapshot",
+      item: item ? { id: item.id, name: item.name, slot: item.slot, quantity: item.quantity, ageMs: item.ageMs } : null,
+      reason: fresh ? "Matching inventory item is present with fresh slot coordinates." : "No fresh matching inventory item is available to drop.",
+    };
+  }
+
   return {
     ...base,
     valid: false,
@@ -1726,6 +1830,72 @@ function clickToolEntityType(tool: string): "object" | "npc" | "ground_item" | u
     default:
       return undefined;
   }
+}
+
+async function dropInventoryItemAction(args: {
+  name?: string;
+  id?: number;
+  slot?: number;
+  instanceId?: string;
+  playerName?: string;
+  port?: number;
+}) {
+  const target = { instanceId: args.instanceId, playerName: args.playerName, port: args.port };
+  const { baseURL, snapshot } = await getSnapshotForTarget(target, true);
+  await assertClientReady(baseURL);
+  const item = findInventoryItem(snapshot, args.name, args.id, args.slot);
+  requireFreshInventoryItem(item, 1000);
+
+  const inventoryActions = Array.isArray((item as any).menuActions) ? (item as any).menuActions : [];
+  const dropActionMetadata = inventoryActions.find((action: any) => matchesOption(action?.option, "Drop"));
+  let directAction = directMenuActionForTarget(item, "Drop");
+  if (directAction && String(directAction.menuAction).startsWith("ITEM_")) {
+    directAction = {
+      ...directAction,
+      menuAction: "CC_OP_LOW_PRIORITY",
+      identifier: Number.isFinite(dropActionMetadata?.actionIndex) ? Number(dropActionMetadata.actionIndex) + 2 : 7,
+      target: directAction.target || `<col=ff9040>${item.name ?? ""}</col>`,
+    };
+  }
+  if (!directAction && Number.isFinite((item as any).slot) && Number.isFinite((item as any).inventoryWidgetId) && Number.isFinite((item as any).id)) {
+    directAction = {
+      param0: Number((item as any).slot),
+      param1: Number((item as any).inventoryWidgetId),
+      menuAction: "CC_OP_LOW_PRIORITY",
+      identifier: 7,
+      itemId: Number((item as any).id),
+      option: "Drop",
+      target: `<col=ff9040>${item.name ?? ""}</col>`,
+    };
+  }
+  if (directAction) {
+    const action = await invokeMenuAction(baseURL, directAction);
+    return {
+      success: true,
+      executed: true,
+      actionMode: "direct_inventory_menu_action",
+      selected: {
+        option: directAction.option,
+        menuAction: directAction.menuAction,
+        param0: directAction.param0,
+        param1: directAction.param1,
+        identifier: directAction.identifier,
+        itemId: directAction.itemId,
+      },
+      action,
+      item: { id: item.id, name: item.name, slot: item.slot, quantity: item.quantity },
+    };
+  }
+
+  await clickPoint(item.slotScreenX!, item.slotScreenY!, true);
+  await sleep(120);
+  await selectContextMenuOption("Drop", target, false);
+  return {
+    success: true,
+    executed: true,
+    actionMode: "drop_inventory_item",
+    item: { id: item.id, name: item.name, slot: item.slot, quantity: item.quantity },
+  };
 }
 
 async function dryRunAgentStep(baseURL: string, step: any, target: ClientTarget) {
@@ -1791,6 +1961,32 @@ async function dryRunAgentStep(baseURL: string, step: any, target: ClientTarget)
         id: stepArgs.actionId,
         option: stepArgs.actionOption,
         nearestToPlayer: stepArgs.nearestToPlayer ?? true,
+      },
+    };
+  }
+  if (tool === "deposit_inventory_item" || tool === "withdraw_bank_item") {
+    return {
+      success: true,
+      dryRun: true,
+      actionMode: "bank_action_preview",
+      plannedInteraction: {
+        tool,
+        quantity: stepArgs.quantity,
+        itemName: stepArgs.itemName,
+        itemId: stepArgs.itemId,
+      },
+    };
+  }
+  if (tool === "drop_inventory_item") {
+    return {
+      success: true,
+      dryRun: true,
+      actionMode: "drop_inventory_item_preview",
+      plannedInteraction: {
+        tool,
+        name: stepArgs.name,
+        id: stepArgs.id,
+        slot: stepArgs.slot,
       },
     };
   }
@@ -1887,6 +2083,31 @@ async function executeAgentStepAction(baseURL: string, step: any, target: Client
       nextInstruction: "This executed one iteration only. Verify the result before calling execute_agent_step again.",
     };
   }
+  if (tool === "deposit_inventory_item") {
+    const actionText = stepArgs.quantity ? `Deposit-${stepArgs.quantity}` : "Deposit";
+    const targetWidget = await clickBankAction(actionText, stepArgs.itemName, stepArgs.itemId, stepArgs.rightClick, target);
+    return {
+      success: true,
+      executed: true,
+      actionMode: "deposit_inventory_item",
+      actionText,
+      target: targetWidget,
+    };
+  }
+  if (tool === "withdraw_bank_item") {
+    const actionText = stepArgs.quantity ? `Withdraw-${stepArgs.quantity}` : "Withdraw";
+    const targetWidget = await clickBankAction(actionText, stepArgs.itemName, stepArgs.itemId, stepArgs.rightClick, target);
+    return {
+      success: true,
+      executed: true,
+      actionMode: "withdraw_bank_item",
+      actionText,
+      target: targetWidget,
+    };
+  }
+  if (tool === "drop_inventory_item") {
+    return dropInventoryItemAction(stepArgs);
+  }
 
   const entityType = stepArgs.entityType ?? clickToolEntityType(tool);
   if (!entityType) {
@@ -1910,6 +2131,297 @@ async function executeAgentStepAction(baseURL: string, step: any, target: Client
     option: stepArgs.option,
   });
 }
+
+async function runEatFoodStep(baseURL: string, step: ReflexStep, target: ClientTarget, mode: ReflexExecutionMode) {
+  const stepArgs = stepTargetArgs(step.arguments ?? {}, target);
+  const snapshot = await getSnapshotForBase(baseURL, true);
+  const currentHp = Number(snapshot.state?.health);
+  const currentPercent = healthPercent(snapshot);
+  const shouldEatByHp = stepArgs.hpBelow === undefined || (Number.isFinite(currentHp) && currentHp < stepArgs.hpBelow);
+  const shouldEatByPercent = stepArgs.hpBelowPercent === undefined || (currentPercent !== undefined && currentPercent < stepArgs.hpBelowPercent);
+  const item = findFoodItem(snapshot, stepArgs.foodNames, stepArgs.foodName, stepArgs.foodId, stepArgs.slot) as any;
+  const validation = {
+    valid: shouldEatByHp && shouldEatByPercent && Boolean(item),
+    validationMode: "reflex_survival_guard",
+    health: currentHp,
+    healthPercent: currentPercent,
+    item: item ? { id: item.id, name: item.name, slot: item.slot, quantity: item.quantity } : null,
+    reason: !shouldEatByHp || !shouldEatByPercent
+      ? "Hitpoints are above the policy threshold."
+      : item
+        ? "Food is available and threshold is met."
+        : "No matching food item is available.",
+  };
+
+  if (!validation.valid) {
+    return {
+      status: "EXECUTION_BLOCKED",
+      willExecute: false,
+      executed: false,
+      step,
+      validation,
+      reason: validation.reason,
+    };
+  }
+
+  if (mode !== "execute") {
+    return {
+      status: "DRY_RUN_READY",
+      willExecute: false,
+      executed: false,
+      step,
+      validation,
+      actionResult: {
+        success: true,
+        dryRun: true,
+        plannedInteraction: { tool: "eat_food_when", item: validation.item },
+      },
+    };
+  }
+
+  await assertClientReady(baseURL);
+  requireFreshInventoryItem(item, 1000);
+  const selected = await selectInventoryItemOption(item, "Eat", target);
+  await sleep(Math.max(100, Number(stepArgs.waitMs ?? 700)));
+  const after = await getSnapshotForBase(baseURL, true);
+
+  return {
+    status: "EXECUTED_ONE_STEP",
+    willExecute: true,
+    executed: true,
+    step,
+    validation,
+    actionResult: {
+      success: true,
+      executed: true,
+      selected,
+      before: { health: currentHp, healthPercent: currentPercent },
+      after: { health: after.state?.health, healthPercent: healthPercent(after) },
+    },
+  };
+}
+
+async function navigateToDestinationAction(args: {
+  destination: string;
+  from?: string;
+  executionMode?: "dry_run" | "execute";
+  confirmExecution?: string;
+  maxStepTiles?: number;
+  targetClient?: ClientTarget;
+}) {
+  const wantsExecution = args.executionMode === "execute";
+  const targetClient = args.targetClient ?? {};
+  let currentLocation: any;
+  let baseURL: string | undefined;
+  let snapshot: RuneLiteSnapshot | undefined;
+
+  if (!args.from || wantsExecution) {
+    const current = await getSnapshotForTarget(targetClient, true);
+    baseURL = current.baseURL;
+    snapshot = current.snapshot;
+    currentLocation = current.snapshot.state?.location;
+  }
+
+  const route = planTransportRoute({ from: args.from, to: args.destination, currentLocation });
+  const responseBase = {
+    ...route,
+    willExecute: wantsExecution,
+    executed: false,
+    executionMode: args.executionMode ?? "dry_run",
+    oneStepOnly: true,
+    callsLlm: false,
+  };
+
+  if (route.status !== "ROUTE_PLANNED") {
+    return { ...responseBase, stopReason: route.stopReason };
+  }
+
+  if (!wantsExecution) {
+    return {
+      ...responseBase,
+      nextInstruction: `To move one bounded step, call navigate_to with executionMode='execute' and confirmExecution='${NAVIGATE_EXECUTE_CONFIRMATION}'.`,
+    };
+  }
+
+  if (args.confirmExecution !== NAVIGATE_EXECUTE_CONFIRMATION) {
+    return {
+      ...responseBase,
+      willExecute: false,
+      requiredConfirmation: NAVIGATE_EXECUTE_CONFIRMATION,
+      stopReason: "Navigation execution was requested but not armed.",
+    };
+  }
+
+  if (!snapshot || !baseURL) {
+    throw new Error("A live RuneLite client is required to execute a navigation step.");
+  }
+
+  const finalTile = (route as any).finalTile;
+  const localStep = calculateStraightLineSteps(snapshot.state?.location, finalTile, args.maxStepTiles ?? 18, 1).steps[0];
+  let action: any;
+  try {
+    action = await invokeWalkAction(baseURL, {
+      worldX: localStep.worldX,
+      worldY: localStep.worldY,
+      plane: localStep.plane,
+      tickAligned: true,
+    });
+  } catch (clientActionError: any) {
+    const minimapTarget = await clickMinimapProjection(localStep.worldX, localStep.worldY, localStep.plane, targetClient);
+    action = {
+      mode: "minimap_fallback",
+      reason: clientActionError?.message ?? String(clientActionError),
+      target: minimapTarget,
+    };
+  }
+
+  return {
+    ...responseBase,
+    executed: true,
+    selectedStep: localStep,
+    action,
+    nextInstruction: "System 1 moved one bounded step. Re-read state and call navigate_to again if the policy still requires travel.",
+  };
+}
+
+async function observeReflexPolicy(policy: LoadedReflexPolicy) {
+  const { baseURL, snapshot } = await getSnapshotForTarget(policy.targetClient, true);
+  return {
+    baseURL,
+    snapshot,
+    health: Number.isFinite(Number(snapshot.state?.health)) ? Number(snapshot.state?.health) : undefined,
+    healthPercent: healthPercent(snapshot),
+    inventorySlotsUsed: inventorySlotsUsed(snapshot),
+    inventoryFull: inventorySlotsUsed(snapshot) >= 28,
+    inventory: snapshot.inventory ?? [],
+    visiblePlayers: snapshot.players ?? [],
+    bankOpen: snapshot.interfaceSummary?.bankContainerAvailable === true,
+    location: snapshot.state?.location,
+    isIdle: isPlayerIdle(snapshot.state ?? {}),
+    capturedAt: (snapshot as any).capturedAt,
+    summary: {
+      location: snapshot.state?.location,
+      animation: snapshot.state?.animation,
+      interacting: snapshot.state?.interacting,
+      dialogueType: snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type,
+    },
+  };
+}
+
+async function runReflexPolicyStep(step: ReflexStep, policy: LoadedReflexPolicy, mode: ReflexExecutionMode) {
+  const targetClient = policy.targetClient ?? {};
+  const baseURL = await resolveRuneliteApi(targetClient);
+
+  if (step.tool === "eat_food_when") {
+    return runEatFoodStep(baseURL, step, targetClient, mode);
+  }
+
+  if (step.tool === "navigate_to") {
+    const result = await navigateToDestinationAction({
+      ...(step.arguments ?? {}),
+      destination: String(step.arguments?.destination ?? policy.destination ?? policy.objective ?? ""),
+      targetClient,
+      executionMode: mode === "execute" ? "execute" : "dry_run",
+      confirmExecution: mode === "execute" ? NAVIGATE_EXECUTE_CONFIRMATION : undefined,
+    });
+    return {
+      status: result.status === "ROUTE_PLANNED" && result.executed === true
+        ? "EXECUTED_ONE_STEP"
+        : result.status === "ROUTE_PLANNED"
+          ? "DRY_RUN_READY"
+          : "EXECUTION_BLOCKED",
+      willExecute: mode === "execute",
+      executed: result.executed === true,
+      step,
+      validation: {
+        valid: result.status === "ROUTE_PLANNED",
+        routeStatus: result.status,
+        stopReason: result.stopReason,
+      },
+      actionResult: result,
+      reason: result.stopReason,
+    };
+  }
+
+  const snapshot = await getSnapshotForBase(baseURL, true);
+  const validation = await validatePreparedStep(baseURL, snapshot, step, {
+    dryRunRawActions: true,
+    maxAgeMs: 1200,
+  });
+
+  if (!validation.valid) {
+    return {
+      status: "EXECUTION_BLOCKED",
+      willExecute: false,
+      executed: false,
+      step,
+      validation,
+      reason: validation.reason ?? "The Reflex Engine step did not validate against current state.",
+    };
+  }
+
+  if (mode !== "execute") {
+    return {
+      status: "DRY_RUN_READY",
+      willExecute: false,
+      executed: false,
+      step,
+      validation,
+      actionResult: await dryRunAgentStep(baseURL, step, targetClient),
+    };
+  }
+
+  if (!EXECUTABLE_AGENT_TOOLS.has(step.tool)) {
+    return {
+      status: "EXECUTION_BLOCKED",
+      willExecute: false,
+      executed: false,
+      step,
+      validation,
+      reason: `Reflex Engine cannot execute unsupported tool ${step.tool}.`,
+    };
+  }
+
+  const actionResult = await executeAgentStepAction(baseURL, step, targetClient, {
+    tickAligned: true,
+    tickTimeoutMs: 1800,
+  });
+
+  return {
+    status: actionResult?.success === false ? "EXECUTION_BLOCKED" : "EXECUTED_ONE_STEP",
+    willExecute: true,
+    executed: actionResult?.executed !== false,
+    step,
+    validation,
+    actionResult,
+    reason: actionResult?.reason,
+  };
+}
+
+const reflexEngine = new ReflexEngine({
+  observe: observeReflexPolicy,
+  runStep: runReflexPolicyStep,
+}, {
+  tickMs: 600,
+  maxTicks: 100,
+});
+
+server.registerResource(
+  "reflex-status",
+  "osrs://reflex/status",
+  {
+    title: "System 1 Reflex Engine Status",
+    description: "Active local policy state, tick-loop status, and recent Reflex Engine events. This resource never calls the LLM.",
+    mimeType: "application/json",
+  },
+  async () => {
+    return resourceText("osrs://reflex/status", {
+      architecture: "System 1 Reflex Engine",
+      callsLlm: false,
+      ...reflexEngine.status(),
+    });
+  }
+);
 
 function makeAgentSessionId() {
   return `agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -2480,6 +2992,16 @@ async function runActivityStep(args: {
   return result;
 }
 
+type AcquisitionPlan = {
+  supported: boolean;
+  itemName: string;
+  method: string;
+  actionEntityType: "object";
+  actionName: string;
+  actionOption: string;
+  unsupportedReason?: string;
+};
+
 function treeNameForItem(itemName?: string, method?: string) {
   const item = String(itemName ?? "").toLowerCase();
   const chosenMethod = String(method ?? "").toLowerCase();
@@ -2515,6 +3037,125 @@ function logsItemName(itemName?: string) {
   return itemName ?? "Logs";
 }
 
+function normalizedMiningItemName(itemName: string) {
+  const item = itemName.toLowerCase();
+  if (item.includes("tin")) {
+    return "Tin ore";
+  }
+  if (item.includes("copper")) {
+    return "Copper ore";
+  }
+  if (item.includes("iron")) {
+    return "Iron ore";
+  }
+  if (item.includes("coal")) {
+    return "Coal";
+  }
+  if (item.includes("clay")) {
+    return "Clay";
+  }
+  if (item.includes("silver")) {
+    return "Silver ore";
+  }
+  if (item.includes("gold")) {
+    return "Gold ore";
+  }
+  if (item.includes("mithril")) {
+    return "Mithril ore";
+  }
+  if (item.includes("adamant")) {
+    return "Adamantite ore";
+  }
+  if (item.includes("rune") || item.includes("runite")) {
+    return "Runite ore";
+  }
+  return itemName;
+}
+
+function miningRockNameForItem(itemName: string) {
+  const item = normalizedMiningItemName(itemName).toLowerCase();
+  if (item.includes("tin")) {
+    return "Tin rocks";
+  }
+  if (item.includes("copper")) {
+    return "Copper rocks";
+  }
+  if (item.includes("iron")) {
+    return "Iron rocks";
+  }
+  if (item.includes("coal")) {
+    return "Coal rocks";
+  }
+  if (item.includes("clay")) {
+    return "Clay rocks";
+  }
+  if (item.includes("silver")) {
+    return "Silver rocks";
+  }
+  if (item.includes("gold")) {
+    return "Gold rocks";
+  }
+  if (item.includes("mithril")) {
+    return "Mithril rocks";
+  }
+  if (item.includes("adamant")) {
+    return "Adamantite rocks";
+  }
+  if (item.includes("rune") || item.includes("runite")) {
+    return "Runite rocks";
+  }
+  if (item.endsWith(" ore")) {
+    return `${itemName.replace(/\s+ore$/i, "")} rocks`;
+  }
+  return `${itemName} rocks`;
+}
+
+function resolveAcquisitionPlan(itemName: string, method?: string): AcquisitionPlan {
+  const normalizedMethod = String(method ?? "").toLowerCase();
+  const item = String(itemName ?? "").toLowerCase();
+  const wantsMining = normalizedMethod.includes("mining") ||
+    normalizedMethod.includes("mine") ||
+    item.includes(" ore") ||
+    ["tin", "copper", "iron", "coal", "clay", "silver", "gold", "mithril", "adamant", "runite"].some((needle) => item.includes(needle));
+  if (wantsMining) {
+    const normalizedItem = normalizedMiningItemName(itemName);
+    return {
+      supported: true,
+      itemName: normalizedItem,
+      method: "mining",
+      actionEntityType: "object",
+      actionName: miningRockNameForItem(normalizedItem),
+      actionOption: "Mine",
+    };
+  }
+
+  const wantsWoodcutting = normalizedMethod.includes("woodcut") ||
+    normalizedMethod.includes("gather") ||
+    normalizedMethod.includes("chop") ||
+    item.includes("log") ||
+    item.includes("tree");
+  if (wantsWoodcutting) {
+    return {
+      supported: true,
+      itemName: logsItemName(itemName),
+      method: "woodcutting",
+      actionEntityType: "object",
+      actionName: treeNameForItem(itemName, method),
+      actionOption: "Chop down",
+    };
+  }
+
+  return {
+    supported: false,
+    itemName,
+    method: method ?? "unknown",
+    actionEntityType: "object",
+    actionName: "",
+    actionOption: "",
+    unsupportedReason: "Phase 1 skill_acquire supports woodcutting/log acquisition and mining ore acquisition.",
+  };
+}
+
 function skillLevel(snapshot: RuneLiteSnapshot, skill: string): number | undefined {
   const skills = snapshot.skills ?? {};
   const exact = skills[skill];
@@ -2524,7 +3165,213 @@ function skillLevel(snapshot: RuneLiteSnapshot, skill: string): number | undefin
   return Number.isFinite(level) ? level : undefined;
 }
 
+function hasClientTarget(target: ClientTarget) {
+  return target.instanceId !== undefined || target.playerName !== undefined || target.port !== undefined;
+}
+
+function normalizeReflexPolicyArgs(args: any): ReflexPolicy {
+  const policy = (args.policy && typeof args.policy === "object") ? args.policy : {};
+  const targetClient = {
+    ...(policy.targetClient ?? {}),
+    ...(hasClientTarget({ instanceId: args.instanceId, playerName: args.playerName, port: args.port })
+      ? { instanceId: args.instanceId, playerName: args.playerName, port: args.port }
+      : {}),
+  };
+
+  return {
+    ...policy,
+    task: args.task ?? policy.task,
+    objective: args.objective ?? policy.objective,
+    itemName: args.itemName ?? policy.itemName,
+    quantity: args.quantity ?? policy.quantity,
+    quantityMode: args.quantityMode ?? policy.quantityMode,
+    method: args.method ?? policy.method,
+      targetName: args.targetName ?? policy.targetName,
+      targetId: args.targetId ?? policy.targetId,
+      targetType: args.targetType ?? policy.targetType,
+      actionOption: args.actionOption ?? policy.actionOption,
+      destination: args.destination ?? policy.destination,
+      from: args.from ?? policy.from,
+      maxStepTiles: args.maxStepTiles ?? policy.maxStepTiles,
+      destinationWorldX: args.destinationWorldX ?? policy.destinationWorldX,
+      destinationWorldY: args.destinationWorldY ?? policy.destinationWorldY,
+      destinationPlane: args.destinationPlane ?? policy.destinationPlane,
+      destinationRadius: args.destinationRadius ?? policy.destinationRadius,
+      eatAtHp: args.eatAtHp ?? policy.eatAtHp,
+    eatAtHpPercent: args.eatAtHpPercent ?? policy.eatAtHpPercent,
+      inventoryFullBehavior: args.inventoryFullBehavior ?? policy.inventoryFullBehavior,
+      dropItemName: args.dropItemName ?? policy.dropItemName,
+      dropItemId: args.dropItemId ?? policy.dropItemId,
+      bankItemName: args.bankItemName ?? policy.bankItemName,
+      bankItemId: args.bankItemId ?? policy.bankItemId,
+      stopOnVisiblePlayers: args.stopOnVisiblePlayers ?? policy.stopOnVisiblePlayers,
+    tickMs: args.tickMs ?? policy.tickMs,
+    maxTicks: args.maxTicks ?? policy.maxTicks,
+    executionMode: args.executionMode ?? policy.executionMode,
+    targetClient,
+  };
+}
+
+function loadReflexPolicyResponse(args: any) {
+  const policy = normalizeReflexPolicyArgs(args);
+  const executionMode = (args.executionMode ?? policy.executionMode ?? "dry_run") as ReflexExecutionMode;
+  const hasExecutableIntent = Boolean(policy.task || policy.objective || policy.steps?.length || (policy.targetType && policy.actionOption));
+
+  if (!hasExecutableIntent) {
+    return {
+      status: "POLICY_REJECTED",
+      willExecute: false,
+      executed: false,
+      reason: "Policy must include task, objective, steps, or an explicit targetType/actionOption interaction.",
+    };
+  }
+
+  if (executionMode === "execute" && args.confirmExecution !== LOAD_POLICY_EXECUTE_CONFIRMATION) {
+    return {
+      status: "POLICY_NOT_ARMED",
+      willExecute: false,
+      executed: false,
+      requiredConfirmation: LOAD_POLICY_EXECUTE_CONFIRMATION,
+      reason: "executionMode='execute' requires confirmExecution='LOAD_POLICY_EXECUTE'.",
+      policyPreview: {
+        task: policy.task,
+        objective: policy.objective,
+        targetClient: policy.targetClient,
+        itemName: policy.itemName,
+        quantity: policy.quantity,
+        quantityMode: policy.quantityMode ?? "absolute",
+        tickMs: policy.tickMs ?? 600,
+        maxTicks: policy.maxTicks ?? 100,
+      },
+    };
+  }
+
+  const status = reflexEngine.loadPolicy(policy, {
+    start: args.start !== false,
+    executionMode,
+  });
+
+  return {
+    status: "POLICY_LOADED",
+    architecture: "System 1 Reflex Engine",
+    willExecute: executionMode === "execute",
+    executed: false,
+    tickLoop: {
+      local: true,
+      callsLlm: false,
+      tickMs: status.activePolicy?.tickMs,
+    },
+    engine: status,
+  };
+}
+
 // --- State Reading Tools ---
+
+server.tool(
+  "load_policy",
+  "Load a high-level System 1 Reflex Engine policy. This is the policy entrypoint for System 2; it starts a local 600ms tick loop and never calls the LLM.",
+  {
+    policy: z.any().optional().describe("Strategist policy JSON object emitted by osrs-agent-brain/System 2"),
+    task: z.string().optional().describe("Policy task shorthand, for example chop_logs, combat, travel, interact"),
+    objective: z.string().optional().describe("Human-readable policy objective"),
+    itemName: z.string().optional().describe("Target inventory item for success counting, for example Logs"),
+    quantity: z.number().optional().describe("Target inventory quantity for success counting"),
+    quantityMode: z.enum(["absolute", "gain"]).optional().describe("absolute means inventory must reach quantity; gain means acquire quantity more than the starting count"),
+    method: z.string().optional().describe("Method hint, for example woodcutting"),
+    targetName: z.string().optional().describe("Entity name to interact with"),
+    targetId: z.number().optional().describe("Entity id to interact with"),
+    targetType: z.enum(["object", "npc", "ground_item", "player"]).optional().describe("Entity type for explicit interaction policies"),
+    actionOption: z.string().optional().describe("Menu option for explicit interaction policies"),
+    destination: z.string().optional().describe("Named transport destination for travel policies, for example Draynor Bank"),
+    from: z.string().optional().describe("Optional named transport start node for travel policies"),
+    maxStepTiles: z.number().optional().describe("Maximum tiles for one local navigation step, default 18"),
+    destinationWorldX: z.number().optional().describe("Optional destination world X for travel success checks"),
+    destinationWorldY: z.number().optional().describe("Optional destination world Y for travel success checks"),
+    destinationPlane: z.number().optional().describe("Optional destination plane for travel success checks"),
+    destinationRadius: z.number().optional().describe("Optional radius for travel success checks, default 2"),
+    eatAtHp: z.number().optional().describe("Survival guard: eat when HP is at or below this value"),
+    eatAtHpPercent: z.number().optional().describe("Survival guard: eat when HP percent is at or below this value"),
+    inventoryFullBehavior: z.enum(["stop", "bank", "drop"]).optional().describe("What System 1 does when inventory is full: stop, deposit item if bank is open, or drop item"),
+    dropItemName: z.string().optional().describe("Inventory item name to drop when inventoryFullBehavior=drop; defaults to itemName"),
+    dropItemId: z.number().optional().describe("Inventory item id to drop when inventoryFullBehavior=drop"),
+    bankItemName: z.string().optional().describe("Inventory item name to deposit when inventoryFullBehavior=bank; defaults to itemName"),
+    bankItemId: z.number().optional().describe("Inventory item id to deposit when inventoryFullBehavior=bank"),
+    stopOnVisiblePlayers: z.boolean().optional().describe("Stop the policy if visible players are detected"),
+    tickMs: z.number().optional().describe("Policy tick interval in ms, default 600"),
+    maxTicks: z.number().optional().describe("Maximum local ticks before stopping, default 100"),
+    start: z.boolean().optional().describe("Start immediately after loading, default true"),
+    executionMode: z.enum(["dry_run", "execute"]).optional().describe("dry_run validates/previews; execute performs local policy actions"),
+    confirmExecution: z.string().optional().describe("Required for executionMode=execute: LOAD_POLICY_EXECUTE"),
+    ...clientTargetSchema(),
+  },
+  async (args) => {
+    try {
+      return { content: [{ type: "text", text: JSON.stringify(loadReflexPolicyResponse(args), null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("loading Reflex Engine policy", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "reflex_status",
+  "Inspect the active System 1 Reflex Engine policy and recent local tick history.",
+  {},
+  async () => ({ content: [{ type: "text", text: JSON.stringify(reflexEngine.status(), null, 2) }] })
+);
+
+server.tool(
+  "reflex_pause",
+  "Pause the active System 1 Reflex Engine policy without unloading it.",
+  {
+    reason: z.string().optional(),
+  },
+  async ({ reason }) => ({ content: [{ type: "text", text: JSON.stringify(reflexEngine.pause(reason), null, 2) }] })
+);
+
+server.tool(
+  "reflex_resume",
+  "Resume a loaded or paused System 1 Reflex Engine policy.",
+  {},
+  async () => {
+    try {
+      return { content: [{ type: "text", text: JSON.stringify(reflexEngine.resume(), null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("resuming Reflex Engine", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "reflex_stop",
+  "Stop the active System 1 Reflex Engine policy.",
+  {
+    reason: z.string().optional(),
+  },
+  async ({ reason }) => ({ content: [{ type: "text", text: JSON.stringify(reflexEngine.stop(reason), null, 2) }] })
+);
+
+server.tool(
+  "reflex_tick_once",
+  "Run one immediate System 1 Reflex Engine tick for the active running policy. Intended for tests/debugging; normal policies tick locally on their own timer.",
+  {},
+  async () => {
+    try {
+      return { content: [{ type: "text", text: JSON.stringify(await reflexEngine.runSingleTick(), null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("running Reflex Engine tick", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "reflex_history",
+  "Read recent System 1 Reflex Engine events.",
+  {
+    limit: z.number().optional().describe("Maximum events to return, default 50"),
+  },
+  async ({ limit }) => ({ content: [{ type: "text", text: JSON.stringify({ events: reflexEngine.getHistory(limit ?? 50) }, null, 2) }] })
+);
 
 server.tool(
   "get_agent_context",
@@ -3709,6 +4556,25 @@ server.registerResource(
 );
 
 server.registerResource(
+  "strategy-cache",
+  "osrs://memory/strategy-cache",
+  {
+    title: "Persistent Strategy Cache",
+    description: "Cached System 2 strategy policies and System 1 policy payloads keyed by normalized goals/methods.",
+    mimeType: "application/json",
+  },
+  async () => {
+    const uri = "osrs://memory/strategy-cache";
+    await ensureAgentMemoryLoaded();
+    return resourceText(uri, {
+      status: "STRATEGY_CACHE_READY",
+      entries: await agentMemory.listStrategyCache({ limit: 25 }),
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.registerResource(
   "knowledge-index",
   "osrs://knowledge/index",
   {
@@ -3720,6 +4586,126 @@ server.registerResource(
     return resourceText("osrs://knowledge/index", {
       status: "KNOWLEDGE_READY",
       ...knowledgeSummary(),
+    });
+  }
+);
+
+server.tool(
+  "strategy_cache_get",
+  "Lookup a cached strategist policy by key or normalized goal/method before calling Qwen.",
+  {
+    key: z.string().optional().describe("Exact cache key returned by strategy_cache_put/list"),
+    goal: z.string().optional().describe("Goal text used to derive a cache key when key is omitted"),
+    method: z.string().optional().describe("Optional method namespace for the cache key"),
+  },
+  async ({ key, goal, method }) => {
+    await ensureAgentMemoryLoaded();
+    if (!key && !goal) {
+      return jsonTool({
+        status: "CACHE_LOOKUP_REJECTED",
+        willExecute: false,
+        executed: false,
+        stopReason: "Provide key or goal.",
+      });
+    }
+    const cacheKey = key ?? strategyCacheKey({ goal: goal as string, method });
+    const entry = await agentMemory.getStrategyCache(cacheKey);
+    return jsonTool({
+      status: entry ? "STRATEGY_CACHE_HIT" : "STRATEGY_CACHE_MISS",
+      willExecute: false,
+      executed: false,
+      key: cacheKey,
+      entry,
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.tool(
+  "strategy_cache_put",
+  "Store or replace a cached strategist policy and concrete System 1 policy payload.",
+  {
+    key: z.string().optional().describe("Optional exact cache key; defaults to normalized goal/method"),
+    goal: z.string().describe("Goal text this strategy satisfies"),
+    method: z.string().optional().describe("Optional method namespace, for example woodcutting.logs"),
+    source: z.string().optional().describe("Source such as qwen, local_scaffold_no_qwen, or human"),
+    status: z.string().optional().describe("Cache status, default READY"),
+    policy: z.any().describe("Full strategist policy or cached strategy payload"),
+    contextSummary: z.any().optional().describe("Compact context/knowledge summary used to create the policy"),
+    metadata: z.any().optional().describe("Additional cache metadata"),
+  },
+  async ({ key, goal, method, source, status, policy, contextSummary, metadata }) => {
+    await ensureAgentMemoryLoaded();
+    const entry = await agentMemory.upsertStrategyCache({
+      key,
+      goal,
+      method,
+      source,
+      status,
+      policy,
+      contextSummary,
+      metadata,
+    });
+    return jsonTool({
+      status: "STRATEGY_CACHED",
+      willExecute: false,
+      executed: false,
+      entry,
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.tool(
+  "strategy_cache_list",
+  "List cached strategy policies for System 2 reuse and inspection.",
+  {
+    limit: z.number().optional().describe("Maximum entries, default 25"),
+    goalContains: z.string().optional().describe("Optional case-insensitive goal filter"),
+    method: z.string().optional().describe("Optional method substring filter"),
+    status: z.string().optional().describe("Optional exact status filter"),
+  },
+  async ({ limit, goalContains, method, status }) => {
+    await ensureAgentMemoryLoaded();
+    return jsonTool({
+      status: "STRATEGY_CACHE_LIST",
+      willExecute: false,
+      executed: false,
+      entries: await agentMemory.listStrategyCache({ limit, goalContains, method, status }),
+      persistence: await agentMemory.status(),
+    });
+  }
+);
+
+server.tool(
+  "strategy_cache_record_outcome",
+  "Record whether a cached strategy succeeded or failed after System 1 execution.",
+  {
+    key: z.string().optional().describe("Exact cache key returned by strategy_cache_get/list"),
+    goal: z.string().optional().describe("Goal text used to derive cache key when key is omitted"),
+    method: z.string().optional().describe("Optional method namespace"),
+    success: z.boolean().describe("Whether the cached strategy succeeded"),
+    metadata: z.any().optional().describe("Outcome metadata, failure lesson, or verification summary"),
+  },
+  async ({ key, goal, method, success, metadata }) => {
+    await ensureAgentMemoryLoaded();
+    if (!key && !goal) {
+      return jsonTool({
+        status: "CACHE_OUTCOME_REJECTED",
+        willExecute: false,
+        executed: false,
+        stopReason: "Provide key or goal.",
+      });
+    }
+    const cacheKey = key ?? strategyCacheKey({ goal: goal as string, method });
+    const entry = await agentMemory.recordStrategyCacheOutcome(cacheKey, { success, metadata });
+    return jsonTool({
+      status: entry ? "STRATEGY_CACHE_OUTCOME_RECORDED" : "STRATEGY_CACHE_ENTRY_NOT_FOUND",
+      willExecute: false,
+      executed: false,
+      key: cacheKey,
+      entry,
+      persistence: await agentMemory.status(),
     });
   }
 );
@@ -3896,6 +4882,35 @@ server.tool(
       journal,
       persistence: await agentMemory.status(),
       stopReason: session ? session.stopReason : "No active or matching persisted goal session exists.",
+    });
+  }
+);
+
+server.tool(
+  "memory_search_lessons",
+  "Search persisted memory journal for similar lessons, failures, blockers, and strategy notes before planning a risky goal.",
+  {
+    query: z.string().describe("Goal/task text to search for similar prior lessons"),
+    limit: z.number().optional().describe("Maximum lessons to return, default 10"),
+    kind: z.enum(["observation", "action"]).optional().describe("Optional journal kind filter"),
+    onlyFailures: z.boolean().optional().describe("Return only entries with failure/blocker/lesson signals, default false"),
+    minScore: z.number().optional().describe("Minimum lexical score, default 1"),
+  },
+  async ({ query, limit, kind, onlyFailures, minScore }) => {
+    await ensureAgentMemoryLoaded();
+    const lessons = await agentMemory.searchLessons({ query, limit, kind, onlyFailures, minScore });
+    return jsonTool({
+      status: "MEMORY_LESSONS",
+      willExecute: false,
+      executed: false,
+      query,
+      lessons,
+      persistence: await agentMemory.status(),
+      retrieval: {
+        mode: "lexical_v1",
+        vectorEmbeddings: false,
+        note: "Phase 4 V1 retrieves similar journal lessons lexically; vector embeddings can replace this scorer later.",
+      },
     });
   }
 );
@@ -4679,7 +5694,7 @@ server.tool(
   async ({ entityType, option, name, id, nearestToPlayer, executionMode, sessionId, maxAgeMs, instanceId, playerName, port }) => {
     try {
       await ensureAgentMemoryLoaded();
-      const session = getAgentSession(sessionId);
+      const session = sessionId ? getAgentSession(sessionId) : undefined;
       if (session?.status === "stopped" || session?.status === "paused") {
         return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
       }
@@ -4704,11 +5719,11 @@ server.tool(
 
 server.tool(
   "skill_acquire",
-  "Acquire an item through a bounded universal activity. Phase 1 supports woodcutting/log acquisition first.",
+  "Acquire an item through a bounded universal activity. Phase 1 supports woodcutting logs and mining ores.",
   {
-    itemName: z.string().describe("Item to acquire, for example Logs, Oak logs, Willow logs"),
+    itemName: z.string().describe("Item to acquire, for example Logs, Oak logs, Tin ore, Copper ore, Iron ore"),
     quantity: z.number().describe("Quantity to acquire in this call"),
-    method: z.string().optional().describe("Acquisition method, for example woodcutting or gather"),
+    method: z.string().optional().describe("Acquisition method, for example woodcutting, gathering, or mining"),
     maxSteps: z.number().optional().describe("Maximum interactions, default quantity*4 capped at 20"),
     executionMode: z.enum(["dry_run", "execute"]).optional(),
     sessionId: z.string().optional(),
@@ -4717,23 +5732,23 @@ server.tool(
   async ({ itemName, quantity, method, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
       await ensureAgentMemoryLoaded();
-      const session = getAgentSession(sessionId);
+      const session = sessionId ? getAgentSession(sessionId) : undefined;
       if (session?.status === "stopped" || session?.status === "paused") {
         return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
       }
-      const normalizedMethod = String(method ?? "woodcutting").toLowerCase();
-      const item = logsItemName(itemName);
-      if (!normalizedMethod.includes("woodcut") && !normalizedMethod.includes("gather") && !String(item).toLowerCase().includes("log")) {
+      const acquisition = resolveAcquisitionPlan(itemName, method);
+      if (!acquisition.supported) {
         return jsonTool({
           status: "UNSUPPORTED_ACTIVITY",
           willExecute: false,
           executed: false,
           selectedStep: null,
           verification: { verified: false },
-          stopReason: "Phase 1 skill_acquire supports log acquisition by woodcutting/gathering only.",
+          stopReason: acquisition.unsupportedReason,
           session: publicAgentSession(session),
         });
       }
+      const item = acquisition.itemName;
 
       const resolved = await resolveActivityClient({ instanceId, playerName, port });
       if (resolved.status !== "READY") {
@@ -4759,9 +5774,9 @@ server.tool(
         const selectedStep = {
           tool: "perform_until",
           arguments: {
-            actionEntityType: "object",
-            actionName: treeNameForItem(itemName, method),
-            actionOption: "Chop down",
+            actionEntityType: acquisition.actionEntityType,
+            actionName: acquisition.actionName,
+            actionOption: acquisition.actionOption,
             nearestToPlayer: true,
             condition: "inventory_quantity_at_least",
             inventoryItemName: item,
@@ -4800,6 +5815,12 @@ server.tool(
         willExecute: mode === "execute",
         executed: attempts.some((attempt) => attempt.executed),
         itemName: item,
+        method: acquisition.method,
+        actionTarget: {
+          entityType: acquisition.actionEntityType,
+          name: acquisition.actionName,
+          option: acquisition.actionOption,
+        },
         quantityRequested: quantity,
         startQuantity,
         targetQuantity,
@@ -4833,7 +5854,7 @@ server.tool(
     try {
       await ensureAgentMemoryLoaded();
       const normalizedSkill = skill.toLowerCase();
-      const session = getAgentSession(sessionId);
+      const session = sessionId ? getAgentSession(sessionId) : undefined;
       if (normalizedSkill !== "woodcutting") {
         return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "Phase 1 skill_train supports woodcutting first.", session: publicAgentSession(session) });
       }
@@ -4891,7 +5912,7 @@ server.tool(
   async ({ destinationName, worldX, worldY, plane, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
       await ensureAgentMemoryLoaded();
-      const session = getAgentSession(sessionId);
+      const session = sessionId ? getAgentSession(sessionId) : undefined;
       if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
         return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "Phase 1 skill_travel requires worldX/worldY. Named/global destinations arrive in Phase 6.", destinationName, session: publicAgentSession(session) });
       }
@@ -4912,30 +5933,92 @@ server.tool(
 
 server.tool(
   "skill_manage_inventory",
-  "Phase 1 inventory abstraction placeholder with safe status reporting. Concrete bank/drop/eat policies are added after live bridge stabilization.",
+  "Phase 1 inventory abstraction. Supports bounded item dropping through the safe agent step primitive; banking/eating policies arrive later.",
   {
     action: z.enum(["deposit_all", "keep_only", "use_on_target", "eat_when_low", "drop"]),
     itemName: z.string().optional(),
+    itemId: z.number().optional(),
+    slot: z.number().optional(),
     quantity: z.number().optional(),
     executionMode: z.enum(["dry_run", "execute"]).optional(),
     sessionId: z.string().optional(),
     ...clientTargetSchema(),
   },
-  async ({ action, itemName, quantity, executionMode, sessionId }) => {
-    await ensureAgentMemoryLoaded();
-    const session = getAgentSession(sessionId);
-    return jsonTool({
-      status: "UNSUPPORTED_ACTIVITY",
-      willExecute: executionMode === "execute",
-      executed: false,
-      selectedStep: null,
-      verification: { verified: false },
-      action,
-      itemName,
-      quantity,
-      stopReason: "Phase 1 exposes skill_manage_inventory for the public interface, but concrete inventory policies are deferred until bank/drop/eat verification is hardened.",
-      session: publicAgentSession(session),
-    });
+  async ({ action, itemName, itemId, slot, quantity, executionMode, sessionId, instanceId, playerName, port }) => {
+    try {
+      await ensureAgentMemoryLoaded();
+      const session = sessionId ? getAgentSession(sessionId) : undefined;
+      if (session?.status === "stopped" || session?.status === "paused") {
+        return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
+      }
+
+      if (action !== "drop") {
+        return jsonTool({
+          status: "UNSUPPORTED_ACTIVITY",
+          willExecute: executionMode === "execute",
+          executed: false,
+          selectedStep: null,
+          verification: { verified: false },
+          action,
+          itemName,
+          itemId,
+          quantity,
+          stopReason: "Phase 1 skill_manage_inventory currently implements drop only. Deposit/eat/use policies are exposed after live verification is hardened.",
+          session: publicAgentSession(session),
+        });
+      }
+
+      if (!itemName && !Number.isFinite(itemId) && !Number.isFinite(slot)) {
+        return jsonTool({
+          status: "EXECUTION_BLOCKED",
+          willExecute: false,
+          executed: false,
+          selectedStep: null,
+          verification: { verified: false, reason: "Drop requires itemName, itemId, or slot." },
+          action,
+          stopReason: "Drop requires itemName, itemId, or slot.",
+          session: publicAgentSession(session),
+        });
+      }
+
+      const resolved = await resolveActivityClient({ instanceId, playerName, port });
+      if (resolved.status !== "READY") {
+        return jsonTool({ status: resolved.status, willExecute: false, executed: false, selectedStep: null, verification: { verified: false, reason: resolved.reason }, stopReason: resolved.reason, clients: resolved.clients, session: publicAgentSession(session) });
+      }
+      const snapshot = await getSnapshotForBase(resolved.baseURL as string, true);
+      const currentQuantity = inventoryQuantity(snapshot, itemName, itemId);
+      const selectedStep = {
+        tool: "drop_inventory_item",
+        arguments: { name: itemName, id: itemId, slot },
+      };
+      const result = await runActivityStep({
+        label: "skill_manage_inventory",
+        step: selectedStep,
+        executionMode: executionMode ?? session?.executionMode ?? "dry_run",
+        session,
+        target: { instanceId, playerName, port },
+        verification: {
+          startedAt: Date.now(),
+          inventoryItemName: itemName,
+          inventoryItemId: itemId,
+          inventoryQuantityChangedFrom: currentQuantity,
+          timeoutMs: 6000,
+          pollMs: 500,
+        },
+      });
+      return jsonTool({
+        ...result,
+        action,
+        itemName,
+        itemId,
+        slot,
+        quantityRequested: quantity,
+        startQuantity: currentQuantity,
+        session: publicAgentSession(session),
+      });
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("running skill_manage_inventory", e) }] };
+    }
   }
 );
 
@@ -4950,7 +6033,7 @@ server.tool(
   },
   async ({ amount, allowedMethods, executionMode, sessionId }) => {
     await ensureAgentMemoryLoaded();
-    const session = getAgentSession(sessionId);
+    const session = sessionId ? getAgentSession(sessionId) : undefined;
     return jsonTool({
       status: "PLANNED_ONLY",
       willExecute: false,
@@ -4987,7 +6070,7 @@ server.tool(
   async ({ target, killCount, style, eatThreshold, loot, lootName, maxSteps, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
       await ensureAgentMemoryLoaded();
-      const session = getAgentSession(sessionId);
+      const session = sessionId ? getAgentSession(sessionId) : undefined;
       const mode = executionMode ?? session?.executionMode ?? "dry_run";
       const resolved = await resolveActivityClient({ instanceId, playerName, port });
       if (resolved.status !== "READY") {
@@ -5263,7 +6346,17 @@ server.tool(
       }
       return { content };
     } catch (e: any) {
-      return { content: [{ type: "text", text: errorText("capturing RuneLite canvas", e) }] };
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "SCREENSHOT_CAPTURE_FAILED",
+            imageIncluded: false,
+            mimeType: "image/png",
+            error: e?.message ?? String(e),
+          }, null, 2)
+        }]
+      };
     }
   }
 );
@@ -5293,7 +6386,17 @@ server.tool(
       }
       return { content };
     } catch (e: any) {
-      return { content: [{ type: "text", text: errorText("capturing RuneLite screenshot", e) }] };
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "SCREENSHOT_CAPTURE_FAILED",
+            imageIncluded: false,
+            mimeType: "image/png",
+            error: e?.message ?? String(e),
+          }, null, 2)
+        }]
+      };
     }
   }
 );
@@ -5692,19 +6795,225 @@ server.tool(
 );
 
 server.tool(
+  "transport_graph_status",
+  "Inspect the curated System 1 global transport graph used for named-location navigation.",
+  {},
+  async () => ({
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        status: "TRANSPORT_GRAPH_READY",
+        provider: "graphology_transport_graph",
+        callsLlm: false,
+        ...transportGraphSummary(),
+        resource: "osrs://transport/graph",
+      }, null, 2)
+    }]
+  })
+);
+
+server.tool(
+  "plan_route",
+  "Plan a global named-location route over the System 1 transport graph without clicking or walking.",
+  {
+    from: z.string().optional().describe("Optional start node/name/tag, for example Lumbridge Castle. If omitted, uses current player location when a client is available."),
+    to: z.string().describe("Destination node/name/tag, for example Varrock West Bank or Draynor Willows"),
+    ...clientTargetSchema(),
+  },
+  async ({ from, to, instanceId, playerName, port }) => {
+    try {
+      let currentLocation: any;
+      let clientStatus = "not_needed";
+      if (!from) {
+        try {
+          const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port }, true);
+          currentLocation = snapshot.state?.location;
+          clientStatus = "used_current_location";
+        } catch (e: any) {
+          clientStatus = `current_location_unavailable:${e?.message ?? String(e)}`;
+        }
+      }
+      const route = planTransportRoute({ from, to, currentLocation });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ...route,
+            willExecute: false,
+            executed: false,
+            clientStatus,
+            executionRule: "plan_route is read-only. Use navigate_to with explicit arming to move one bounded step.",
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("planning transport route", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "navigate_to",
+  `Plan a System 1 route to a named destination and optionally execute one bounded movement step. Execution requires confirmExecution='${NAVIGATE_EXECUTE_CONFIRMATION}'.`,
+  {
+    destination: z.string().describe("Destination node/name/tag, for example Varrock West Bank, Draynor Bank, or Lumbridge Cows"),
+    from: z.string().optional().describe("Optional start node/name/tag. If omitted, uses current player location."),
+    executionMode: z.enum(["dry_run", "execute"]).optional().describe("dry_run plans only; execute performs at most one bounded movement step"),
+    confirmExecution: z.string().optional().describe(`Required for executionMode=execute: ${NAVIGATE_EXECUTE_CONFIRMATION}`),
+    maxStepTiles: z.number().optional().describe("Maximum tiles for the one movement step, default 18"),
+    ...clientTargetSchema(),
+  },
+  async ({ destination, from, executionMode, confirmExecution, maxStepTiles, instanceId, playerName, port }) => {
+    try {
+      const result = await navigateToDestinationAction({
+        destination,
+        from,
+        executionMode,
+        confirmExecution,
+        maxStepTiles,
+        targetClient: { instanceId, playerName, port },
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("navigating to destination", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "perceive_minimap",
+  "Read compact minimap/camera context for System 1 active perception. Optionally projects one destination tile.",
+  {
+    worldX: z.number().optional(),
+    worldY: z.number().optional(),
+    plane: z.number().optional(),
+    maxEntities: z.number().optional().describe("Maximum semantic minimap icons/POIs to return, default 80"),
+    ...clientTargetSchema(),
+  },
+  async ({ worldX, worldY, plane, maxEntities, instanceId, playerName, port }) => {
+    try {
+      const api = await apiForTarget({ instanceId, playerName, port });
+      const params = worldX !== undefined && worldY !== undefined ? { worldX, worldY, plane } : undefined;
+      const [minimap, icons, camera] = await Promise.all([
+        api.get("/minimap", { params }),
+        api.get("/minimap/icons", { params: { maxEntities: maxEntities ?? 80 } }),
+        api.get("/camera"),
+      ]);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "PERCEIVED_MINIMAP",
+            willExecute: false,
+            executed: false,
+            minimap: minimap.data,
+            semanticIcons: icons.data,
+            camera: camera.data,
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("perceiving minimap", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "perceive_chat",
+  "Read compact recent chat/game messages for System 1 active perception.",
+  {
+    limit: z.number().optional().describe("Maximum chat messages, default 20"),
+    type: z.string().optional().describe("Optional chat type filter"),
+    contains: z.string().optional().describe("Optional case-insensitive message substring filter"),
+    ...clientTargetSchema(),
+  },
+  async ({ limit, type, contains, instanceId, playerName, port }) => {
+    try {
+      const res = await (await apiForTarget({ instanceId, playerName, port })).get("/chat", { params: { limit: limit ?? 20 } });
+      const messages = Array.isArray(res.data?.messages) ? res.data.messages : [];
+      const needle = String(contains ?? "").toLowerCase();
+      const filtered = messages.filter((message: any) =>
+        (!type || String(message.type ?? "") === type) &&
+        (!needle || String(message.message ?? "").toLowerCase().includes(needle))
+      );
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "PERCEIVED_CHAT",
+            willExecute: false,
+            executed: false,
+            count: filtered.length,
+            messages: filtered,
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("perceiving chat", e) }] };
+    }
+  }
+);
+
+server.tool(
+  "perceive_ui_region",
+  "Read compact UI/interface perception with semantic controls and optional bounded widget filtering.",
+  {
+    widgetFilter: z.string().optional().describe("Optional widget text/action/id filter"),
+    maxWidgets: z.number().optional().describe("Maximum raw widgets to inspect, default 80"),
+    includeHidden: z.boolean().optional().describe("Include hidden widgets, default false"),
+    ...clientTargetSchema(),
+  },
+  async ({ widgetFilter, maxWidgets, includeHidden, instanceId, playerName, port }) => {
+    try {
+      const result = await getSemanticInterfaceForTarget({ instanceId, playerName, port }, {
+        widgetFilter,
+        maxWidgets: maxWidgets ?? 80,
+        includeHidden: includeHidden ?? false,
+        forceRefresh: true,
+      });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "PERCEIVED_UI_REGION",
+            willExecute: false,
+            executed: false,
+            baseURL: result.baseURL,
+            widgetError: result.widgetError,
+            dialogue: result.semantic.dialogue,
+            groups: result.semantic.groups,
+            recommendedNext: result.semantic.recommendedNext,
+            controls: result.semantic.controls.slice(0, 40),
+          }, null, 2)
+        }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("perceiving UI region", e) }] };
+    }
+  }
+);
+
+server.tool(
   "get_minimap",
   "Read minimap bounds and optionally project a world tile to minimap screen coordinates.",
   {
     worldX: z.number().optional().describe("Optional target world X tile to project"),
     worldY: z.number().optional().describe("Optional target world Y tile to project"),
     plane: z.number().optional().describe("Optional target plane"),
+    includeIcons: z.boolean().optional().describe("Include semantic minimap icons/POIs from /api/minimap/icons"),
+    maxEntities: z.number().optional().describe("Maximum semantic minimap icons/POIs when includeIcons is true, default 80"),
     ...clientTargetSchema(),
   },
-  async ({ worldX, worldY, plane, instanceId, playerName, port }) => {
+  async ({ worldX, worldY, plane, includeIcons, maxEntities, instanceId, playerName, port }) => {
     try {
       const params = worldX !== undefined && worldY !== undefined ? { worldX, worldY, plane } : undefined;
-      const res = await (await apiForTarget({ instanceId, playerName, port })).get("/minimap", { params });
-      return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+      const api = await apiForTarget({ instanceId, playerName, port });
+      const res = await api.get("/minimap", { params });
+      if (!includeIcons) {
+        return { content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }] };
+      }
+      const icons = await api.get("/minimap/icons", { params: { maxEntities: maxEntities ?? 80 } });
+      return { content: [{ type: "text", text: JSON.stringify({ ...res.data, semanticIcons: icons.data }, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: errorText("fetching minimap", e) }] };
     }
@@ -6597,18 +7906,8 @@ server.tool(
   },
   async ({ name, id, instanceId, playerName, port }) => {
     try {
-      const target = { instanceId, playerName, port };
-      const { baseURL, snapshot } = await getSnapshotForTarget(target, true);
-      await assertClientReady(baseURL);
-      const inventory = snapshot.inventory ?? [];
-      const item = inventory.find((candidate: any) => targetMatches(candidate, name, id) && Number.isFinite(candidate.slotScreenX) && Number.isFinite(candidate.slotScreenY));
-      if (!item) {
-        throw new Error("No matching inventory item with slot coordinates found");
-      }
-      await clickPoint(item.slotScreenX!, item.slotScreenY!, true);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      await selectContextMenuOption("Drop", target, false);
-      return { content: [{ type: "text", text: `Dropped inventory item ${item.name ?? item.id} from slot ${(item as any).slot}.` }] };
+      const result = await dropInventoryItemAction({ name, id, instanceId, playerName, port });
+      return { content: [{ type: "text", text: `Dropped inventory item ${result.item.name ?? result.item.id} from slot ${result.item.slot}.` }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: `Error dropping inventory item: ${e.message}` }] };
     }

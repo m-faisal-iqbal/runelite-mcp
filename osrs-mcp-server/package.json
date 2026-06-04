@@ -16,6 +16,12 @@
     "smoke:knowledge": "node scripts/smoke-knowledge.mjs",
     "smoke:semantic": "node scripts/smoke-semantic.mjs",
     "smoke:runtime-modules": "node scripts/smoke-runtime-modules.mjs",
+    "smoke:live-actions": "node scripts/smoke-live-actions.mjs",
+    "smoke:direct-menu": "node scripts/smoke-direct-menu-action.mjs",
+    "smoke:skill-acquire-mining": "node scripts/smoke-skill-acquire-mining.mjs",
+    "smoke:load-policy-mining": "node scripts/smoke-load-policy-mining.mjs",
+    "smoke:inventory-drop": "node scripts/smoke-inventory-drop.mjs",
+    "smoke:reflex": "node scripts/smoke-reflex.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
   },
@@ -24,6 +30,7 @@
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@types/sql.js": "^1.4.11",
     "axios": "^1.6.7",
+    "graphology": "^0.26.0",
     "sql.js": "^1.14.1"
   },
   "devDependencies": {

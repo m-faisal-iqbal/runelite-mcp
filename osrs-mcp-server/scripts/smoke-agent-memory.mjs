@@ -109,7 +109,7 @@ try {
     }
 
     const action = parseJsonToolResult(await withTimeout(
-      client.callTool({ name: "memory_record_action", arguments: { sessionId: createdSessionId, action: { tool: "smoke-agent-memory" }, result: { ok: true }, lesson: "persistence survived restart" } }),
+      client.callTool({ name: "memory_record_action", arguments: { sessionId: createdSessionId, action: { tool: "smoke-agent-memory", target: "dragon" }, result: { ok: false, status: "blocked_without_antifire" }, lesson: "Need anti-fire potion before fighting dragons; avoid repeating unsafe dragon combat." } }),
       requestTimeoutMs,
       "memory_record_action",
     ), "memory_record_action");
@@ -134,7 +134,42 @@ try {
     if (memory.status !== "READY" || memory.sessionCount < 1 || memory.eventCount < 2 || memory.journalCount < 2) {
       throw new Error(`Unexpected first memory status: ${JSON.stringify(memory)}`);
     }
-    return memory;
+
+    const lessons = parseJsonToolResult(await withTimeout(
+      client.callTool({ name: "memory_search_lessons", arguments: { query: "fight dragon safely", onlyFailures: true, limit: 5 } }),
+      requestTimeoutMs,
+      "memory_search_lessons",
+    ), "memory_search_lessons");
+    if (lessons.status !== "MEMORY_LESSONS" || !lessons.lessons?.some((entry) => String(entry.data?.lesson ?? "").includes("anti-fire"))) {
+      throw new Error(`Expected anti-fire lesson retrieval: ${JSON.stringify(lessons)}`);
+    }
+
+    const cached = parseJsonToolResult(await withTimeout(
+      client.callTool({
+        name: "strategy_cache_put",
+        arguments: {
+          goal,
+          method: "smoke",
+          source: "smoke-agent-memory",
+          policy: {
+            kind: "osrs.strategist_policy.v1",
+            system1Policy: { task: "smoke", executionMode: "dry_run" },
+          },
+          contextSummary: { smoke: true },
+        },
+      }),
+      requestTimeoutMs,
+      "strategy_cache_put",
+    ), "strategy_cache_put");
+    if (cached.status !== "STRATEGY_CACHED" || !cached.entry?.key) {
+      throw new Error(`Unexpected strategy cache put result: ${JSON.stringify(cached)}`);
+    }
+    const memoryAfterCache = parseJsonToolResult(await withTimeout(
+      client.callTool({ name: "agent_memory_status", arguments: {} }),
+      requestTimeoutMs,
+      "agent_memory_status after strategy cache",
+    ), "agent_memory_status after strategy cache");
+    return { ...memoryAfterCache, cachedStrategyKey: cached.entry.key };
   });
 
   const second = await withClient(async (client, pid) => {
@@ -174,6 +209,24 @@ try {
     if (!goalMemory.journal?.some((entry) => entry.kind === "action")) {
       throw new Error(`Persisted journal entries were not returned: ${JSON.stringify(goalMemory)}`);
     }
+
+    const cacheHit = parseJsonToolResult(await withTimeout(
+      client.callTool({ name: "strategy_cache_get", arguments: { goal, method: "smoke" } }),
+      requestTimeoutMs,
+      "strategy_cache_get after restart",
+    ), "strategy_cache_get after restart");
+    if (cacheHit.status !== "STRATEGY_CACHE_HIT" || cacheHit.entry?.goal !== goal) {
+      throw new Error(`Persisted strategy cache was not returned: ${JSON.stringify(cacheHit)}`);
+    }
+
+    const outcome = parseJsonToolResult(await withTimeout(
+      client.callTool({ name: "strategy_cache_record_outcome", arguments: { goal, method: "smoke", success: true, metadata: { smoke: "outcome" } } }),
+      requestTimeoutMs,
+      "strategy_cache_record_outcome",
+    ), "strategy_cache_record_outcome");
+    if (outcome.status !== "STRATEGY_CACHE_OUTCOME_RECORDED" || outcome.entry?.successCount < 1) {
+      throw new Error(`Strategy cache outcome was not recorded: ${JSON.stringify(outcome)}`);
+    }
     return { status, sessions, history, goalMemory };
   });
 
@@ -187,6 +240,8 @@ try {
     firstSessionCount: first.sessionCount,
     firstEventCount: first.eventCount,
     firstJournalCount: first.journalCount,
+    firstStrategyCacheCount: first.strategyCacheCount,
+    cachedStrategyKey: first.cachedStrategyKey,
     restoredSessionStatus: second.status.session.status,
     restoredEventCount: second.history.events.length,
     restoredJournalCount: second.goalMemory.journal.length,

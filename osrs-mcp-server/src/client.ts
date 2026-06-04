@@ -10,6 +10,7 @@ export type RuneLiteTarget = {
   param1?: number;
   type?: string;
   itemId?: number;
+  quantity?: number;
   worldX?: number;
   worldY?: number;
   coordinateSource?: string;

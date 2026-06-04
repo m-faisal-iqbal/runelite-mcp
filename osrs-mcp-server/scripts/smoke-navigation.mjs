@@ -6,6 +6,12 @@ import {
   tileDistance,
   withStraightLineFallback,
 } from "../build/navigation.js";
+import {
+  findTransportNode,
+  nearestTransportNode,
+  planTransportRoute,
+  transportGraphSummary,
+} from "../build/transport-graph.js";
 
 const from = { x: 3200, y: 3200, plane: 0 };
 const plan = calculateStraightLineSteps(from, { worldX: 3245, worldY: 3210 }, 18, 2);
@@ -39,10 +45,25 @@ assert.equal(tileDistance({ x: 3200, y: 3200, plane: 0 }, 3205, 3198, 0), 5);
 assert.equal(tileDistance({ x: 3200, y: 3200, plane: 1 }, 3205, 3198, 0), Number.MAX_SAFE_INTEGER);
 assert.equal(tileDistance(null, 3205, 3198, 0), Number.MAX_SAFE_INTEGER);
 
+const graph = transportGraphSummary();
+assert(graph.nodeCount >= 8);
+assert(graph.edgeCount >= 8);
+assert.equal(findTransportNode("Varrock West Bank")?.id, "varrock_west_bank");
+assert.equal(findTransportNode("ge")?.id, "grand_exchange");
+assert.equal(nearestTransportNode({ x: 3222, y: 3218, plane: 0 })?.id, "lumbridge_castle");
+
+const route = planTransportRoute({ from: "Lumbridge Castle", to: "Varrock West Bank" });
+assert.equal(route.status, "ROUTE_PLANNED");
+assert.equal(route.steps.at(0)?.id, "lumbridge_castle");
+assert.equal(route.steps.at(-1)?.id, "varrock_west_bank");
+assert(route.totalCost > 0);
+
 console.log(JSON.stringify({
   ok: true,
   straightLineDistance: plan.distance,
   straightLineReturnedSteps: plan.returnedSteps,
   fallbackReason: fallback.fallbackReason,
   chosenWorldX: chooseLocalPathStep(localPath, 3).worldX,
+  graphNodes: graph.nodeCount,
+  routeCost: route.totalCost,
 }, null, 2));

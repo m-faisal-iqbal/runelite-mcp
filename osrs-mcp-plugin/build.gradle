@@ -25,7 +25,11 @@ dependencies {
 
 group = 'com.osrsmcp'
 version = '1.0-SNAPSHOT'
-sourceCompatibility = '11'
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_11
+	targetCompatibility = JavaVersion.VERSION_11
+}
 
 tasks.withType(JavaCompile) {
 	options.encoding = 'UTF-8'

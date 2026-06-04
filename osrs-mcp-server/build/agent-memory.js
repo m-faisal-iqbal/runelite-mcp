@@ -26,6 +26,31 @@ function fromJson(value) {
 function rowValue(row, key) {
     return row[key] === null ? undefined : row[key];
 }
+export function strategyCacheKey(args) {
+    const goal = normalizeKeyPart(args.goal);
+    const method = normalizeKeyPart(args.method ?? "default");
+    return `${goal}::${method}`;
+}
+function normalizeKeyPart(value) {
+    return String(value ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 120) || "unknown";
+}
+function tokenize(value) {
+    return String(value ?? "")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/g)
+        .filter((token) => token.length >= 3);
+}
+function textForJournalRow(row) {
+    return [
+        row.goal,
+        row.kind,
+        row.data_json,
+    ].filter(Boolean).join(" ");
+}
 export class AgentMemoryStore {
     dbPath;
     db;
@@ -46,12 +71,14 @@ export class AgentMemoryStore {
         const sessions = this.count("select count(*) as count from sessions");
         const events = this.count("select count(*) as count from events");
         const journal = this.count("select count(*) as count from journal");
+        const strategyCache = this.count("select count(*) as count from strategy_cache");
         return {
             status: this.loadError ? "DEGRADED" : "READY",
             dbPath: this.dbPath,
             sessionCount: sessions,
             eventCount: events,
             journalCount: journal,
+            strategyCacheCount: strategyCache,
             loadError: this.loadError,
         };
     }
@@ -188,6 +215,128 @@ export class AgentMemoryStore {
             data: fromJson(row.data_json),
         }));
     }
+    async searchLessons(args) {
+        await this.flush();
+        const limit = Math.max(1, Math.min(100, args.limit ?? 10));
+        const queryTokens = new Set(tokenize(args.query));
+        const rows = this.rows(`select * from journal ${args.kind ? "where kind = ?" : ""} order by at desc, id desc limit 500`, args.kind ? [args.kind] : []);
+        return rows
+            .map((row) => {
+            const data = fromJson(row.data_json);
+            const text = textForJournalRow(row);
+            const rowTokens = new Set(tokenize(text));
+            const overlap = [...queryTokens].filter((token) => rowTokens.has(token));
+            const failureSignal = hasFailureSignal(data) || /fail|blocked|death|died|risk|lesson|avoid|need/i.test(text);
+            const score = overlap.length * 3 + (failureSignal ? 2 : 0);
+            return {
+                id: Number(row.id),
+                at: Number(row.at),
+                kind: String(row.kind),
+                sessionId: rowValue(row, "session_id"),
+                goal: rowValue(row, "goal"),
+                score,
+                matchedTokens: overlap,
+                failureSignal,
+                data,
+            };
+        })
+            .filter((entry) => entry.score >= (args.minScore ?? 1))
+            .filter((entry) => args.onlyFailures ? entry.failureSignal : true)
+            .sort((a, b) => b.score - a.score || b.at - a.at)
+            .slice(0, limit);
+    }
+    async upsertStrategyCache(entry) {
+        const now = Date.now();
+        const key = entry.key ?? strategyCacheKey({ goal: entry.goal, method: entry.method });
+        await this.enqueue(async () => {
+            const db = await this.readyDb();
+            db.run(`insert into strategy_cache (
+          key, goal, method, source, status, created_at, updated_at,
+          success_count, failure_count, last_used_at, policy_json,
+          context_summary_json, metadata_json
+        ) values (?, ?, ?, ?, ?, ?, ?, 0, 0, null, ?, ?, ?)
+        on conflict(key) do update set
+          goal = excluded.goal,
+          method = excluded.method,
+          source = excluded.source,
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          policy_json = excluded.policy_json,
+          context_summary_json = excluded.context_summary_json,
+          metadata_json = excluded.metadata_json`, [
+                key,
+                entry.goal,
+                entry.method ?? null,
+                entry.source ?? null,
+                entry.status ?? "READY",
+                now,
+                now,
+                toJson(entry.policy),
+                toJson(entry.contextSummary),
+                toJson(entry.metadata),
+            ]);
+            await this.save();
+        });
+        return this.getStrategyCache(key);
+    }
+    async getStrategyCache(keyOrGoal, method) {
+        await this.flush();
+        const key = method === undefined && keyOrGoal.includes("::")
+            ? keyOrGoal
+            : strategyCacheKey({ goal: keyOrGoal, method });
+        const row = this.rows("select * from strategy_cache where key = ? limit 1", [key])[0];
+        return row ? this.strategyCacheFromRow(row) : undefined;
+    }
+    async listStrategyCache(args = {}) {
+        await this.flush();
+        const limit = Math.max(1, Math.min(200, args.limit ?? 25));
+        const where = [];
+        const params = [];
+        if (args.goalContains) {
+            where.push("lower(goal) like ?");
+            params.push(`%${args.goalContains.toLowerCase()}%`);
+        }
+        if (args.method) {
+            where.push("lower(coalesce(method, '')) like ?");
+            params.push(`%${args.method.toLowerCase()}%`);
+        }
+        if (args.status) {
+            where.push("status = ?");
+            params.push(args.status);
+        }
+        params.push(limit);
+        const sql = `select * from strategy_cache ${where.length ? `where ${where.join(" and ")}` : ""} order by updated_at desc limit ?`;
+        return this.rows(sql, params).map((row) => this.strategyCacheFromRow(row));
+    }
+    async recordStrategyCacheOutcome(keyOrGoal, args) {
+        const key = args.method === undefined && keyOrGoal.includes("::")
+            ? keyOrGoal
+            : strategyCacheKey({ goal: keyOrGoal, method: args.method });
+        const now = Date.now();
+        await this.enqueue(async () => {
+            const db = await this.readyDb();
+            db.run(`update strategy_cache set
+          updated_at = ?,
+          last_used_at = ?,
+          success_count = success_count + ?,
+          failure_count = failure_count + ?,
+          metadata_json = case
+            when ? is null then metadata_json
+            else ?
+          end
+        where key = ?`, [
+                now,
+                now,
+                args.success ? 1 : 0,
+                args.success ? 0 : 1,
+                args.metadata === undefined ? null : "metadata",
+                toJson(args.metadata),
+                key,
+            ]);
+            await this.save();
+        });
+        return this.getStrategyCache(key);
+    }
     async flush() {
         await this.writeQueue;
         await this.ensureReady();
@@ -244,10 +393,27 @@ export class AgentMemoryStore {
         goal text,
         data_json text
       );
+      create table if not exists strategy_cache (
+        key text primary key,
+        goal text not null,
+        method text,
+        source text,
+        status text,
+        created_at integer not null,
+        updated_at integer not null,
+        success_count integer not null default 0,
+        failure_count integer not null default 0,
+        last_used_at integer,
+        policy_json text,
+        context_summary_json text,
+        metadata_json text
+      );
       create index if not exists idx_sessions_updated_at on sessions(updated_at);
       create index if not exists idx_events_session_at on events(session_id, at);
       create index if not exists idx_journal_kind_at on journal(kind, at);
       create index if not exists idx_journal_session_at on journal(session_id, at);
+      create index if not exists idx_strategy_cache_goal on strategy_cache(goal);
+      create index if not exists idx_strategy_cache_updated on strategy_cache(updated_at);
     `);
         await this.save();
     }
@@ -307,4 +473,35 @@ export class AgentMemoryStore {
             lastResult: fromJson(row.last_result_json),
         };
     }
+    strategyCacheFromRow(row) {
+        return {
+            key: String(row.key),
+            goal: String(row.goal),
+            method: rowValue(row, "method"),
+            source: rowValue(row, "source"),
+            status: rowValue(row, "status"),
+            createdAt: Number(row.created_at),
+            updatedAt: Number(row.updated_at),
+            successCount: Number(row.success_count ?? 0),
+            failureCount: Number(row.failure_count ?? 0),
+            lastUsedAt: rowValue(row, "last_used_at") === undefined ? undefined : Number(row.last_used_at),
+            policy: fromJson(row.policy_json),
+            contextSummary: fromJson(row.context_summary_json),
+            metadata: fromJson(row.metadata_json),
+        };
+    }
+}
+function hasFailureSignal(data) {
+    if (!data || typeof data !== "object") {
+        return false;
+    }
+    const status = String(data.status ?? data.result?.status ?? data.result?.stopReason ?? "").toLowerCase();
+    const lesson = String(data.lesson ?? data.note ?? "").toLowerCase();
+    return Boolean(data.success === false ||
+        data.result?.success === false ||
+        status.includes("fail") ||
+        status.includes("blocked") ||
+        lesson.includes("avoid") ||
+        lesson.includes("need") ||
+        lesson.includes("failed"));
 }

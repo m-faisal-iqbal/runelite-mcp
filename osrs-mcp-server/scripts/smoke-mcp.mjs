@@ -12,6 +12,13 @@ const requiredTools = [
   "validate_prepared_step",
   "run_agent_cycle",
   "execute_agent_step",
+  "load_policy",
+  "reflex_status",
+  "reflex_pause",
+  "reflex_resume",
+  "reflex_stop",
+  "reflex_tick_once",
+  "reflex_history",
   "agent_start_goal",
   "agent_status",
   "agent_stop",
@@ -21,8 +28,13 @@ const requiredTools = [
   "agent_run_goal",
   "agent_memory_status",
   "agent_memory_sessions",
+  "strategy_cache_get",
+  "strategy_cache_put",
+  "strategy_cache_list",
+  "strategy_cache_record_outcome",
   "memory_get_profile",
   "memory_get_goal",
+  "memory_search_lessons",
   "memory_record_observation",
   "memory_record_action",
   "knowledge_query",
@@ -60,6 +72,12 @@ const requiredTools = [
   "invoke_widget_action",
   "calculate_path_to",
   "walk_route_to",
+  "transport_graph_status",
+  "plan_route",
+  "navigate_to",
+  "perceive_minimap",
+  "perceive_chat",
+  "perceive_ui_region",
   "get_pathfinding_status",
   "capture_canvas_screenshot",
   "get_screenshot",
@@ -72,8 +90,11 @@ const requiredResources = [
   "osrs://events/recent",
   "osrs://client/identity",
   "osrs://memory/profile",
+  "osrs://memory/strategy-cache",
   "osrs://knowledge/index",
   "osrs://semantic/interface",
+  "osrs://reflex/status",
+  "osrs://transport/graph",
 ];
 
 const requiredPrompts = [
@@ -182,6 +203,84 @@ try {
   const prompts = await withTimeout(client.listPrompts(), requestTimeoutMs, "listPrompts");
   const promptNames = new Set(prompts.prompts.map((prompt) => prompt.name));
   assertHasNames("prompts", promptNames, requiredPrompts);
+
+  const transportStatusResult = await withTimeout(
+    client.callTool({ name: "transport_graph_status", arguments: {} }),
+    requestTimeoutMs,
+    "transport_graph_status",
+  );
+  const transportStatus = parseJsonToolResult(transportStatusResult, "transport_graph_status");
+  if (transportStatus.status !== "TRANSPORT_GRAPH_READY" || transportStatus.provider !== "graphology_transport_graph") {
+    throw new Error(`Unexpected transport_graph_status result: ${JSON.stringify(transportStatus)}`);
+  }
+
+  const planRouteResult = await withTimeout(
+    client.callTool({
+      name: "plan_route",
+      arguments: { from: "Lumbridge Castle", to: "Varrock West Bank" },
+    }),
+    requestTimeoutMs,
+    "plan_route",
+  );
+  const plannedRoute = parseJsonToolResult(planRouteResult, "plan_route");
+  if (plannedRoute.status !== "ROUTE_PLANNED" || plannedRoute.willExecute !== false || plannedRoute.executed !== false) {
+    throw new Error(`Unexpected plan_route result: ${JSON.stringify(plannedRoute)}`);
+  }
+
+  const navigateResult = await withTimeout(
+    client.callTool({
+      name: "navigate_to",
+      arguments: { from: "Lumbridge Castle", destination: "Draynor Bank", executionMode: "dry_run" },
+    }),
+    requestTimeoutMs,
+    "navigate_to",
+  );
+  const navigation = parseJsonToolResult(navigateResult, "navigate_to");
+  if (navigation.status !== "ROUTE_PLANNED" || navigation.willExecute !== false || navigation.executed !== false) {
+    throw new Error(`Unexpected navigate_to dry-run result: ${JSON.stringify(navigation)}`);
+  }
+
+  const loadPolicyResult = await withTimeout(
+    client.callTool({
+      name: "load_policy",
+      arguments: {
+        task: "chop_logs",
+        objective: "Smoke-test a dry-run System 1 woodcutting policy",
+        itemName: "Logs",
+        quantity: 5,
+        method: "woodcutting",
+        executionMode: "dry_run",
+        start: false,
+        ...nonLiveTarget,
+      },
+    }),
+    requestTimeoutMs,
+    "load_policy",
+  );
+  const loadedPolicy = parseJsonToolResult(loadPolicyResult, "load_policy");
+  if (loadedPolicy.status !== "POLICY_LOADED" || loadedPolicy.tickLoop?.callsLlm !== false) {
+    throw new Error(`Unexpected load_policy result: ${JSON.stringify(loadedPolicy)}`);
+  }
+
+  const reflexStatusResult = await withTimeout(
+    client.callTool({ name: "reflex_status", arguments: {} }),
+    requestTimeoutMs,
+    "reflex_status",
+  );
+  const reflexStatus = parseJsonToolResult(reflexStatusResult, "reflex_status");
+  if (reflexStatus.activePolicy?.status !== "loaded") {
+    throw new Error(`Unexpected reflex_status after load_policy start:false: ${JSON.stringify(reflexStatus)}`);
+  }
+
+  const reflexStopResult = await withTimeout(
+    client.callTool({ name: "reflex_stop", arguments: { reason: "SMOKE_DONE" } }),
+    requestTimeoutMs,
+    "reflex_stop",
+  );
+  const reflexStop = parseJsonToolResult(reflexStopResult, "reflex_stop");
+  if (reflexStop.activePolicy?.status !== "stopped") {
+    throw new Error(`Unexpected reflex_stop result: ${JSON.stringify(reflexStop)}`);
+  }
 
   const contextResult = await withTimeout(
     client.callTool({
@@ -526,7 +625,11 @@ try {
   }
 
   let screenshotChecked = false;
+  let screenshotCaptureStatus = "not_checked";
+  let screenshotCaptureError;
   let observeScreenshotChecked = false;
+  let observeScreenshotStatus = "not_checked";
+  let observeScreenshotError;
   let pathfindingStatusChecked = false;
   if (live) {
     const pathfindingStatusResult = await withTimeout(
@@ -553,10 +656,15 @@ try {
     );
     const screenshotText = textContent(screenshotResult);
     const screenshot = JSON.parse(screenshotText);
-    if (screenshot.imageIncluded !== false || screenshot.mimeType !== "image/png" || !screenshot.filePath) {
+    if (["SCREENSHOT_CAPTURE_FAILED", "SCREENSHOT_FAILED"].includes(screenshot.status)) {
+      screenshotCaptureStatus = "failed";
+      screenshotCaptureError = screenshot.error;
+    } else if (screenshot.imageIncluded !== false || screenshot.mimeType !== "image/png" || !screenshot.filePath) {
       throw new Error(`Unexpected get_screenshot metadata: ${screenshotText}`);
+    } else {
+      screenshotCaptureStatus = "ok";
+      screenshotChecked = true;
     }
-    screenshotChecked = true;
 
     const observeLiveResult = await withTimeout(
       client.callTool({
@@ -578,13 +686,18 @@ try {
     if (liveObservation.status !== "OBSERVED" || liveObservation.willExecute !== false) {
       throw new Error(`Unexpected live observe_game result: ${JSON.stringify(liveObservation)}`);
     }
-    if (liveObservation.screenshot?.imageIncluded !== false || liveObservation.screenshot?.mimeType !== "image/png") {
+    if (["SCREENSHOT_CAPTURE_FAILED", "SCREENSHOT_FAILED"].includes(liveObservation.screenshot?.status)) {
+      observeScreenshotStatus = "failed";
+      observeScreenshotError = liveObservation.screenshot.error;
+    } else if (liveObservation.screenshot?.imageIncluded !== false || liveObservation.screenshot?.mimeType !== "image/png") {
       throw new Error(`Unexpected observe_game screenshot metadata: ${JSON.stringify(liveObservation.screenshot)}`);
+    } else {
+      observeScreenshotStatus = "ok";
+      observeScreenshotChecked = true;
     }
     if (liveObservation.package?.willExecute !== false) {
       throw new Error("live observe_game package must return willExecute false");
     }
-    observeScreenshotChecked = true;
   }
 
   if (live) {
@@ -628,9 +741,23 @@ try {
     prepareStatus: prepared.status,
     validateStatus: validated.status,
     screenshotChecked,
+    screenshotCaptureStatus,
+    screenshotCaptureError,
     observeScreenshotChecked,
+    observeScreenshotStatus,
+    observeScreenshotError,
     pathfindingStatusChecked,
     diagnosedClients: diagnose.checkedClients,
+    diagnoseAllOk: diagnose.allOk,
+    diagnoseStatuses: (diagnose.reports ?? []).map((report) => ({
+      port: report.port,
+      apiVersion: report.apiVersion,
+      expectedApiVersion: report.expectedApiVersion,
+      status: report.status,
+      staleRuntime: report.staleRuntime,
+      missingIdentityFlags: report.missingIdentityFlags,
+      warningCount: report.warnings?.length ?? 0,
+    })),
   };
 } finally {
   await client.close();

@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "scope": "f2p_foundation_transport_graph",
+  "nodes": [
+    {
+      "id": "lumbridge_castle",
+      "name": "Lumbridge Castle",
+      "worldX": 3222,
+      "worldY": 3218,
+      "plane": 0,
+      "tags": ["lumbridge", "castle", "starter"]
+    },
+    {
+      "id": "lumbridge_trees",
+      "name": "Lumbridge Trees",
+      "worldX": 3207,
+      "worldY": 3234,
+      "plane": 0,
+      "tags": ["lumbridge", "woodcutting", "trees", "logs"]
+    },
+    {
+      "id": "lumbridge_cows",
+      "name": "Lumbridge Cow Pen",
+      "worldX": 3253,
+      "worldY": 3266,
+      "plane": 0,
+      "tags": ["lumbridge", "combat", "cows"]
+    },
+    {
+      "id": "lumbridge_chickens",
+      "name": "Lumbridge Chickens",
+      "worldX": 3230,
+      "worldY": 3298,
+      "plane": 0,
+      "tags": ["lumbridge", "combat", "chickens"]
+    },
+    {
+      "id": "draynor_village",
+      "name": "Draynor Village",
+      "worldX": 3093,
+      "worldY": 3244,
+      "plane": 0,
+      "tags": ["draynor", "village"]
+    },
+    {
+      "id": "draynor_bank",
+      "name": "Draynor Bank",
+      "worldX": 3092,
+      "worldY": 3243,
+      "plane": 0,
+      "tags": ["draynor", "bank"]
+    },
+    {
+      "id": "draynor_willows",
+      "name": "Draynor Willows",
+      "worldX": 3087,
+      "worldY": 3235,
+      "plane": 0,
+      "tags": ["draynor", "woodcutting", "willow", "bank"]
+    },
+    {
+      "id": "varrock_center",
+      "name": "Varrock Center",
+      "worldX": 3210,
+      "worldY": 3424,
+      "plane": 0,
+      "tags": ["varrock", "city"]
+    },
+    {
+      "id": "varrock_west_bank",
+      "name": "Varrock West Bank",
+      "worldX": 3185,
+      "worldY": 3436,
+      "plane": 0,
+      "tags": ["varrock", "bank", "west"]
+    },
+    {
+      "id": "varrock_west_trees",
+      "name": "Varrock West Trees",
+      "worldX": 3163,
+      "worldY": 3428,
+      "plane": 0,
+      "tags": ["varrock", "woodcutting", "trees", "oak", "bank"]
+    },
+    {
+      "id": "grand_exchange",
+      "name": "Grand Exchange",
+      "worldX": 3164,
+      "worldY": 3487,
+      "plane": 0,
+      "tags": ["varrock", "grand exchange", "ge", "bank", "trade"]
+    },
+    {
+      "id": "al_kharid_bank",
+      "name": "Al Kharid Bank",
+      "worldX": 3270,
+      "worldY": 3167,
+      "plane": 0,
+      "tags": ["al kharid", "bank"]
+    }
+  ],
+  "edges": [
+    { "from": "lumbridge_castle", "to": "lumbridge_trees", "mode": "walk", "cost": 18 },
+    { "from": "lumbridge_trees", "to": "lumbridge_cows", "mode": "walk", "cost": 58 },
+    { "from": "lumbridge_cows", "to": "lumbridge_chickens", "mode": "walk", "cost": 39 },
+    { "from": "lumbridge_castle", "to": "draynor_village", "mode": "walk", "cost": 132 },
+    { "from": "draynor_village", "to": "draynor_bank", "mode": "walk", "cost": 3 },
+    { "from": "draynor_bank", "to": "draynor_willows", "mode": "walk", "cost": 11 },
+    { "from": "lumbridge_castle", "to": "al_kharid_bank", "mode": "walk", "cost": 96, "requirements": ["10 gp gate toll or quest/unlocked access if using gate"] },
+    { "from": "lumbridge_cows", "to": "varrock_center", "mode": "walk", "cost": 170 },
+    { "from": "draynor_village", "to": "varrock_west_bank", "mode": "walk", "cost": 185 },
+    { "from": "varrock_center", "to": "varrock_west_bank", "mode": "walk", "cost": 29 },
+    { "from": "varrock_west_bank", "to": "varrock_west_trees", "mode": "walk", "cost": 24 },
+    { "from": "varrock_west_bank", "to": "grand_exchange", "mode": "walk", "cost": 61 },
+    { "from": "varrock_center", "to": "grand_exchange", "mode": "walk", "cost": 96 }
+  ]
+}

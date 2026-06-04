@@ -11,6 +11,7 @@ const requiredEndpoints = [
   "/api/events",
   "/api/path",
   "/api/widgets",
+  "/api/minimap/icons",
   "/api/identity",
   "/api/debug/coordinates",
 ];
@@ -24,10 +25,16 @@ const requiredFlags = [
   "supportsRuntimeDiagnostics",
 ];
 
+const currentRequiredFlags = [
+  ...requiredFlags,
+  "supportsDirectMenuActions",
+];
+
 const readOnlyEndpoints = [
   "/identity",
   "/state",
   "/snapshot",
+  "/minimap/icons",
   "/events?limit=5",
   "/debug/coordinates",
 ];
@@ -99,6 +106,8 @@ const port = Number(args.get("port") ?? process.env.OSRS_VERIFY_PORT ?? 8080);
 const baseUrl = String(args.get("api") ?? `http://127.0.0.1:${port}/api`).replace(/\/$/, "");
 const timeout = Number(args.get("timeout-ms") ?? 5000);
 const skipActionDryRuns = args.get("skip-action-dry-runs") === "true";
+const expectedApiVersion = Number(args.get("expected-api-version") ?? 5);
+const requireCurrent = args.get("require-current") === "true";
 const api = axios.create({ baseURL: baseUrl, timeout });
 
 const apiIndex = (await api.get("/")).data;
@@ -111,6 +120,12 @@ const identity = (await api.get("/identity")).data;
 const missingFlags = requiredFlags.filter((flag) => identity[flag] !== true);
 assert(missingFlags.length === 0, `Missing/false identity flags: ${missingFlags.join(", ")}`);
 assert(Number(identity.apiVersion) >= 3, `Expected apiVersion >= 3, got ${identity.apiVersion}`);
+const missingCurrentFlags = currentRequiredFlags.filter((flag) => identity[flag] !== true);
+const reloadRequired = Number(identity.apiVersion) < expectedApiVersion || missingCurrentFlags.length > 0;
+if (requireCurrent) {
+  assert(Number(identity.apiVersion) >= expectedApiVersion, `Expected apiVersion >= ${expectedApiVersion}, got ${identity.apiVersion}`);
+  assert(missingCurrentFlags.length === 0, `Missing/false current identity flags: ${missingCurrentFlags.join(", ")}`);
+}
 
 const reads = {};
 for (const endpoint of readOnlyEndpoints) {
@@ -133,7 +148,8 @@ for (const endpoint of optionalReadOnlyEndpoints) {
 }
 
 const state = (await api.get("/state")).data;
-assert(state.status === "LOGGED_IN" || state.status === "LOGIN_SCREEN" || state.status === "HOPPING" || state.status === "LOADING", `Unexpected game status: ${state.status}`);
+const allowedStatuses = new Set(["LOGGED_IN", "LOGIN_SCREEN", "NOT_LOGGED_IN", "HOPPING", "LOADING"]);
+assert(allowedStatuses.has(state.status), `Unexpected game status: ${state.status}`);
 
 const actionDryRuns = {};
 if (!skipActionDryRuns) {
@@ -182,6 +198,10 @@ console.log(JSON.stringify({
   baseUrl,
   endpointCount: endpointPaths.size,
   apiVersion: identity.apiVersion,
+  expectedApiVersion,
+  reloadRequired,
+  missingCurrentFlags,
+  directMenuActionsReady: identity.supportsDirectMenuActions === true,
   playerName: identity.playerName,
   status: state.status,
   canvasShowing: identity.canvasShowing,

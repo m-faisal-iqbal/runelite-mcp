@@ -1,7 +1,7 @@
 import axios from "axios";
 import { apiBaseFromPort } from "./client.js";
 
-export const EXPECTED_PLUGIN_API_VERSION = 3;
+export const EXPECTED_PLUGIN_API_VERSION = 5;
 
 export const EXPECTED_PLUGIN_ENDPOINTS = [
   "/api/action/menu",
@@ -21,6 +21,7 @@ export const EXPECTED_IDENTITY_FLAGS = [
   "supportsConcurrentStreams",
   "supportsEventBuffer",
   "supportsInClientActions",
+  "supportsDirectMenuActions",
   "supportsLocalPathfinding",
   "supportsWidgetInspector",
 ];
