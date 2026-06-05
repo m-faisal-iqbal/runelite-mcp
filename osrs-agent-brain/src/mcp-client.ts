@@ -30,7 +30,7 @@ export async function connectToSystem1(config: BrainConfig = getBrainConfig()): 
       OSRS_MCP_CLIENT: "osrs-agent-brain"
     }
   });
-  let showSystem1Logs = true;
+  let showSystem1Logs = false;
 
   transport.stderr?.on("data", (chunk: Buffer) => {
     if (showSystem1Logs) {

@@ -1,7 +1,9 @@
 import readline from "node:readline";
+import { readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { BrainConfig } from "./config.js";
-import { getBrainConfig, readEnvVar } from "./config.js";
+import { getBrainConfig, readEnvVar, repoRoot } from "./config.js";
 import {
   QWEN_BRAIN_EXECUTE_CONFIRMATIONS,
   QWEN_BRAIN_FUNCTION_TOOLS,
@@ -16,6 +18,28 @@ import { searchOsrsWiki } from "./wiki-search.js";
 type BrainToolResult = {
   status: string;
   [key: string]: unknown;
+};
+
+type LocalPolicyStage = {
+  label: string;
+  policy: Record<string, unknown>;
+};
+
+type LocalExecutionPlan = {
+  status: "LOCAL_PLAN_READY" | "LOCAL_PLAN_BLOCKED";
+  reason: string;
+  policies: LocalPolicyStage[];
+  warnings: string[];
+  blocker?: string;
+};
+
+type WorldGraphNode = {
+  id: string;
+  name: string;
+  worldX: number;
+  worldY: number;
+  plane?: number;
+  tags?: string[];
 };
 
 type ResponseFunctionCall = {
@@ -391,6 +415,380 @@ function buildGoalInstruction(execute: boolean): string {
   return execute ? `${base} ${EXECUTE_AUTHORIZATION}` : base;
 }
 
+function normalizeGoalText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/\bedgvillage\b/g, "edgeville")
+    .replace(/\bedgville\b/g, "edgeville")
+    .replace(/\bedville\b/g, "edgeville")
+    .replace(/\bvarrok\b/g, "varrock")
+    .replace(/\binventories\b/g, "inventory");
+}
+
+function firstGoalNumber(text: string): number | undefined {
+  const wordNumbers: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+  };
+  for (const [word, value] of Object.entries(wordNumbers)) {
+    if (new RegExp(`\\b${word}\\b`, "i").test(text)) {
+      return value;
+    }
+  }
+  const match = text.match(/\b(\d{1,4})\b/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function loadWorldGraphNodes(): WorldGraphNode[] {
+  const graphPath = `${repoRoot}\\osrs-mcp-server\\src\\world_graph.json`;
+  const graph = JSON.parse(readFileSync(graphPath, "utf8")) as { nodes?: WorldGraphNode[] };
+  return graph.nodes ?? [];
+}
+
+function findWorldNode(nameOrTag: string): WorldGraphNode | undefined {
+  const needle = normalizeGoalText(nameOrTag).replace(/[_-]+/g, " ").trim();
+  if (!needle) {
+    return undefined;
+  }
+  return loadWorldGraphNodes().find((node) => {
+    const names = [node.id, node.name, ...(node.tags ?? [])]
+      .map((value) => normalizeGoalText(String(value)).replace(/[_-]+/g, " ").trim());
+    return names.includes(needle) || names.some((value) => value.includes(needle));
+  });
+}
+
+function nodeDestinationFields(node: WorldGraphNode | undefined): Record<string, unknown> {
+  if (!node) {
+    return {};
+  }
+  return {
+    destination: node.name,
+    destinationWorldX: node.worldX,
+    destinationWorldY: node.worldY,
+    destinationPlane: node.plane ?? 0,
+    destinationRadius: 3,
+  };
+}
+
+function inferTravelDestination(goal: string): WorldGraphNode | undefined {
+  const text = normalizeGoalText(goal);
+  if (/\b(edgeville|willow)\b/.test(text) && /\bwillow/.test(text)) {
+    return findWorldNode("edgeville willows") ?? findWorldNode("draynor willows");
+  }
+  if (/\bdraynor\b/.test(text) && /\bwillow/.test(text)) {
+    return findWorldNode("draynor willows");
+  }
+  if (/\bvarrock\b/.test(text) && /\b(tree|oak|woodcut|chop|log)\b/.test(text)) {
+    return findWorldNode("varrock west trees");
+  }
+  if (/\bedgeville\b/.test(text)) {
+    return findWorldNode("edgeville bank");
+  }
+  if (/\bvarrock\b/.test(text)) {
+    return findWorldNode("varrock center");
+  }
+  if (/\bdraynor\b/.test(text)) {
+    return findWorldNode("draynor village");
+  }
+  if (/\blumbridge\b/.test(text) && /\bbank\b/.test(text)) {
+    return findWorldNode("lumbridge castle bank");
+  }
+  if (/\blumbridge\b/.test(text)) {
+    return findWorldNode("lumbridge castle");
+  }
+  const match = text.match(/\b(?:go to|go|travel to|travel|navigate to|walk to)\s+([a-z][a-z\s'-]{2,40})/i);
+  return match ? findWorldNode(match[1]) : undefined;
+}
+
+function inferBankForNode(node: WorldGraphNode | undefined): WorldGraphNode | undefined {
+  const key = normalizeGoalText(`${node?.name ?? ""} ${(node?.tags ?? []).join(" ")}`);
+  if (key.includes("edgeville")) {
+    return findWorldNode("edgeville bank");
+  }
+  if (key.includes("draynor")) {
+    return findWorldNode("draynor bank");
+  }
+  if (key.includes("varrock")) {
+    return findWorldNode("varrock west bank");
+  }
+  if (key.includes("lumbridge")) {
+    return findWorldNode("lumbridge castle bank");
+  }
+  return undefined;
+}
+
+function inferWoodcutSpec(goal: string) {
+  const text = normalizeGoalText(goal);
+  if (!/\b(cut|chop|woodcut|tree|log|logs|willow|oak|yew)\b/.test(text)) {
+    return undefined;
+  }
+  if (text.includes("willow")) {
+    return { itemName: "Willow logs", targetName: "Willow", location: inferTravelDestination(`${goal} willow`) ?? findWorldNode("draynor willows") };
+  }
+  if (text.includes("oak")) {
+    return { itemName: "Oak logs", targetName: "Oak", location: inferTravelDestination(goal) ?? findWorldNode("varrock west trees") };
+  }
+  if (text.includes("yew")) {
+    return { itemName: "Yew logs", targetName: "Yew", location: inferTravelDestination(goal) ?? findWorldNode("edgeville yews") };
+  }
+  return { itemName: "Logs", targetName: "Tree", location: inferTravelDestination(goal) ?? findWorldNode("lumbridge trees") };
+}
+
+function inventorySlotsFromContext(context: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
+  const candidates = [
+    context?.inventory,
+    (context?.player as Record<string, unknown> | undefined)?.inventory,
+    (context?.snapshot as Record<string, unknown> | undefined)?.inventory,
+    (context?.raw as Record<string, unknown> | undefined)?.inventory,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
+}
+
+function isKeptToolItem(item: Record<string, unknown>, keepText: string): boolean {
+  const name = String(item.name ?? "").toLowerCase();
+  if (keepText.includes("axe") && name.includes("axe")) {
+    return true;
+  }
+  if (keepText.includes("pickaxe") && name.includes("pickaxe")) {
+    return true;
+  }
+  return false;
+}
+
+async function buildDepositExceptPolicy(
+  goal: string,
+  client: Client,
+  target: Record<string, unknown>,
+  keepText: string,
+): Promise<LocalPolicyStage | undefined> {
+  const context = await callJsonTool(client, "get_agent_context", {
+    ...target,
+    objective: goal,
+    includeDiagnostics: false,
+    includeInventoryLimit: 28,
+    forceRefresh: true,
+  });
+  const inventory = inventorySlotsFromContext(context);
+  const depositItems = inventory
+    .filter((item) => !isKeptToolItem(item, keepText))
+    .map((item) => String(item.name ?? "").trim())
+    .filter(Boolean);
+  const uniqueNames = [...new Set(depositItems)];
+  if (uniqueNames.length === 0) {
+    return undefined;
+  }
+
+  return {
+    label: `Deposit current inventory except ${keepText}`,
+    policy: {
+      task: "deposit_inventory_except",
+      objective: goal,
+      executionMode: "execute",
+      tickMs: 600,
+      maxTicks: uniqueNames.length + 4,
+      steps: [
+        {
+          tool: "interact_with",
+          reason: "Open the nearest bank before depositing non-kept inventory items.",
+          arguments: {
+            entityType: "npc",
+            name: "Banker",
+            option: "Bank",
+            nearestToPlayer: true,
+          },
+        },
+        ...uniqueNames.map((itemName) => ({
+          tool: "deposit_inventory_item",
+          reason: `Deposit ${itemName}; kept tool items remain in inventory.`,
+          arguments: {
+            itemName,
+            quantity: "All",
+          },
+        })),
+      ],
+    },
+  };
+}
+
+async function buildLocalExecutionPlan(
+  goal: string,
+  client: Client,
+  target: Record<string, unknown>,
+  options: CliOptions,
+): Promise<LocalExecutionPlan | undefined> {
+  const text = normalizeGoalText(goal);
+  const policies: LocalPolicyStage[] = [];
+  const warnings: string[] = [];
+  const wantsTravel = /\b(go|travel|navigate|walk)\b/.test(text);
+  const woodcut = inferWoodcutSpec(goal);
+  const wantsBank = /\bbank\b/.test(text);
+  const wantsPreBank = /\b(before starting|first|start)\b[\s\S]{0,80}\b(bank|deposit|put everything|empty inventory)\b/.test(text)
+    || /\bput everything\b[\s\S]{0,80}\bbank\b/.test(text);
+  const keepText = text.includes("axe") ? "axe" : text.includes("pickaxe") ? "pickaxe" : "";
+
+  if (!wantsTravel && !woodcut && !wantsBank) {
+    return undefined;
+  }
+
+  const resourceNode = woodcut?.location;
+  const bankNode = inferBankForNode(resourceNode) ?? (wantsBank ? inferTravelDestination(`${goal} bank`) : undefined);
+  const travelNode = woodcut ? resourceNode : inferTravelDestination(goal);
+
+  if (wantsPreBank) {
+    if (bankNode) {
+      policies.push({
+        label: `Travel to ${bankNode.name} for inventory preparation`,
+        policy: {
+          task: "travel",
+          objective: goal,
+          executionMode: "execute",
+          tickMs: 600,
+          maxTicks: 300,
+          ...nodeDestinationFields(bankNode),
+        },
+      });
+    }
+    if (keepText) {
+      const depositExcept = await buildDepositExceptPolicy(goal, client, target, keepText);
+      if (depositExcept) {
+        policies.push(depositExcept);
+      } else {
+        warnings.push(`No non-${keepText} inventory items were visible to deposit before starting.`);
+      }
+    } else {
+      warnings.push("Inventory prep requested, but no kept item was recognized. Say 'keep axe' or 'keep pickaxe' for selective banking.");
+    }
+  }
+
+  if (travelNode) {
+    policies.push({
+      label: `Travel to ${travelNode.name}`,
+      policy: {
+        task: "travel",
+        objective: goal,
+        executionMode: "execute",
+        tickMs: 600,
+        maxTicks: 600,
+        ...nodeDestinationFields(travelNode),
+      },
+    });
+  } else if (wantsTravel) {
+    return {
+      status: "LOCAL_PLAN_BLOCKED",
+      reason: "local_fast_path",
+      policies: [],
+      warnings,
+      blocker: "I could not resolve the requested destination in world_graph.json.",
+    };
+  }
+
+  if (woodcut) {
+    const inventoryRunsMatch = text.match(/\b(\d{1,2})\s*(?:full\s*)?inventory\b/);
+    const wordInventoryRuns = /\btwo\s*(?:full\s*)?inventory\b/.test(text) ? 2 : undefined;
+    const inventoryRuns = inventoryRunsMatch ? Number(inventoryRunsMatch[1]) : wordInventoryRuns;
+    const shouldBankLogs = wantsBank || /\bput them\b[\s\S]{0,30}\bbank\b/.test(text);
+    const perInventoryQuantity = keepText === "axe" ? 27 : 28;
+    const quantity = inventoryRuns ? perInventoryQuantity : firstGoalNumber(text) ?? inferWoodcutQuantity(text);
+    const runs = inventoryRuns ?? 1;
+
+    for (let index = 0; index < runs; index += 1) {
+      if (index > 0 && resourceNode) {
+        policies.push({
+          label: `Return to ${resourceNode.name} for inventory ${index + 1}`,
+          policy: {
+            task: "travel",
+            objective: goal,
+            executionMode: "execute",
+            tickMs: 600,
+            maxTicks: 600,
+            ...nodeDestinationFields(resourceNode),
+          },
+        });
+      }
+
+      policies.push({
+        label: inventoryRuns ? `Cut inventory ${index + 1}/${runs} of ${woodcut.itemName}` : `Cut ${quantity} ${woodcut.itemName}`,
+        policy: {
+          task: "chop_logs",
+          objective: goal,
+          itemName: woodcut.itemName,
+          targetName: woodcut.targetName,
+          actionOption: "Chop down",
+          quantity,
+          quantityMode: "gain",
+          method: "woodcutting",
+          inventoryFullBehavior: "stop",
+          eatAtHpPercent: 35,
+          executionMode: "execute",
+          tickMs: 600,
+          maxTicks: 900,
+        },
+      });
+
+      if (shouldBankLogs) {
+        if (!bankNode) {
+          return {
+            status: "LOCAL_PLAN_BLOCKED",
+            reason: "local_fast_path",
+            policies,
+            warnings,
+            blocker: "Banking was requested, but no nearby bank could be inferred for this resource location.",
+          };
+        }
+        policies.push({
+          label: `Travel to ${bankNode.name} to bank ${woodcut.itemName}`,
+          policy: {
+            task: "travel",
+            objective: goal,
+            executionMode: "execute",
+            tickMs: 600,
+            maxTicks: 600,
+            ...nodeDestinationFields(bankNode),
+          },
+        });
+        policies.push({
+          label: `Deposit ${woodcut.itemName}`,
+          policy: {
+            task: "deposit_logs",
+            objective: goal,
+            itemName: woodcut.itemName,
+            bankItemName: woodcut.itemName,
+            bankQuantity: "All",
+            bankAction: "deposit",
+            executionMode: "execute",
+            tickMs: 600,
+            maxTicks: 20,
+          },
+        });
+      }
+    }
+  }
+
+  if (policies.length === 0) {
+    return undefined;
+  }
+
+  return {
+    status: "LOCAL_PLAN_READY",
+    reason: "local_fast_path",
+    policies,
+    warnings,
+  };
+}
+
 function parseMcpToolJson(result: unknown): Record<string, unknown> | undefined {
   const record = result as { content?: Array<{ type?: string; text?: string }> };
   const text = record?.content?.find((item) => item.type === "text")?.text;
@@ -562,6 +960,144 @@ async function callBrainTool(
   };
 }
 
+function textContent(result: unknown): string {
+  const record = result as { content?: Array<{ type?: string; text?: string }> };
+  const text = record?.content?.find((item) => item.type === "text")?.text;
+  if (typeof text !== "string") {
+    throw new Error(`Expected text content, got ${JSON.stringify(result).slice(0, 500)}`);
+  }
+  return text;
+}
+
+async function callJsonTool(client: Client, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const result = await client.callTool({ name, arguments: args });
+  const text = textContent(result);
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return {
+      status: "NON_JSON_TOOL_RESULT",
+      tool: name,
+      text: text.slice(0, 1000),
+    };
+  }
+}
+
+function loadedPolicyFromStatus(status: Record<string, unknown>): Record<string, unknown> | undefined {
+  const active = status.activePolicy ?? status.policy ?? status.active;
+  return active && typeof active === "object" ? active as Record<string, unknown> : undefined;
+}
+
+function policyStatusFromStatus(status: Record<string, unknown>): string {
+  const policy = loadedPolicyFromStatus(status);
+  return String(policy?.status ?? status.status ?? "unknown");
+}
+
+function formatPolicyProgress(status: Record<string, unknown>): string {
+  const policy = loadedPolicyFromStatus(status);
+  if (!policy) {
+    return `status=${String(status.status ?? "unknown")}`;
+  }
+  const parts = [
+    `status=${String(policy.status ?? status.status ?? "unknown")}`,
+    policy.task ? `task=${String(policy.task)}` : undefined,
+    policy.tickCount !== undefined ? `ticks=${String(policy.tickCount)}` : undefined,
+    policy.stepIndex !== undefined ? `step=${String(policy.stepIndex)}` : undefined,
+    policy.itemName ? `item=${String(policy.itemName)}` : undefined,
+    policy.quantity !== undefined ? `qty=${String(policy.quantity)}` : undefined,
+    policy.stopReason ? `reason=${String(policy.stopReason)}` : undefined,
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
+async function monitorSystem1Policy(
+  client: Client,
+  label: string,
+  maxSeconds = Number(process.env.OSRS_BRAIN_MONITOR_SECONDS ?? 1800),
+): Promise<Record<string, unknown>> {
+  const started = Date.now();
+  let lastLine = "";
+  while (Date.now() - started < maxSeconds * 1000) {
+    const status = await callJsonTool(client, "reflex_status", {});
+    const line = formatPolicyProgress(status);
+    if (line !== lastLine) {
+      console.log(`[System 1] ${label}: ${line}`);
+      lastLine = line;
+    }
+
+    const terminal = policyStatusFromStatus(status);
+    if (["completed", "blocked", "stopped", "paused"].includes(terminal)) {
+      return status;
+    }
+    await delay(Number(process.env.OSRS_BRAIN_MONITOR_INTERVAL_MS ?? 1500));
+  }
+
+  const timedOut = await callJsonTool(client, "reflex_stop", {
+    reason: `BRAIN_MONITOR_TIMEOUT:${label}`,
+  });
+  console.log(`[System 1] ${label}: monitor timeout; stopped active policy.`);
+  return timedOut;
+}
+
+async function runLocalExecutionPlan(
+  plan: LocalExecutionPlan,
+  connection: import("./mcp-client.js").BrainMcpConnection,
+  target: Record<string, unknown>,
+  config: BrainConfig,
+  options: CliOptions,
+): Promise<void> {
+  console.log(`[Brain] Local fast path selected: ${plan.reason}. Qwen/wiki skipped for this goal.`);
+  for (const warning of plan.warnings) {
+    console.log(`[Brain] Note: ${warning}`);
+  }
+
+  if (plan.status === "LOCAL_PLAN_BLOCKED") {
+    console.log(`[Brain] Blocked: ${plan.blocker ?? "local plan could not be compiled"}`);
+    return;
+  }
+
+  console.log(`[Brain] Compiled ${plan.policies.length} System 1 policy stage(s):`);
+  for (const [index, stage] of plan.policies.entries()) {
+    console.log(`  ${index + 1}. ${stage.label}`);
+  }
+
+  if (!options.execute) {
+    console.log("[Brain] Plan-only mode. No System 1 policy was started.");
+    return;
+  }
+
+  connection.enableSystem1Logs();
+  for (const [index, stage] of plan.policies.entries()) {
+    const args = armExecuteArgs("load_policy", {
+      policy: {
+        ...stage.policy,
+        executionMode: "execute",
+      },
+      start: true,
+      executionMode: "execute",
+    }, true);
+    console.log("");
+    console.log(`[Brain] Starting stage ${index + 1}/${plan.policies.length}: ${stage.label}`);
+    printBrainAction("load_policy", args);
+    const result = await callBrainTool(connection.client, "load_policy", args, target, config);
+    if (!isPolicyHandoffSuccess(result)) {
+      console.log(`[Brain] Stage failed to start: ${formatMcpToolFailure(result)}`);
+      return;
+    }
+
+    printSystem1Takeover(result.result ?? result);
+    const finalStatus = await monitorSystem1Policy(connection.client, stage.label);
+    const terminal = policyStatusFromStatus(finalStatus);
+    if (terminal !== "completed") {
+      console.log(`[Brain] Sequence stopped at stage ${index + 1}: ${formatPolicyProgress(finalStatus)}`);
+      return;
+    }
+  }
+
+  console.log("");
+  console.log("[Brain] Local fast-path sequence completed.");
+}
+
 function wrapPolicyForSafetyCheck(policy: unknown, executionMode: unknown): StrategistPolicy {
   return {
     kind: "osrs.strategist_policy.v1",
@@ -605,7 +1141,6 @@ async function repairPolicyJson(qwen: ReturnType<typeof createQwenClient>, confi
 }
 
 async function processGoal(goal: string, config: BrainConfig, options: CliOptions): Promise<void> {
-  const qwen = createQwenClient(config);
   const connection = await connectToSystem1(config);
 
   try {
@@ -623,6 +1158,14 @@ async function processGoal(goal: string, config: BrainConfig, options: CliOption
     if (!options.execute) {
       console.log("[Brain] Tip: remove --plan-only to execute in-game. Default mode executes via RuneLite menu actions.");
     }
+
+    const localPlan = await buildLocalExecutionPlan(goal, connection.client, target, options);
+    if (localPlan) {
+      await runLocalExecutionPlan(localPlan, connection, target, config, options);
+      return;
+    }
+
+    const qwen = createQwenClient(config);
     console.log("[Brain] Strategist thinking...");
 
     let response = await createQwenResponse(qwen, config, {
@@ -903,10 +1446,10 @@ function startRepl(config: BrainConfig, options: CliOptions): void {
 async function main(): Promise<void> {
   const config = getBrainConfig();
   const options = parseCliFlags();
+  const oneShotGoal = argValue("--goal");
 
   if (!config.qwenApiKey) {
-    console.error("[Brain] QWEN_API_KEY is required. Add it to Windows Environment Variables, then restart this terminal.");
-    process.exit(1);
+    console.log("[Brain] QWEN_API_KEY is not configured. Local fast-path commands still work; unknown goals will fail when they need Qwen.");
   }
 
   let resolvedTarget: Record<string, unknown> | undefined;
@@ -920,6 +1463,10 @@ async function main(): Promise<void> {
   }
 
   printBanner(config, options, resolvedTarget);
+  if (oneShotGoal) {
+    await processGoal(oneShotGoal, config, options);
+    return;
+  }
   startRepl(config, options);
 }
 
