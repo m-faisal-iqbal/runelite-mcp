@@ -1,6 +1,6 @@
 import axios from "axios";
 import { apiBaseFromPort } from "./client.js";
-export const EXPECTED_PLUGIN_API_VERSION = 5;
+export const EXPECTED_PLUGIN_API_VERSION = 8;
 export const EXPECTED_PLUGIN_ENDPOINTS = [
     "/api/action/menu",
     "/api/action/walk",
@@ -12,6 +12,7 @@ export const EXPECTED_PLUGIN_ENDPOINTS = [
     "/api/path",
     "/api/path/status",
     "/api/widgets",
+    "/api/canvas/screenshot",
     "/api/identity",
 ];
 export const EXPECTED_IDENTITY_FLAGS = [
@@ -21,6 +22,7 @@ export const EXPECTED_IDENTITY_FLAGS = [
     "supportsDirectMenuActions",
     "supportsLocalPathfinding",
     "supportsWidgetInspector",
+    "supportsCanvasScreenshot",
 ];
 function errorText(action, e) {
     const status = e?.response?.status ? ` HTTP ${e.response.status}` : "";
@@ -45,6 +47,7 @@ export async function diagnoseClientRuntime(client, apiTimeoutMs) {
     };
     if ((client.apiVersion ?? 0) < EXPECTED_PLUGIN_API_VERSION) {
         report.staleRuntime = true;
+        report.status = "needs_reload";
         report.warnings.push(`Plugin API version ${client.apiVersion ?? "unknown"} is older than expected ${EXPECTED_PLUGIN_API_VERSION}. Rebuild/install is done, but RuneLite must reload the plugin to expose the newest endpoints.`);
     }
     for (const flag of EXPECTED_IDENTITY_FLAGS) {

@@ -59,6 +59,32 @@ assert.equal(ready.navigation.pathfinding.provider, "runelite_collision_map");
 assert.equal(ready.navigation.pathfinding.supportsGlobalPathfinding, false);
 assert(ready.readiness.recommendedNext.some((note) => note.includes("loaded-scene pathfinding only")));
 
+const staleLightweight = buildAgentContext(
+  "http://localhost:8080/api",
+  { instanceId: "test", port: 8080, apiVersion: 6, windowActive: true, canvasShowing: true, world: 430 },
+  baseSnapshot,
+  {
+    status: "needs_reload",
+    staleRuntime: true,
+    apiVersion: 6,
+    expectedApiVersion: 8,
+    lightweight: true,
+  },
+  {
+    objective: "lightweight stale runtime check",
+    pathfindingStatus: {
+      provider: "runelite_collision_map",
+      supportsLocalPathfinding: true,
+      supportsGlobalPathfinding: false,
+    },
+  },
+);
+
+assert.equal(staleLightweight.status, "ATTENTION_NEEDED");
+assert(staleLightweight.readiness.risks.includes("runtime_not_current"));
+assert.equal(staleLightweight.readiness.canUseInClientActions, false);
+assert(staleLightweight.readiness.recommendedNext.some((note) => note.includes("diagnose_runtime")));
+
 const blocked = buildAgentContext(
   "http://localhost:8080/api",
   { instanceId: "test", port: 8080, apiVersion: 2, windowActive: false, canvasShowing: true },
@@ -89,6 +115,7 @@ assert.equal(blocked.interface.dialogueText, "Hello");
 console.log(JSON.stringify({
   ok: true,
   readyStatus: ready.status,
+  staleLightweightStatus: staleLightweight.status,
   blockedStatus: blocked.status,
   readyRiskCount: ready.readiness.risks.length,
   blockedRiskCount: blocked.readiness.risks.length,

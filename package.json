@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke:twin-brain-core": "node scripts/smoke-twin-brain-core.mjs"
+  }
+}

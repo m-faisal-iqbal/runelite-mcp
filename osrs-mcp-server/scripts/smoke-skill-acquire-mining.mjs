@@ -138,7 +138,7 @@ const client = new Client({ name: "osrs-skill-acquire-mining-smoke", version: "1
 
 try {
   const identity = await fetchJson(`${baseApi}/identity`, 2500, "identity");
-  if (identity.apiVersion !== 4 || identity.supportsDirectMenuActions !== true) {
+  if (Number(identity.apiVersion) < 4 || identity.supportsDirectMenuActions !== true) {
     throw new Error(`RuneLite plugin is not current enough for skill_acquire mining smoke: ${JSON.stringify({
       apiVersion: identity.apiVersion,
       supportsDirectMenuActions: identity.supportsDirectMenuActions,

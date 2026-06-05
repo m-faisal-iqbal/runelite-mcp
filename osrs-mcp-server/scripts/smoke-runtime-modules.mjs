@@ -27,6 +27,7 @@ const endpoints = [
   "/api/path",
   "/api/path/status",
   "/api/widgets",
+  "/api/canvas/screenshot",
   "/api/identity",
 ];
 
@@ -58,6 +59,7 @@ try {
     supportsDirectMenuActions: true,
     supportsLocalPathfinding: true,
     supportsWidgetInspector: true,
+    supportsCanvasScreenshot: true,
   }, 1000);
 
   assert.equal(report.status, "ok");

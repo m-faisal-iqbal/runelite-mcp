@@ -28,6 +28,12 @@ const requiredFlags = [
 const currentRequiredFlags = [
   ...requiredFlags,
   "supportsDirectMenuActions",
+  "supportsCanvasScreenshot",
+];
+
+const currentRequiredEndpoints = [
+  ...requiredEndpoints,
+  "/api/canvas/screenshot",
 ];
 
 const readOnlyEndpoints = [
@@ -106,7 +112,7 @@ const port = Number(args.get("port") ?? process.env.OSRS_VERIFY_PORT ?? 8080);
 const baseUrl = String(args.get("api") ?? `http://127.0.0.1:${port}/api`).replace(/\/$/, "");
 const timeout = Number(args.get("timeout-ms") ?? 5000);
 const skipActionDryRuns = args.get("skip-action-dry-runs") === "true";
-const expectedApiVersion = Number(args.get("expected-api-version") ?? 5);
+const expectedApiVersion = Number(args.get("expected-api-version") ?? 8);
 const requireCurrent = args.get("require-current") === "true";
 const api = axios.create({ baseURL: baseUrl, timeout });
 
@@ -121,10 +127,12 @@ const missingFlags = requiredFlags.filter((flag) => identity[flag] !== true);
 assert(missingFlags.length === 0, `Missing/false identity flags: ${missingFlags.join(", ")}`);
 assert(Number(identity.apiVersion) >= 3, `Expected apiVersion >= 3, got ${identity.apiVersion}`);
 const missingCurrentFlags = currentRequiredFlags.filter((flag) => identity[flag] !== true);
-const reloadRequired = Number(identity.apiVersion) < expectedApiVersion || missingCurrentFlags.length > 0;
+const missingCurrentEndpoints = currentRequiredEndpoints.filter((endpoint) => !endpointPaths.has(endpoint));
+const reloadRequired = Number(identity.apiVersion) < expectedApiVersion || missingCurrentFlags.length > 0 || missingCurrentEndpoints.length > 0;
 if (requireCurrent) {
   assert(Number(identity.apiVersion) >= expectedApiVersion, `Expected apiVersion >= ${expectedApiVersion}, got ${identity.apiVersion}`);
   assert(missingCurrentFlags.length === 0, `Missing/false current identity flags: ${missingCurrentFlags.join(", ")}`);
+  assert(missingCurrentEndpoints.length === 0, `Missing current endpoints: ${missingCurrentEndpoints.join(", ")}`);
 }
 
 const reads = {};
@@ -144,6 +152,33 @@ for (const endpoint of optionalReadOnlyEndpoints) {
   reads[endpoint] = {
     status: response.status,
     topLevelKeys: response.data && typeof response.data === "object" ? Object.keys(response.data).slice(0, 12) : [],
+  };
+}
+
+let canvasScreenshot;
+if (endpointPaths.has("/api/canvas/screenshot")) {
+  const response = await api.get("/canvas/screenshot?includeImage=false&width=120&height=90");
+  assert(response.data?.status === "CANVAS_SCREENSHOT_READY", `Unexpected canvas screenshot status: ${JSON.stringify(response.data)}`);
+  assert(response.data?.mimeType === "image/png", `Unexpected canvas screenshot mime type: ${response.data?.mimeType}`);
+  assert(Number(response.data?.width) > 0 && Number(response.data?.height) > 0, `Invalid canvas screenshot size: ${JSON.stringify(response.data)}`);
+  if (requireCurrent) {
+    assert(response.data?.imageIncluded === false, `Metadata-only canvas screenshot should report imageIncluded=false: ${JSON.stringify(response.data)}`);
+    assert(typeof response.data?.base64 !== "string", "Metadata-only canvas screenshot unexpectedly returned base64 image data.");
+    assert(response.data?.byteLength === undefined, `Metadata-only canvas screenshot should not encode PNG bytes: ${JSON.stringify(response.data)}`);
+  }
+  canvasScreenshot = {
+    status: response.data.status,
+    source: response.data.source,
+    mimeType: response.data.mimeType,
+    width: response.data.width,
+    height: response.data.height,
+    byteLength: response.data.byteLength,
+    imageIncluded: typeof response.data.base64 === "string",
+  };
+} else {
+  canvasScreenshot = {
+    status: "MISSING_ENDPOINT",
+    requiredWhenCurrent: true,
   };
 }
 
@@ -201,11 +236,14 @@ console.log(JSON.stringify({
   expectedApiVersion,
   reloadRequired,
   missingCurrentFlags,
+  missingCurrentEndpoints,
   directMenuActionsReady: identity.supportsDirectMenuActions === true,
+  canvasScreenshotReady: identity.supportsCanvasScreenshot === true,
   playerName: identity.playerName,
   status: state.status,
   canvasShowing: identity.canvasShowing,
   windowActive: identity.windowActive,
   actionDryRuns,
+  canvasScreenshot,
   reads,
 }, null, 2));

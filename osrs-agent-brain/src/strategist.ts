@@ -61,7 +61,7 @@ export type IssuedPolicyResult = {
   cleanup?: unknown;
 };
 
-const rawToolNeedles = ["click", "invoke_", "move_mouse", "keyboard", "perform_until", "execute_agent_step"];
+const rawToolNeedles = ["click", "invoke_", "move_mouse", "keyboard", "perform_until", "execute_agent_step", "run_agent_cycle", "agent_run_goal"];
 
 export async function gatherStrategistContext(options: StrategistDraftOptions, config: BrainConfig = getBrainConfig()): Promise<StrategistContext> {
   const connection = await connectToSystem1(config);
@@ -201,7 +201,7 @@ export async function draftStrategistPolicy(options: StrategistDraftOptions, con
       stored: true,
     },
     next: config.qwenApiKey
-      ? "Pass --use-qwen to request a Qwen-authored strategist policy."
+      ? "Pass --responses-brain to request a Qwen-authored strategist policy through the hardened Responses bridge."
       : "Set QWEN_API_KEY to request a Qwen-authored strategist policy. This local scaffold is for smoke testing the handoff shape.",
   };
 }
@@ -421,11 +421,13 @@ function inferSystem1Policy(goal: string) {
         targetType: "npc",
         actionOption: "Attack",
         eatAtHpPercent: 35,
+        stopOnMinimapPlayerThreat: true,
         executionMode: "dry_run",
       },
       stopConditions: [
         "target unavailable",
         "hitpoints safety threshold reached without food",
+        "another player/red-dot minimap threat is detected",
         "combat engagement validated or blocked",
       ],
       successCriteria: ["System 1 validates and dispatches safe combat interactions only"],

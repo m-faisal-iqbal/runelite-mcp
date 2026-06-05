@@ -23,6 +23,10 @@
     "smoke:inventory-drop": "node scripts/smoke-inventory-drop.mjs",
     "smoke:reflex": "node scripts/smoke-reflex.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
+    "smoke:live-navigation-dry-run": "node scripts/smoke-live-navigation-dry-run.mjs",
+    "smoke:snapshot-stats": "node scripts/smoke-snapshot-stats.mjs",
+    "smoke:live-reflex-dry-run": "node scripts/smoke-live-reflex-dry-run.mjs",
+    "approve-os-control": "node scripts/approve-os-control.mjs",
     "verify:coords": "node scripts/verify-coordinates.mjs"
   },
   "dependencies": {
@@ -31,6 +35,7 @@
     "@types/sql.js": "^1.4.11",
     "axios": "^1.6.7",
     "graphology": "^0.26.0",
+    "node-notifier": "^10.0.1",
     "sql.js": "^1.14.1"
   },
   "devDependencies": {

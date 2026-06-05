@@ -262,6 +262,31 @@ try {
     throw new Error(`Unexpected load_policy result: ${JSON.stringify(loadedPolicy)}`);
   }
 
+  const unsafePolicyResult = await withTimeout(
+    client.callTool({
+      name: "load_policy",
+      arguments: {
+        policy: {
+          objective: "Unsafe old-loop payload should be rejected",
+          steps: [
+            {
+              tool: "execute_agent_step",
+              reason: "System 2 must not route through deprecated LLM execution tools.",
+            },
+          ],
+        },
+        executionMode: "dry_run",
+        start: false,
+      },
+    }),
+    requestTimeoutMs,
+    "load_policy unsafe payload",
+  );
+  const unsafePolicy = parseJsonToolResult(unsafePolicyResult, "load_policy unsafe payload");
+  if (unsafePolicy.status !== "POLICY_REJECTED" || !Array.isArray(unsafePolicy.safetyErrors) || unsafePolicy.safetyErrors.length === 0) {
+    throw new Error(`Unsafe load_policy payload was not rejected: ${JSON.stringify(unsafePolicy)}`);
+  }
+
   const reflexStatusResult = await withTimeout(
     client.callTool({ name: "reflex_status", arguments: {} }),
     requestTimeoutMs,
@@ -528,6 +553,8 @@ try {
       arguments: {
         target: "Chicken",
         killCount: 1,
+        loot: true,
+        lootName: "Bones",
         executionMode: "dry_run",
         sessionId: startedGoal.session.id,
         ...nonLiveTarget,
@@ -542,6 +569,96 @@ try {
   }
   if (skillCombat.willExecute !== false || skillCombat.executed !== false) {
     throw new Error(`skill_combat dry_run must not execute: ${JSON.stringify(skillCombat)}`);
+  }
+  if (skillCombat.status === "DRY_RUN_READY" && skillCombat.lootIntent?.itemName !== "Bones") {
+    throw new Error(`skill_combat loot intent missing in dry_run: ${JSON.stringify(skillCombat)}`);
+  }
+
+  const skillTravelResult = await withTimeout(
+    client.callTool({
+      name: "skill_travel",
+      arguments: {
+        destinationName: "Lumbridge Bank",
+        from: "Lumbridge Castle",
+        executionMode: "dry_run",
+        sessionId: startedGoal.session.id,
+        ...nonLiveTarget,
+      },
+    }),
+    requestTimeoutMs,
+    "skill_travel named dry_run",
+  );
+  const skillTravel = parseJsonToolResult(skillTravelResult, "skill_travel named dry_run");
+  if (skillTravel.status !== "DRY_RUN_READY" || skillTravel.willExecute !== false || skillTravel.executed !== false || skillTravel.selectedStep?.tool !== "navigate_to") {
+    throw new Error(`Unexpected skill_travel named dry_run result: ${JSON.stringify(skillTravel)}`);
+  }
+  if (skillTravel.navigation?.toResolved?.id !== "lumbridge_castle_bank" || skillTravel.navigation?.finalTile?.plane !== 2) {
+    throw new Error(`skill_travel did not route to Lumbridge Castle Bank: ${JSON.stringify(skillTravel.navigation)}`);
+  }
+
+  const skillTravelUnarmedResult = await withTimeout(
+    client.callTool({
+      name: "skill_travel",
+      arguments: {
+        destinationName: "Lumbridge Bank",
+        from: "Lumbridge Castle",
+        executionMode: "execute",
+        sessionId: startedGoal.session.id,
+        ...nonLiveTarget,
+      },
+    }),
+    requestTimeoutMs,
+    "skill_travel named unarmed execute",
+  );
+  const skillTravelUnarmed = parseJsonToolResult(skillTravelUnarmedResult, "skill_travel named unarmed execute");
+  if (skillTravelUnarmed.status !== "EXECUTION_BLOCKED" || skillTravelUnarmed.willExecute !== false || skillTravelUnarmed.executed !== false) {
+    throw new Error(`skill_travel unarmed execute must refuse movement: ${JSON.stringify(skillTravelUnarmed)}`);
+  }
+  if (skillTravelUnarmed.stopReason !== "Navigation execution was requested but not armed.") {
+    throw new Error(`Unexpected skill_travel unarmed stop reason: ${JSON.stringify(skillTravelUnarmed)}`);
+  }
+
+  const inventoryDepositResult = await withTimeout(
+    client.callTool({
+      name: "skill_manage_inventory",
+      arguments: {
+        action: "deposit",
+        itemName: "Logs",
+        executionMode: "dry_run",
+        ...nonLiveTarget,
+      },
+    }),
+    requestTimeoutMs,
+    "skill_manage_inventory deposit dry_run",
+  );
+  const inventoryDeposit = parseJsonToolResult(inventoryDepositResult, "skill_manage_inventory deposit dry_run");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "EXECUTION_BLOCKED", "DRY_RUN_READY"].includes(inventoryDeposit.status)) {
+    throw new Error(`Unexpected skill_manage_inventory deposit result: ${JSON.stringify(inventoryDeposit)}`);
+  }
+  if (inventoryDeposit.willExecute !== false || inventoryDeposit.executed !== false) {
+    throw new Error(`skill_manage_inventory deposit dry_run must not execute: ${JSON.stringify(inventoryDeposit)}`);
+  }
+
+  const inventoryWithdrawResult = await withTimeout(
+    client.callTool({
+      name: "skill_manage_inventory",
+      arguments: {
+        action: "withdraw",
+        itemName: "Coins",
+        bankQuantity: 1,
+        executionMode: "dry_run",
+        ...nonLiveTarget,
+      },
+    }),
+    requestTimeoutMs,
+    "skill_manage_inventory withdraw dry_run",
+  );
+  const inventoryWithdraw = parseJsonToolResult(inventoryWithdrawResult, "skill_manage_inventory withdraw dry_run");
+  if (!["NO_CLIENT", "NEEDS_CLIENT_SELECTION", "EXECUTION_BLOCKED", "DRY_RUN_READY"].includes(inventoryWithdraw.status)) {
+    throw new Error(`Unexpected skill_manage_inventory withdraw result: ${JSON.stringify(inventoryWithdraw)}`);
+  }
+  if (inventoryWithdraw.willExecute !== false || inventoryWithdraw.executed !== false) {
+    throw new Error(`skill_manage_inventory withdraw dry_run must not execute: ${JSON.stringify(inventoryWithdraw)}`);
   }
 
   const stopGoalResult = await withTimeout(
@@ -659,7 +776,7 @@ try {
     if (["SCREENSHOT_CAPTURE_FAILED", "SCREENSHOT_FAILED"].includes(screenshot.status)) {
       screenshotCaptureStatus = "failed";
       screenshotCaptureError = screenshot.error;
-    } else if (screenshot.imageIncluded !== false || screenshot.mimeType !== "image/png" || !screenshot.filePath) {
+    } else if (screenshot.imageIncluded !== false || screenshot.mimeType !== "image/png") {
       throw new Error(`Unexpected get_screenshot metadata: ${screenshotText}`);
     } else {
       screenshotCaptureStatus = "ok";

@@ -41,6 +41,7 @@ import java.io.OutputStream;
 import java.awt.Component;
 import java.awt.Dialog;
 import java.awt.Frame;
+import java.awt.Graphics2D;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -52,12 +53,15 @@ import java.awt.Shape;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -72,13 +76,20 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
+import javax.imageio.ImageIO;
 import javax.swing.SwingUtilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class ApiServer {
     private static final long CLIENT_THREAD_TIMEOUT_SECONDS = 2;
-    private static final long SNAPSHOT_MIN_INTERVAL_MS = 200;
+    private static final long SNAPSHOT_MIN_INTERVAL_MS = 5000;
+    private static final long SNAPSHOT_MAX_INTERVAL_MS = 15000;
+    private static final long SNAPSHOT_BUILD_BUDGET_MS = 120;
+    private static final long SNAPSHOT_AUTO_DISABLE_THRESHOLD_MS = 500;
+    private static final int SNAPSHOT_AUTO_DISABLE_CONSECUTIVE_SLOW_BUILDS = 3;
+    private static final long SNAPSHOT_AUTO_DISABLE_COOLDOWN_MS = 60000;
     private static final long STREAM_INTERVAL_MS = 600;
     private static final long STREAM_MAX_DURATION_MS = 300000;
     private static final int FIRST_API_PORT = 8080;
@@ -105,11 +116,21 @@ public class ApiServer {
     private final String instanceId = UUID.randomUUID().toString();
     private final Gson gson = new Gson();
     private final AtomicReference<GameStateSnapshot> latestSnapshot = new AtomicReference<>();
+    private final AtomicLong snapshotCacheHits = new AtomicLong();
+    private final AtomicLong snapshotCacheMisses = new AtomicLong();
+    private final AtomicLong clientThreadTimeouts = new AtomicLong();
     private final List<String> recentChatMessages = new ArrayList<>();
     private final List<String> recentEvents = new ArrayList<>();
     private volatile long gameTick;
     private volatile long clientTick;
     private volatile long lastSnapshotAt;
+    private volatile long lastSnapshotBuildDurationMs;
+    private volatile long currentSnapshotIntervalMs = SNAPSHOT_MIN_INTERVAL_MS;
+    private volatile boolean autoSnapshotEnabled = true;
+    private volatile long autoSnapshotDisabledUntil;
+    private volatile String autoSnapshotDisabledReason;
+    private volatile String lastAutomaticSnapshotSection = "";
+    private volatile int consecutiveSlowSnapshotBuilds;
 
     public ApiServer(Client client, ClientThread clientThread, ItemManager itemManager) {
         this.client = client;
@@ -172,7 +193,10 @@ public class ApiServer {
         server.createContext("/api/combat", new CombatHandler());
         server.createContext("/api/shop", new ShopHandler());
         server.createContext("/api/camera", new CameraHandler());
+        server.createContext("/api/canvas/screenshot", new CanvasScreenshotHandler());
         server.createContext("/api/debug/coordinates", new CoordinateDebugHandler());
+        server.createContext("/api/debug/snapshot-stats", new SnapshotStatsHandler());
+        server.createContext("/api/debug/snapshot-control", new SnapshotControlHandler());
         server.createContext("/api/snapshot", new SnapshotHandler());
         server.createContext("/api/stream", new StreamHandler());
         server.createContext("/api/context_menu", new ContextMenuHandler());
@@ -247,6 +271,7 @@ public class ApiServer {
             sendResponse(exchange, 200, future.get(CLIENT_THREAD_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         } catch (TimeoutException e) {
             future.cancel(false);
+            clientThreadTimeouts.incrementAndGet();
             log.warn("Timed out waiting for RuneLite client thread response");
             sendErrorResponse(exchange, "CLIENT_THREAD_TIMEOUT", null);
         } catch (InterruptedException e) {
@@ -274,21 +299,56 @@ public class ApiServer {
         details.addProperty("gameTick", gameTick);
         details.addProperty("clientTick", clientTick);
         addPluginEvent("GameTick", details);
+        maybeUpdateSnapshot();
     }
 
     public void updateSnapshotFromClientTick() {
         clientTick++;
+    }
+
+    private void maybeUpdateSnapshot() {
         long now = System.currentTimeMillis();
-        if (now - lastSnapshotAt < SNAPSHOT_MIN_INTERVAL_MS) {
+        if (!autoSnapshotEnabled) {
+            if (autoSnapshotDisabledUntil > 0 && now >= autoSnapshotDisabledUntil) {
+                autoSnapshotEnabled = true;
+                autoSnapshotDisabledUntil = 0;
+                autoSnapshotDisabledReason = null;
+            } else {
+                return;
+            }
+        }
+        if (now - lastSnapshotAt < currentSnapshotIntervalMs) {
             return;
         }
         lastSnapshotAt = now;
 
         try {
-            latestSnapshot.set(buildLiveSnapshot(now));
+            long startedAt = System.currentTimeMillis();
+            latestSnapshot.set(buildAutomaticSnapshot(now));
+            lastSnapshotBuildDurationMs = System.currentTimeMillis() - startedAt;
+            currentSnapshotIntervalMs = adaptiveSnapshotInterval(lastSnapshotBuildDurationMs);
+            if (lastSnapshotBuildDurationMs >= SNAPSHOT_AUTO_DISABLE_THRESHOLD_MS) {
+                consecutiveSlowSnapshotBuilds++;
+                if (consecutiveSlowSnapshotBuilds >= SNAPSHOT_AUTO_DISABLE_CONSECUTIVE_SLOW_BUILDS) {
+                    autoSnapshotEnabled = false;
+                    autoSnapshotDisabledUntil = System.currentTimeMillis() + SNAPSHOT_AUTO_DISABLE_COOLDOWN_MS;
+                    autoSnapshotDisabledReason = "Last " + consecutiveSlowSnapshotBuilds + " lightweight snapshot builds were slow; latest took " + lastSnapshotBuildDurationMs + "ms";
+                    log.warn("Disabling automatic lightweight snapshots for {}ms: {}", SNAPSHOT_AUTO_DISABLE_COOLDOWN_MS, autoSnapshotDisabledReason);
+                }
+            } else {
+                consecutiveSlowSnapshotBuilds = 0;
+            }
         } catch (Throwable e) {
             log.warn("Failed to update OSRS MCP live snapshot", e);
         }
+    }
+
+    private long adaptiveSnapshotInterval(long buildDurationMs) {
+        if (buildDurationMs <= SNAPSHOT_BUILD_BUDGET_MS) {
+            return SNAPSHOT_MIN_INTERVAL_MS;
+        }
+        long scaled = Math.max(SNAPSHOT_MIN_INTERVAL_MS, buildDurationMs * 4);
+        return Math.min(SNAPSHOT_MAX_INTERVAL_MS, scaled);
     }
 
     private GameStateSnapshot buildLiveSnapshot(long capturedAt) {
@@ -325,6 +385,116 @@ public class ApiServer {
         snapshot.add("interfaceSummary", gson.fromJson(interfaceSummary, JsonElement.class));
 
         return new GameStateSnapshot(capturedAt, state, npcs, dialogue, objects, groundItems, players, inventory, bank, equipment, skills, prayers, combat, chat, interfaceSummary, gson.toJson(snapshot));
+    }
+
+    private GameStateSnapshot buildAutomaticSnapshot(long capturedAt) {
+        String state = buildStateJson(capturedAt);
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            return composeSnapshot(
+                capturedAt,
+                state,
+                emptyArrayJson(),
+                emptyDialogueJson(capturedAt),
+                emptyArrayJson(),
+                emptyArrayJson(),
+                emptyArrayJson(),
+                emptyArrayJson(),
+                emptyArrayJson(),
+                emptyArrayJson(),
+                emptySkillsJson(capturedAt),
+                emptyObjectJson(capturedAt),
+                emptyObjectJson(capturedAt),
+                buildChatJson(capturedAt, 25),
+                emptyObjectJson(capturedAt)
+            );
+        }
+
+        GameStateSnapshot previous = latestSnapshot.get();
+        String npcs = previous != null ? previous.npcs : emptyArrayJson();
+        String objects = previous != null ? previous.objects : emptyArrayJson();
+        String groundItems = previous != null ? previous.groundItems : emptyArrayJson();
+        String players = previous != null ? previous.players : emptyArrayJson();
+        String bank = previous != null ? previous.bank : emptyArrayJson();
+        String interfaceSummary = previous != null ? previous.interfaceSummary : emptyObjectJson(capturedAt);
+
+        lastAutomaticSnapshotSection = "lightweight";
+
+        return composeSnapshot(
+            capturedAt,
+            state,
+            npcs,
+            buildDialogueJson(capturedAt),
+            objects,
+            groundItems,
+            players,
+            buildInventoryJson(capturedAt),
+            bank,
+            buildEquipmentJson(capturedAt),
+            buildSkillsJson(capturedAt),
+            buildPrayersJson(capturedAt),
+            buildCombatJson(capturedAt),
+            buildChatJson(capturedAt, 25),
+            interfaceSummary
+        );
+    }
+
+    private GameStateSnapshot composeSnapshot(
+        long capturedAt,
+        String state,
+        String npcs,
+        String dialogue,
+        String objects,
+        String groundItems,
+        String players,
+        String inventory,
+        String bank,
+        String equipment,
+        String skills,
+        String prayers,
+        String combat,
+        String chat,
+        String interfaceSummary
+    ) {
+        JsonObject snapshot = new JsonObject();
+        addCaptureMeta(snapshot, capturedAt);
+        snapshot.add("state", gson.fromJson(state, JsonElement.class));
+        snapshot.add("npcs", gson.fromJson(npcs, JsonElement.class));
+        snapshot.add("dialogue", gson.fromJson(dialogue, JsonElement.class));
+        snapshot.add("objects", gson.fromJson(objects, JsonElement.class));
+        snapshot.add("groundItems", gson.fromJson(groundItems, JsonElement.class));
+        snapshot.add("players", gson.fromJson(players, JsonElement.class));
+        snapshot.add("inventory", gson.fromJson(inventory, JsonElement.class));
+        snapshot.add("bank", gson.fromJson(bank, JsonElement.class));
+        snapshot.add("equipment", gson.fromJson(equipment, JsonElement.class));
+        snapshot.add("skills", gson.fromJson(skills, JsonElement.class));
+        snapshot.add("prayers", gson.fromJson(prayers, JsonElement.class));
+        snapshot.add("combat", gson.fromJson(combat, JsonElement.class));
+        snapshot.add("chat", gson.fromJson(chat, JsonElement.class));
+        snapshot.add("interfaceSummary", gson.fromJson(interfaceSummary, JsonElement.class));
+        return new GameStateSnapshot(capturedAt, state, npcs, dialogue, objects, groundItems, players, inventory, bank, equipment, skills, prayers, combat, chat, interfaceSummary, gson.toJson(snapshot));
+    }
+
+    private String emptyArrayJson() {
+        return "[]";
+    }
+
+    private String emptyObjectJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        return gson.toJson(response);
+    }
+
+    private String emptyDialogueJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        response.addProperty("type", "NONE");
+        return gson.toJson(response);
+    }
+
+    private String emptySkillsJson(long capturedAt) {
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+        return gson.toJson(response);
     }
 
     private void addCaptureMeta(JsonObject response, long capturedAt) {
@@ -405,11 +575,61 @@ public class ApiServer {
     private boolean sendCachedResponse(HttpExchange exchange, String key) throws IOException {
         String cached = cachedStateOrNull(key);
         if (cached == null) {
+            if ("snapshot".equals(key)) {
+                snapshotCacheMisses.incrementAndGet();
+            }
             return false;
         }
 
+        if ("snapshot".equals(key)) {
+            snapshotCacheHits.incrementAndGet();
+        }
         sendResponse(exchange, 200, cached);
         return true;
+    }
+
+    private String buildSnapshotStatsJson() {
+        JsonObject response = new JsonObject();
+        GameStateSnapshot snapshot = latestSnapshot.get();
+        long now = System.currentTimeMillis();
+        response.addProperty("cache_hits", snapshotCacheHits.get());
+        response.addProperty("cache_misses", snapshotCacheMisses.get());
+        response.addProperty("last_build_duration_ms", lastSnapshotBuildDurationMs);
+        response.addProperty("last_cache_age_ms", snapshot != null ? now - snapshot.capturedAt : -1);
+        response.addProperty("client_thread_timeouts", clientThreadTimeouts.get());
+        response.addProperty("snapshot_min_interval_ms", SNAPSHOT_MIN_INTERVAL_MS);
+        response.addProperty("snapshot_current_interval_ms", currentSnapshotIntervalMs);
+        response.addProperty("snapshot_max_interval_ms", SNAPSHOT_MAX_INTERVAL_MS);
+        response.addProperty("snapshot_build_budget_ms", SNAPSHOT_BUILD_BUDGET_MS);
+        response.addProperty("snapshot_auto_disable_threshold_ms", SNAPSHOT_AUTO_DISABLE_THRESHOLD_MS);
+        response.addProperty("snapshot_auto_disable_consecutive_slow_builds", SNAPSHOT_AUTO_DISABLE_CONSECUTIVE_SLOW_BUILDS);
+        response.addProperty("consecutive_slow_snapshot_builds", consecutiveSlowSnapshotBuilds);
+        response.addProperty("auto_snapshot_enabled", autoSnapshotEnabled);
+        response.addProperty("auto_snapshot_disabled_until", autoSnapshotDisabledUntil);
+        response.addProperty("auto_snapshot_disabled_reason", autoSnapshotDisabledReason != null ? autoSnapshotDisabledReason : "");
+        response.addProperty("last_auto_snapshot_section", lastAutomaticSnapshotSection);
+        response.addProperty("last_snapshot_at", snapshot != null ? snapshot.capturedAt : 0);
+        return gson.toJson(response);
+    }
+
+    private String buildSnapshotControlJson(JsonObject request) {
+        String mode = request != null && request.has("mode") ? request.get("mode").getAsString() : "status";
+        if ("pause".equalsIgnoreCase(mode) || "disable".equalsIgnoreCase(mode)) {
+            long durationMs = request != null && request.has("durationMs") ? request.get("durationMs").getAsLong() : SNAPSHOT_AUTO_DISABLE_COOLDOWN_MS;
+            autoSnapshotEnabled = false;
+            autoSnapshotDisabledUntil = System.currentTimeMillis() + Math.max(1000, durationMs);
+            autoSnapshotDisabledReason = request != null && request.has("reason")
+                ? request.get("reason").getAsString()
+                : "Paused through /api/debug/snapshot-control";
+        } else if ("resume".equalsIgnoreCase(mode) || "enable".equalsIgnoreCase(mode)) {
+            autoSnapshotEnabled = true;
+            autoSnapshotDisabledUntil = 0;
+            autoSnapshotDisabledReason = null;
+            consecutiveSlowSnapshotBuilds = 0;
+        } else if ("interval".equalsIgnoreCase(mode) && request != null && request.has("intervalMs")) {
+            currentSnapshotIntervalMs = Math.max(SNAPSHOT_MIN_INTERVAL_MS, Math.min(SNAPSHOT_MAX_INTERVAL_MS, request.get("intervalMs").getAsLong()));
+        }
+        return buildSnapshotStatsJson();
     }
 
     private JsonObject endpoint(String path, String description) {
@@ -452,6 +672,7 @@ public class ApiServer {
         endpoints.add(endpoint("/api/combat", "Combat style widgets, auto-retaliate widget, tab coordinates, and current player combat state."));
         endpoints.add(endpoint("/api/shop", "Visible shop/trade action widgets and shop inventory-side container data when a shop interface is open."));
         endpoints.add(endpoint("/api/camera", "Camera yaw, pitch, position, map angle, minimap zoom, and player orientation context."));
+        endpoints.add(endpoint("/api/canvas/screenshot?includeImage=false", "Plugin-native RuneLite canvas screenshot metadata or base64 PNG. Avoids OS screen-capture APIs."));
         endpoints.add(endpoint("/api/debug/coordinates", "Canvas origin, canvas size, DPI transform, mouse position, and player coordinate debug data."));
         endpoints.add(endpoint("/api/snapshot", "Latest cached tick snapshot for state, NPCs, dialogue, objects, and ground items."));
         endpoints.add(endpoint("/api/stream", "Server-Sent Events stream of latest cached snapshots. Keeps realtime state out of prompts unless a tool asks for it."));
@@ -2518,6 +2739,10 @@ public class ApiServer {
         }
     }
 
+    private int clampInt(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private List<Integer> getCsvIntParam(Map<String, String> params, String key) {
         List<Integer> values = new ArrayList<>();
         String rawValue = params.get(key);
@@ -2821,7 +3046,7 @@ public class ApiServer {
     private String buildIdentityJson() {
         JsonObject response = new JsonObject();
         response.addProperty("instanceId", instanceId);
-        response.addProperty("apiVersion", 5);
+        response.addProperty("apiVersion", 8);
         response.addProperty("supportsConcurrentStreams", true);
         response.addProperty("supportsEventBuffer", true);
         response.addProperty("supportsInClientActions", true);
@@ -2830,6 +3055,7 @@ public class ApiServer {
         response.addProperty("supportsGlobalPathfinding", false);
         response.addProperty("supportsShortestPathBridge", false);
         response.addProperty("supportsWidgetInspector", true);
+        response.addProperty("supportsCanvasScreenshot", true);
         response.addProperty("supportsRuntimeDiagnostics", true);
         response.addProperty("pathfindingProvider", "runelite_collision_map");
         response.addProperty("pathfindingScope", "loaded_scene");
@@ -2875,6 +3101,99 @@ public class ApiServer {
             response.addProperty("windowMinimized", false);
         }
         return gson.toJson(response);
+    }
+
+    private String buildCanvasScreenshotJson(Map<String, String> params) throws Exception {
+        long capturedAt = System.currentTimeMillis();
+        JsonObject response = new JsonObject();
+        addCaptureMeta(response, capturedAt);
+
+        Component canvas = client.getCanvas();
+        if (canvas == null || !canvas.isShowing()) {
+            response.addProperty("status", "CANVAS_SCREENSHOT_UNAVAILABLE");
+            response.addProperty("reason", "RuneLite canvas is not visible.");
+            return gson.toJson(response);
+        }
+
+        int canvasWidth = canvas.getWidth();
+        int canvasHeight = canvas.getHeight();
+        if (canvasWidth <= 0 || canvasHeight <= 0) {
+            response.addProperty("status", "CANVAS_SCREENSHOT_UNAVAILABLE");
+            response.addProperty("reason", "RuneLite canvas has no drawable size.");
+            response.addProperty("canvasWidth", canvasWidth);
+            response.addProperty("canvasHeight", canvasHeight);
+            return gson.toJson(response);
+        }
+
+        int left = 0;
+        int top = 0;
+        int width = canvasWidth;
+        int height = canvasHeight;
+        boolean hasPoint = params.containsKey("canvasX") && params.containsKey("canvasY");
+        if (hasPoint) {
+            int radius = clampInt(getIntParam(params, "radius", 140), 20, 500);
+            int canvasX = getIntParam(params, "canvasX", 0);
+            int canvasY = getIntParam(params, "canvasY", 0);
+            left = clampInt(canvasX - radius, 0, Math.max(0, canvasWidth - 1));
+            top = clampInt(canvasY - radius, 0, Math.max(0, canvasHeight - 1));
+            width = clampInt(radius * 2, 1, Math.max(1, canvasWidth - left));
+            height = clampInt(radius * 2, 1, Math.max(1, canvasHeight - top));
+        } else if (params.containsKey("width") || params.containsKey("height")) {
+            left = clampInt(getIntParam(params, "canvasX", 0), 0, Math.max(0, canvasWidth - 1));
+            top = clampInt(getIntParam(params, "canvasY", 0), 0, Math.max(0, canvasHeight - 1));
+            width = clampInt(getIntParam(params, "width", canvasWidth), 1, Math.max(1, canvasWidth - left));
+            height = clampInt(getIntParam(params, "height", canvasHeight), 1, Math.max(1, canvasHeight - top));
+        }
+
+        boolean includeImage = !"false".equalsIgnoreCase(params.getOrDefault("includeImage", "true"));
+
+        response.addProperty("status", "CANVAS_SCREENSHOT_READY");
+        response.addProperty("source", "plugin_canvas_paint");
+        response.addProperty("mimeType", "image/png");
+        response.addProperty("imageIncluded", includeImage);
+        response.addProperty("canvasX", left);
+        response.addProperty("canvasY", top);
+        response.addProperty("width", width);
+        response.addProperty("height", height);
+        response.addProperty("canvasWidth", canvasWidth);
+        response.addProperty("canvasHeight", canvasHeight);
+        java.awt.Point canvasOrigin = getCanvasScreenLocation();
+        if (canvasOrigin != null) {
+            response.addProperty("canvasOriginX", canvasOrigin.x);
+            response.addProperty("canvasOriginY", canvasOrigin.y);
+            response.addProperty("screenX", toNutScreenX(canvasOrigin.x + left));
+            response.addProperty("screenY", toNutScreenY(canvasOrigin.y + top));
+        }
+        if (includeImage) {
+            BufferedImage image = paintCanvasRegion(canvas, left, top, width, height);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            ImageIO.write(image, "png", output);
+            response.addProperty("byteLength", output.size());
+            response.addProperty("base64", Base64.getEncoder().encodeToString(output.toByteArray()));
+        }
+        return gson.toJson(response);
+    }
+
+    private BufferedImage paintCanvasRegion(Component canvas, int left, int top, int width, int height) throws Exception {
+        AtomicReference<BufferedImage> image = new AtomicReference<>();
+        Runnable paint = () -> {
+            BufferedImage painted = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D graphics = painted.createGraphics();
+            try {
+                graphics.translate(-left, -top);
+                canvas.paint(graphics);
+            } finally {
+                graphics.dispose();
+            }
+            image.set(painted);
+        };
+
+        if (SwingUtilities.isEventDispatchThread()) {
+            paint.run();
+        } else {
+            SwingUtilities.invokeAndWait(paint);
+        }
+        return image.get();
     }
 
     private long getProcessId() {
@@ -2964,9 +3283,6 @@ public class ApiServer {
     class StateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
-            if (sendCachedResponse(t, "state")) {
-                return;
-            }
             handleOnClientThread(t, () -> buildStateJson(System.currentTimeMillis()));
         }
     }
@@ -2974,9 +3290,6 @@ public class ApiServer {
     class InventoryHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
-            if (sendCachedResponse(t, "inventory")) {
-                return;
-            }
             handleOnClientThread(t, () -> buildInventoryJson(System.currentTimeMillis()));
         }
     }
@@ -2994,9 +3307,6 @@ public class ApiServer {
     class DialogueHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
-            if (sendCachedResponse(t, "dialogue")) {
-                return;
-            }
             handleOnClientThread(t, () -> buildDialogueJson(System.currentTimeMillis()));
         }
     }
@@ -3051,9 +3361,6 @@ public class ApiServer {
     class EquipmentHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
-            if (sendCachedResponse(t, "equipment")) {
-                return;
-            }
             handleOnClientThread(t, () -> buildEquipmentJson(System.currentTimeMillis()));
         }
     }
@@ -3061,9 +3368,6 @@ public class ApiServer {
     class SkillsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
-            if (sendCachedResponse(t, "skills")) {
-                return;
-            }
             handleOnClientThread(t, () -> buildSkillsJson(System.currentTimeMillis()));
         }
     }
@@ -3137,10 +3441,37 @@ public class ApiServer {
         }
     }
 
+    class CanvasScreenshotHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            Map<String, String> params = parseQuery(t);
+            handleOnClientThread(t, () -> buildCanvasScreenshotJson(params));
+        }
+    }
+
     class CoordinateDebugHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange t) throws IOException {
             handleOnClientThread(t, () -> gson.toJson(getCoordinateDebug()));
+        }
+    }
+
+    class SnapshotStatsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            sendResponse(t, 200, buildSnapshotStatsJson());
+        }
+    }
+
+    class SnapshotControlHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+            if (!"POST".equalsIgnoreCase(t.getRequestMethod())) {
+                sendResponse(t, 200, buildSnapshotStatsJson());
+                return;
+            }
+            JsonObject request = readJsonRequestBody(t);
+            sendResponse(t, 200, buildSnapshotControlJson(request));
         }
     }
 
@@ -3150,7 +3481,7 @@ public class ApiServer {
             if (sendCachedResponse(t, "snapshot")) {
                 return;
             }
-            handleOnClientThread(t, () -> buildLiveSnapshot(System.currentTimeMillis()).snapshot);
+            sendErrorResponse(t, "SNAPSHOT_CACHE_EMPTY", "No cached snapshot is available yet; wait for the next RuneLite client tick.");
         }
     }
 

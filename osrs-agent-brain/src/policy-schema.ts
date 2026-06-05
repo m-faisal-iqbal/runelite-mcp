@@ -36,6 +36,8 @@ const FORBIDDEN_SYSTEM2_CAPABILITY_NEEDLES = [
   "keyboard",
   "perform_until",
   "execute_agent_step",
+  "run_agent_cycle",
+  "agent_run_goal",
 ];
 
 function containsForbiddenCapability(value: unknown): string | undefined {
@@ -94,9 +96,88 @@ function checkSystem1PolicyValue(value: unknown, path: string, errors: string[])
 
 export function validateStrategistPolicy(policy: StrategistPolicy): string[] {
   const errors: string[] = [];
+  errors.push(...validateStrategistPolicyShape(policy));
   checkCapabilityList(policy.allowedSystem1Capabilities, "allowedSystem1Capabilities", errors);
-  policy.steps.forEach((step, index) => checkStepCapability(step, `steps[${index}]`, errors));
-  checkSystem1PolicyValue(policy.system1Policy, "system1Policy", errors);
+  if (Array.isArray(policy.steps)) {
+    policy.steps.forEach((step, index) => checkStepCapability(step, `steps[${index}]`, errors));
+  }
+  if (policy.system1Policy && typeof policy.system1Policy === "object" && !Array.isArray(policy.system1Policy)) {
+    checkSystem1PolicyValue(policy.system1Policy, "system1Policy", errors);
+  }
+  return errors;
+}
+
+export function validateStrategistPolicyShape(value: unknown): string[] {
+  const errors: string[] = [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return ["policy must be a JSON object"];
+  }
+
+  const policy = value as Partial<StrategistPolicy>;
+  const stringFields: Array<keyof StrategistPolicy> = ["kind", "policyId", "objective"];
+  for (const field of stringFields) {
+    if (typeof policy[field] !== "string" || String(policy[field]).trim().length === 0) {
+      errors.push(`${field} must be a non-empty string`);
+    }
+  }
+
+  if (policy.kind !== "osrs.strategist_policy.v1") {
+    errors.push("kind must be osrs.strategist_policy.v1");
+  }
+  if (!["single_action", "short_task", "multi_stage_goal"].includes(String(policy.horizon))) {
+    errors.push("horizon must be single_action, short_task, or multi_stage_goal");
+  }
+  if (!["dry_run", "execute"].includes(String(policy.executionMode))) {
+    errors.push("executionMode must be dry_run or execute");
+  }
+  if (!Number.isInteger(policy.priority) || Number(policy.priority) < 1 || Number(policy.priority) > 10) {
+    errors.push("priority must be an integer from 1 to 10");
+  }
+
+  const arrayFields: Array<keyof StrategistPolicy> = [
+    "assumptions",
+    "requiredObservations",
+    "allowedSystem1Capabilities",
+    "forbiddenCapabilities",
+    "safetyConstraints",
+    "stopConditions",
+    "successCriteria",
+    "steps",
+    "notesForSystem1",
+  ];
+  for (const field of arrayFields) {
+    if (!Array.isArray(policy[field])) {
+      errors.push(`${field} must be an array`);
+    }
+  }
+
+  if (!policy.system1Policy || typeof policy.system1Policy !== "object" || Array.isArray(policy.system1Policy)) {
+    errors.push("system1Policy must be an object");
+  }
+
+  if (Array.isArray(policy.steps)) {
+    policy.steps.forEach((step, index) => {
+      if (!step || typeof step !== "object" || Array.isArray(step)) {
+        errors.push(`steps[${index}] must be an object`);
+        return;
+      }
+      const typedStep = step as Partial<PolicyStep>;
+      for (const field of ["name", "intent", "preferredSystem1Capability"] as const) {
+        if (typeof typedStep[field] !== "string" || typedStep[field]!.trim().length === 0) {
+          errors.push(`steps[${index}].${field} must be a non-empty string`);
+        }
+      }
+      if (!typedStep.inputs || typeof typedStep.inputs !== "object" || Array.isArray(typedStep.inputs)) {
+        errors.push(`steps[${index}].inputs must be an object`);
+      }
+      for (const field of ["verification", "stopIf"] as const) {
+        if (!Array.isArray(typedStep[field])) {
+          errors.push(`steps[${index}].${field} must be an array`);
+        }
+      }
+    });
+  }
+
   return errors;
 }
 

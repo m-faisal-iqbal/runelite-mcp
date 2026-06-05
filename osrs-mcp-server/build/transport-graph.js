@@ -83,6 +83,10 @@ export function planTransportRoute(args) {
                 mode: edge.mode,
                 cost: edge.cost ?? edgeCost(nodeById(edge.from), nodeById(edge.to)),
                 requirements: edge.requirements,
+                risk: edge.risk,
+                members: edge.members,
+                f2p: edge.f2p,
+                action: edge.action,
             } : undefined,
         };
     });
@@ -106,6 +110,28 @@ export function planTransportRoute(args) {
             edgeCount: data.edges.length,
         },
     };
+}
+export function nextRouteWaypoint(route, currentLocation, reachedRadius = 8) {
+    const steps = Array.isArray(route?.steps) ? route.steps : [];
+    if (steps.length === 0) {
+        return undefined;
+    }
+    if (!currentLocation || !Number.isFinite(currentLocation.x) || !Number.isFinite(currentLocation.y)) {
+        return steps[1] ?? steps[0];
+    }
+    const distances = steps.map((step, index) => ({
+        index,
+        distance: tileDistance(currentLocation, step.worldX, step.worldY, step.plane),
+    }));
+    const nearest = distances.sort((a, b) => a.distance - b.distance)[0];
+    if (!nearest) {
+        return steps[0];
+    }
+    const safeRadius = Math.max(0, reachedRadius);
+    if (nearest.distance <= safeRadius) {
+        return steps[Math.min(nearest.index + 1, steps.length - 1)];
+    }
+    return steps[nearest.index];
 }
 function buildGraph() {
     const graph = new UndirectedGraph();

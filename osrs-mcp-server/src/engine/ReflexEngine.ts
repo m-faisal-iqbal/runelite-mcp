@@ -35,6 +35,7 @@ export type ReflexPolicy = {
   destinationWorldY?: number;
   destinationPlane?: number;
   destinationRadius?: number;
+  waypointRadius?: number;
   eatAtHp?: number;
   eatAtHpPercent?: number;
   foodName?: string;
@@ -42,9 +43,12 @@ export type ReflexPolicy = {
   inventoryFullBehavior?: "stop" | "bank" | "drop";
   dropItemName?: string;
   dropItemId?: number;
+  bankAction?: "open" | "deposit" | "withdraw";
   bankItemName?: string;
   bankItemId?: number;
+  bankQuantity?: string | number;
   stopOnVisiblePlayers?: boolean;
+  stopOnMinimapPlayerThreat?: boolean;
   steps?: any[];
   notes?: string[];
   [key: string]: any;
@@ -59,6 +63,8 @@ export type ReflexObservation = {
   inventoryFull?: boolean;
   inventory?: RuneLiteTarget[];
   visiblePlayers?: RuneLiteTarget[];
+  minimapPlayerThreat?: boolean;
+  minimapThreat?: any;
   bankOpen?: boolean;
   location?: any;
   isIdle?: boolean;
@@ -85,6 +91,12 @@ export type ReflexStepRunResult = {
 export type ReflexEngineDeps = {
   observe: (policy: LoadedReflexPolicy) => Promise<ReflexObservation>;
   runStep: (step: ReflexStep, policy: LoadedReflexPolicy, mode: ReflexExecutionMode) => Promise<ReflexStepRunResult>;
+  readGameTick?: (policy: LoadedReflexPolicy) => Promise<number | undefined>;
+  onPolicyOutcome?: (policy: LoadedReflexPolicy, outcome: {
+    status: "completed" | "blocked";
+    success: boolean;
+    reason: string;
+  }) => void | Promise<void>;
   now?: () => number;
 };
 
@@ -99,6 +111,7 @@ export type LoadedReflexPolicy = ReflexPolicy & {
   startedAt?: number;
   updatedAt: number;
   tickCount: number;
+  lastProcessedGameTick?: number;
   stepIndex: number;
   stopReason?: string;
 };
@@ -121,6 +134,7 @@ export class ReflexEngine {
   ) {}
 
   loadPolicy(policy: ReflexPolicy, options: { start?: boolean; executionMode?: ReflexExecutionMode } = {}) {
+    assertReflexPolicySafe(policy);
     this.stop("REPLACED_BY_NEW_POLICY");
     const now = this.now();
     const loaded: LoadedReflexPolicy = {
@@ -130,7 +144,7 @@ export class ReflexEngine {
       executionMode: options.executionMode ?? policy.executionMode ?? "dry_run",
       targetClient: policy.targetClient ?? {},
       tickMs: Math.max(100, Number(policy.tickMs ?? this.defaults.tickMs ?? 600)),
-      maxTicks: Math.max(1, Number(policy.maxTicks ?? this.defaults.maxTicks ?? 100)),
+      maxTicks: Math.max(1, Number(policy.maxTicks ?? this.defaults.maxTicks ?? 500)),
       loadedAt: now,
       updatedAt: now,
       tickCount: 0,
@@ -154,7 +168,7 @@ export class ReflexEngine {
     policy.startedAt ??= this.now();
     policy.updatedAt = this.now();
     this.record("policy_started", { id: policy.id, tickMs: policy.tickMs, executionMode: policy.executionMode });
-    this.schedule(policy.tickMs);
+    this.schedule(this.deps.readGameTick ? 0 : policy.tickMs);
     return this.status();
   }
 
@@ -204,13 +218,17 @@ export class ReflexEngine {
 
     this.ticking = true;
     try {
+      const tickReady = await this.waitForNextGameTick(policy);
+      if (!tickReady) {
+        return this.status();
+      }
       await this.executeTick(policy);
     } catch (error: any) {
       this.block(policy, `TICK_FAILURE:${error?.message ?? String(error)}`);
     } finally {
       this.ticking = false;
       if (this.activePolicy?.id === policy.id && policy.status === "running") {
-        this.schedule(policy.tickMs);
+        this.schedule(this.deps.readGameTick ? 0 : policy.tickMs);
       }
     }
     return this.status();
@@ -248,6 +266,9 @@ export class ReflexEngine {
     }
 
     const guardStep = this.guardStep(policy, observation);
+    if (policy.status !== "running") {
+      return;
+    }
     if (guardStep) {
       await this.runPolicyStep(policy, guardStep, "guard");
       return;
@@ -271,12 +292,53 @@ export class ReflexEngine {
     }
     if (source === "policy" && policy.steps?.length) {
       policy.stepIndex = Math.min(policy.stepIndex + 1, policy.steps.length);
+      if (policy.stepIndex >= policy.steps.length) {
+        this.complete(policy, "POLICY_STEPS_COMPLETED");
+      }
     }
+  }
+
+  private async waitForNextGameTick(policy: LoadedReflexPolicy) {
+    if (!this.deps.readGameTick) {
+      return true;
+    }
+
+    const startedAt = this.now();
+    const pollMs = Math.max(25, Number(policy.tickPollMs ?? 100));
+    const stallMs = Math.max(pollMs, Number(policy.tickStallMs ?? 1200));
+
+    while (this.now() - startedAt <= stallMs) {
+      const currentTick = await this.deps.readGameTick(policy).catch((error: any) => {
+        this.record("tick_poll_failed", { id: policy.id, message: error?.message ?? String(error) });
+        return undefined;
+      });
+      if (Number.isFinite(currentTick)) {
+        if (policy.lastProcessedGameTick === undefined) {
+          policy.lastProcessedGameTick = currentTick;
+        } else if (currentTick !== policy.lastProcessedGameTick) {
+          policy.lastProcessedGameTick = currentTick;
+          return true;
+        }
+      }
+      await sleep(pollMs);
+    }
+
+    this.record("tick_stalled", {
+      id: policy.id,
+      lastProcessedGameTick: policy.lastProcessedGameTick,
+      stallMs,
+    });
+    this.pause("TICK_STALLED");
+    return false;
   }
 
   private guardStep(policy: LoadedReflexPolicy, observation: ReflexObservation): ReflexStep | undefined {
     if (policy.stopOnVisiblePlayers && (observation.visiblePlayers?.length ?? 0) > 0) {
       this.block(policy, "VISIBLE_PLAYER_THREAT_DETECTED");
+      return undefined;
+    }
+    if (policy.stopOnMinimapPlayerThreat && observation.minimapPlayerThreat) {
+      this.block(policy, "MINIMAP_PLAYER_THREAT_DETECTED");
       return undefined;
     }
 
@@ -340,6 +402,40 @@ export class ReflexEngine {
     }
 
     const taskText = `${policy.task ?? ""} ${policy.objective ?? ""} ${policy.method ?? ""}`.toLowerCase();
+    if (wantsBankDeposit(policy, taskText)) {
+      if (!observation.bankOpen) {
+        return bankOpenStep(policy, "Policy executor selected bank opening before depositing inventory items.");
+      }
+      return {
+        tool: "deposit_inventory_item",
+        reason: "Policy executor selected bank deposit for the requested inventory item.",
+        arguments: {
+          itemName: policy.bankItemName ?? policy.itemName,
+          itemId: policy.bankItemId,
+          quantity: policy.bankQuantity ?? "All",
+        },
+      };
+    }
+
+    if (wantsBankWithdraw(policy, taskText)) {
+      if (!observation.bankOpen) {
+        return bankOpenStep(policy, "Policy executor selected bank opening before withdrawing bank items.");
+      }
+      return {
+        tool: "withdraw_bank_item",
+        reason: "Policy executor selected bank withdraw for the requested bank item.",
+        arguments: {
+          itemName: policy.bankItemName ?? policy.itemName,
+          itemId: policy.bankItemId,
+          quantity: policy.bankQuantity ?? policy.quantity ?? 1,
+        },
+      };
+    }
+
+    if (wantsBankOpen(policy, taskText)) {
+      return bankOpenStep(policy, "Policy executor selected nearest bank interaction.");
+    }
+
     if (policy.destination || taskText.includes("travel") || taskText.includes("navigate") || taskText.includes("walk to")) {
       return {
         tool: "navigate_to",
@@ -348,6 +444,7 @@ export class ReflexEngine {
           destination: policy.destination ?? policy.targetName ?? policy.objective,
           from: policy.from,
           maxStepTiles: policy.maxStepTiles,
+          waypointRadius: policy.waypointRadius,
         },
       };
     }
@@ -375,6 +472,20 @@ export class ReflexEngine {
           name: policy.targetName ?? miningRockNameForItem(policy.itemName ?? policy.objective ?? policy.task ?? "ore"),
           id: policy.targetId,
           option: policy.actionOption ?? "Mine",
+          nearestToPlayer: true,
+        },
+      };
+    }
+
+    if (taskText.includes("loot") || taskText.includes("take bones") || taskText.includes("take feather") || taskText.includes("take ground")) {
+      return {
+        tool: "interact_with",
+        reason: "Policy executor selected nearest ground-item loot interaction.",
+        arguments: {
+          entityType: "ground_item",
+          name: policy.targetName ?? policy.itemName ?? defaultLootNameForText(taskText),
+          id: policy.targetId,
+          option: policy.actionOption ?? "Take",
           nearestToPlayer: true,
         },
       };
@@ -449,6 +560,7 @@ export class ReflexEngine {
     policy.stopReason = reason;
     policy.updatedAt = this.now();
     this.record("policy_completed", { id: policy.id, reason });
+    this.emitPolicyOutcome(policy, { status: "completed", success: true, reason });
   }
 
   private block(policy: LoadedReflexPolicy, reason: string) {
@@ -457,6 +569,23 @@ export class ReflexEngine {
     policy.stopReason = reason;
     policy.updatedAt = this.now();
     this.record("policy_blocked", { id: policy.id, reason });
+    this.emitPolicyOutcome(policy, { status: "blocked", success: false, reason });
+  }
+
+  private emitPolicyOutcome(policy: LoadedReflexPolicy, outcome: {
+    status: "completed" | "blocked";
+    success: boolean;
+    reason: string;
+  }) {
+    if (!this.deps.onPolicyOutcome) {
+      return;
+    }
+    Promise.resolve(this.deps.onPolicyOutcome(policy, outcome)).catch((error: any) => {
+      this.record("policy_outcome_record_failed", {
+        id: policy.id,
+        message: error?.message ?? String(error),
+      });
+    });
   }
 
   private schedule(tickMs: number) {
@@ -485,6 +614,19 @@ export class ReflexEngine {
     if (this.history.length > 500) {
       this.history.splice(0, this.history.length - 500);
     }
+    
+    // Log to stderr so the MCP client can stream it back to the console
+    if (type !== "tick_observed" && type !== "tick_skipped" && type !== "tick_stalled") {
+      const displayData = { ...data };
+      if (displayData.observation) {
+        displayData.observation = "[OBSERVATION_OMITTED]";
+      }
+      console.error(`[Reflex Engine] [${type.toUpperCase()}] ${JSON.stringify(displayData)}`);
+    } else if (type === "tick_observed") {
+      const loc = data?.observation?.location;
+      const locStr = loc ? ` @ (${loc.x},${loc.y})` : "";
+      console.error(`[Reflex Engine] [TICK ${data?.tickIndex ?? "?"}] Evaluating policy...${locStr}`);
+    }
   }
 
   private publicPolicy(policy: LoadedReflexPolicy | undefined) {
@@ -506,6 +648,7 @@ export class ReflexEngine {
       targetQuantity: policy.targetQuantity,
       tickMs: policy.tickMs,
       maxTicks: policy.maxTicks,
+      lastProcessedGameTick: policy.lastProcessedGameTick,
       loadedAt: policy.loadedAt,
       startedAt: policy.startedAt,
       updatedAt: policy.updatedAt,
@@ -517,11 +660,15 @@ export class ReflexEngine {
         eatAtHpPercent: policy.eatAtHpPercent,
         inventoryFullBehavior: policy.inventoryFullBehavior ?? "stop",
         dropItemName: policy.dropItemName,
+        bankAction: policy.bankAction,
         bankItemName: policy.bankItemName,
+        bankQuantity: policy.bankQuantity,
         destination: policy.destination,
         destinationWorldX: policy.destinationWorldX,
         destinationWorldY: policy.destinationWorldY,
+        waypointRadius: policy.waypointRadius,
         stopOnVisiblePlayers: policy.stopOnVisiblePlayers ?? false,
+        stopOnMinimapPlayerThreat: policy.stopOnMinimapPlayerThreat ?? false,
       },
     };
   }
@@ -531,10 +678,90 @@ export class ReflexEngine {
   }
 }
 
+const FORBIDDEN_REFLEX_CAPABILITY_NEEDLES = [
+  "click",
+  "invoke_",
+  "move_mouse",
+  "keyboard",
+  "perform_until",
+  "execute_agent_step",
+  "run_agent_cycle",
+  "agent_run_goal",
+];
+
+export function validateReflexPolicySafety(policy: ReflexPolicy): string[] {
+  const errors: string[] = [];
+  scanReflexPolicyValue(policy, "policy", errors);
+  return errors;
+}
+
+export function assertReflexPolicySafe(policy: ReflexPolicy) {
+  const errors = validateReflexPolicySafety(policy);
+  if (errors.length > 0) {
+    throw new Error(`Reflex policy contains forbidden raw action capabilities: ${errors.join("; ")}`);
+  }
+}
+
+function scanReflexPolicyValue(value: unknown, path: string, errors: string[]) {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => scanReflexPolicyValue(entry, `${path}[${index}]`, errors));
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const [key, nested] of Object.entries(record)) {
+    const lowerKey = key.toLowerCase();
+    if (["tool", "capability", "preferredsystem1capability", "actiontool"].includes(lowerKey)) {
+      const needle = forbiddenReflexNeedle(nested);
+      if (needle) {
+        errors.push(`${path}.${key}='${String(nested)}' matched '${needle}'`);
+      }
+    }
+    if (nested && typeof nested === "object") {
+      scanReflexPolicyValue(nested, `${path}.${key}`, errors);
+    }
+  }
+}
+
+function forbiddenReflexNeedle(value: unknown): string | undefined {
+  const text = String(value ?? "").toLowerCase();
+  return FORBIDDEN_REFLEX_CAPABILITY_NEEDLES.find((needle) => text.includes(needle));
+}
+
+// Aliases the LLM commonly generates → correct Reflex Engine tool name
+const TOOL_ALIASES: Record<string, string> = {
+  travel: "navigate_to",
+  walk: "navigate_to",
+  walk_to: "navigate_to",
+  go_to: "navigate_to",
+  move_to: "navigate_to",
+  navigate: "navigate_to",
+  pathfind: "navigate_to",
+  interact: "interact_with",
+  use: "interact_with",
+  attack: "interact_with",
+  chop: "interact_with",
+  mine: "interact_with",
+  fish: "interact_with",
+  eat: "eat_food_when",
+  eat_food: "eat_food_when",
+  deposit: "deposit_inventory_item",
+  deposit_item: "deposit_inventory_item",
+  withdraw: "withdraw_bank_item",
+  withdraw_item: "withdraw_bank_item",
+  drop: "drop_inventory_item",
+  drop_item: "drop_inventory_item",
+};
+
 function normalizePolicyStep(step: any): ReflexStep {
+  const resolveTool = (raw: string) => TOOL_ALIASES[raw.toLowerCase().trim()] ?? raw;
+
   if (typeof step?.tool === "string") {
     return {
-      tool: step.tool,
+      tool: resolveTool(step.tool),
       reason: step.reason ?? step.intent ?? step.name,
       arguments: step.arguments ?? step.inputs ?? {},
     };
@@ -543,7 +770,7 @@ function normalizePolicyStep(step: any): ReflexStep {
   const capability = String(step?.preferredSystem1Capability ?? step?.capability ?? "").trim();
   if (capability) {
     return {
-      tool: capability,
+      tool: resolveTool(capability),
       reason: step.intent ?? step.name,
       arguments: step.inputs ?? {},
     };
@@ -605,6 +832,54 @@ function miningRockNameForItem(itemName: string) {
   return "Rocks";
 }
 
+function wantsBankDeposit(policy: ReflexPolicy, taskText: string) {
+  const bankAction = String(policy.bankAction ?? "").toLowerCase();
+  return bankAction === "deposit" ||
+    taskText.includes("deposit") ||
+    taskText.includes("bank inventory") ||
+    taskText.includes("bank item");
+}
+
+function wantsBankWithdraw(policy: ReflexPolicy, taskText: string) {
+  const bankAction = String(policy.bankAction ?? "").toLowerCase();
+  return bankAction === "withdraw" ||
+    taskText.includes("withdraw");
+}
+
+function wantsBankOpen(policy: ReflexPolicy, taskText: string) {
+  const bankAction = String(policy.bankAction ?? "").toLowerCase();
+  return bankAction === "open" ||
+    taskText.includes("open bank") ||
+    taskText === "bank" ||
+    taskText.includes(" banking ");
+}
+
+function bankOpenStep(policy: ReflexPolicy, reason: string): ReflexStep {
+  const explicitTargetType = policy.targetType === "object" || policy.targetType === "npc" ? policy.targetType : undefined;
+  const targetName = policy.targetName ?? (explicitTargetType === "object" ? "Bank booth" : "Banker");
+  return {
+    tool: "interact_with",
+    reason,
+    arguments: {
+      entityType: explicitTargetType ?? "npc",
+      name: targetName,
+      id: policy.targetId,
+      option: policy.actionOption ?? "Bank",
+      nearestToPlayer: true,
+    },
+  };
+}
+
+function defaultLootNameForText(taskText: string) {
+  if (taskText.includes("feather")) {
+    return "Feather";
+  }
+  if (taskText.includes("cowhide")) {
+    return "Cowhide";
+  }
+  return "Bones";
+}
+
 function compactObservation(observation: ReflexObservation) {
   return {
     baseURL: observation.baseURL,
@@ -613,6 +888,7 @@ function compactObservation(observation: ReflexObservation) {
     inventorySlotsUsed: observation.inventorySlotsUsed,
     inventoryFull: observation.inventoryFull,
     visiblePlayers: observation.visiblePlayers?.length ?? 0,
+    minimapPlayerThreat: observation.minimapPlayerThreat ?? false,
     bankOpen: observation.bankOpen,
     location: observation.location,
     isIdle: observation.isIdle,
@@ -629,4 +905,8 @@ function tileDistance(location: any, worldX: number, worldY: number, plane?: num
     return Number.MAX_SAFE_INTEGER;
   }
   return Math.max(Math.abs(location.x - worldX), Math.abs(location.y - worldY));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

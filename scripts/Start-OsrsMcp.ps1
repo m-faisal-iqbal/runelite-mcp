@@ -3,7 +3,7 @@ param(
   [switch]$BuildOnly,
   [switch]$InstallOnly,
   [switch]$StopStandaloneMcpServer,
-  [int]$MaxMemoryMb = 512
+  [int]$MaxMemoryMb = 1024
 )
 
 $ErrorActionPreference = "Stop"
@@ -286,7 +286,7 @@ function Start-RuneLiteWithPlugin {
   }
 
   $runClassPath = "$HelperClasses;$PluginClasses;$(Get-RuneLiteClasspath)"
-  $javaArgs = "-ea -Xmx${MaxMemoryMb}m -Xss2m -cp `"$runClassPath`" RunOsrsMcpPlugin"
+  $javaArgs = "-ea -Xmx${MaxMemoryMb}m -Xss2m -XX:+UseG1GC -XX:MaxGCPauseMillis=50 -cp `"$runClassPath`" RunOsrsMcpPlugin"
   Write-Step "Starting RuneLite with OSRS MCP plugin..."
   Start-Process -FilePath $RuneLiteJre `
     -ArgumentList $javaArgs `

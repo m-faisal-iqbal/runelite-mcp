@@ -1,3 +1,4 @@
+import { tavily } from "@tavily/core";
 import type { BrainConfig } from "./config.js";
 import { getBrainConfig } from "./config.js";
 
@@ -18,21 +19,16 @@ export async function searchOsrsWiki(request: WikiSearchRequest, config: BrainCo
     throw new Error("TAVILY_API_KEY is required before the Brain can search the live OSRS Wiki.");
   }
 
-  const tavily = await import("tavily");
-  const createClient = (tavily as Record<string, unknown>).tavily ?? (tavily as Record<string, unknown>).default;
-
-  if (typeof createClient !== "function") {
-    throw new Error("The installed tavily package did not expose the expected client factory.");
-  }
-
-  const client = createClient({ apiKey: config.tavilyApiKey }) as {
-    search: (query: string, options?: Record<string, unknown>) => Promise<{ results?: WikiSearchResult[] }>;
-  };
-
+  const client = tavily({ apiKey: config.tavilyApiKey });
   const response = await client.search(`site:oldschool.runescape.wiki ${request.query}`, {
     maxResults: request.maxResults ?? 5,
-    searchDepth: "basic"
+    searchDepth: "basic",
   });
 
-  return response.results ?? [];
+  return (response.results ?? []).map((result) => ({
+    title: result.title,
+    url: result.url,
+    content: result.content,
+    score: result.score,
+  }));
 }

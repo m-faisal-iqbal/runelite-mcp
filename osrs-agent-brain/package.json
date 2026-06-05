@@ -11,13 +11,16 @@
     "dev": "tsx src/index.ts",
     "smoke:mcp": "tsx src/smoke-mcp.ts",
     "smoke:prompt": "tsx src/smoke-prompt.ts",
+    "smoke:brain-tools": "tsx src/smoke-brain-tools.ts",
+    "smoke:brain-policy": "tsx src/smoke-brain-policy.ts",
     "smoke:strategist": "tsx src/smoke-strategist.ts",
-    "smoke:wiki": "tsx src/smoke-wiki.ts"
+    "smoke:wiki": "tsx src/smoke-wiki.ts",
+    "chat": "tsx src/cli.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "latest",
-    "openai": "latest",
-    "tavily": "latest"
+    "@tavily/core": "^0.7.5",
+    "openai": "latest"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",

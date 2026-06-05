@@ -2,9 +2,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import axios from "axios";
-import { readFile, mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { access, readFile, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { mouse, Point, keyboard, Key, screen, Region, FileType } from "@nut-tree-fork/nut-js";
 import { apiBaseFromPort, StateCache } from "./client.js";
 import { actionStep, buildAgentStepPackage, buildNextActionPlan } from "./planner.js";
@@ -15,8 +17,16 @@ import { discoverClients as discoverRuntimeClients, selectDiscoveredClient } fro
 import { diagnoseClientRuntime as diagnoseRuntimeClient, EXPECTED_PLUGIN_API_VERSION } from "./runtime-diagnostics.js";
 import { calculateStraightLineSteps, chooseLocalPathStep, tileDistance, withStraightLineFallback } from "./navigation.js";
 import { buildSemanticInterface, findSemanticControls, planQuestStep } from "./semantic-interface.js";
-import { ReflexEngine } from "./engine/ReflexEngine.js";
-import { planTransportRoute, transportGraphSummary } from "./transport-graph.js";
+import { ReflexEngine, validateReflexPolicySafety } from "./engine/ReflexEngine.js";
+import { nextRouteWaypoint, planTransportRoute, transportGraphSummary } from "./transport-graph.js";
+const require = createRequire(import.meta.url);
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const serverRoot = ["build", "src"].includes(path.basename(moduleDir))
+    ? path.resolve(moduleDir, "..")
+    : moduleDir;
+const repoRoot = path.resolve(serverRoot, "..");
+const workDir = path.join(repoRoot, "work");
+const osControlRequestPath = path.join(workDir, "os-control-request.json");
 const configuredMouseSpeed = Number(process.env.OSRS_MOUSE_SPEED ?? "300");
 mouse.config.mouseSpeed = Number.isFinite(configuredMouseSpeed) && configuredMouseSpeed > 0
     ? configuredMouseSpeed
@@ -35,7 +45,7 @@ const configuredApiTimeoutMs = Number(process.env.OSRS_API_TIMEOUT_MS ?? "3000")
 const API_TIMEOUT_MS = Number.isFinite(configuredApiTimeoutMs) && configuredApiTimeoutMs > 0
     ? configuredApiTimeoutMs
     : 3000;
-const configuredSnapshotCacheTtlMs = Number(process.env.OSRS_SNAPSHOT_CACHE_TTL_MS ?? "250");
+const configuredSnapshotCacheTtlMs = Number(process.env.OSRS_SNAPSHOT_CACHE_TTL_MS ?? "1500");
 const SNAPSHOT_CACHE_TTL_MS = Number.isFinite(configuredSnapshotCacheTtlMs) && configuredSnapshotCacheTtlMs >= 0
     ? configuredSnapshotCacheTtlMs
     : 250;
@@ -97,6 +107,27 @@ async function discoverClients() {
 async function diagnoseClientRuntime(client) {
     return diagnoseRuntimeClient(client, API_TIMEOUT_MS);
 }
+function lightweightRuntimeStatus(client) {
+    const apiVersion = Number(client?.apiVersion ?? 0);
+    if (Number.isFinite(apiVersion) && apiVersion > 0 && apiVersion < EXPECTED_PLUGIN_API_VERSION) {
+        return {
+            status: "needs_reload",
+            staleRuntime: true,
+            apiVersion,
+            expectedApiVersion: EXPECTED_PLUGIN_API_VERSION,
+            warnings: [
+                `Plugin API version ${apiVersion} is older than expected ${EXPECTED_PLUGIN_API_VERSION}. Run diagnose_runtime for endpoint details and reload RuneLite plugin before real autonomy.`,
+            ],
+            lightweight: true,
+        };
+    }
+    return {
+        status: "not_checked",
+        apiVersion: Number.isFinite(apiVersion) && apiVersion > 0 ? apiVersion : undefined,
+        expectedApiVersion: EXPECTED_PLUGIN_API_VERSION,
+        lightweight: true,
+    };
+}
 function baseUrlForClient(client) {
     if (client?.baseUrl) {
         return client.baseUrl;
@@ -146,7 +177,7 @@ async function getSnapshotForTarget(target = {}, force = false) {
 }
 async function getSemanticInterfaceForTarget(target = {}, args = {}) {
     const baseURL = await resolveRuneliteApi(target);
-    const snapshot = await getSnapshotForBase(baseURL, args.forceRefresh ?? true);
+    const snapshot = await getSnapshotForBase(baseURL, args.forceRefresh === true);
     let widgets = [];
     let widgetError;
     try {
@@ -259,6 +290,7 @@ function requireFreshClickable(target, maxAgeMs, coordinateSource) {
     }
 }
 async function clickPoint(x, y, rightClick) {
+    await requireOsControl(`Hardware ${rightClick ? "right" : "left"} click requested at ${Math.round(x)}, ${Math.round(y)}.`);
     await moveMouseHumanized(x, y);
     await settleBeforeClick();
     if (rightClick) {
@@ -269,6 +301,7 @@ async function clickPoint(x, y, rightClick) {
     }
 }
 async function movePoint(x, y) {
+    await requireOsControl(`Hardware mouse move requested at ${Math.round(x)}, ${Math.round(y)}.`);
     await moveMouseHumanized(x, y);
 }
 function finiteNumber(value, fallback) {
@@ -360,6 +393,13 @@ function canvasCaptureRect(debug, args) {
     };
 }
 async function captureCanvasImage(baseURL, args) {
+    const pluginCapture = await captureCanvasImageFromPlugin(baseURL, args).catch((error) => ({
+        status: "PLUGIN_CANVAS_CAPTURE_UNAVAILABLE",
+        error: error?.message ?? String(error),
+    }));
+    if (pluginCapture.status === "CANVAS_SCREENSHOT_READY") {
+        return pluginCapture;
+    }
     const debug = (await runeliteApi(baseURL).get("/debug/coordinates")).data;
     const capture = canvasCaptureRect(debug, args);
     const outputDir = path.join(os.tmpdir(), "runelite-mcp-captures");
@@ -374,6 +414,62 @@ async function captureCanvasImage(baseURL, args) {
     };
     if (args.includeImage !== false) {
         response.base64 = (await readFile(filePath)).toString("base64");
+    }
+    return response;
+}
+async function captureCanvasImageFromPlugin(baseURL, args) {
+    const params = {
+        includeImage: args.includeImage !== false,
+    };
+    for (const key of ["canvasX", "canvasY", "width", "height", "radius"]) {
+        if (Number.isFinite(args[key])) {
+            params[key] = args[key];
+        }
+    }
+    const plugin = (await runeliteApi(baseURL).get("/canvas/screenshot", { params })).data;
+    if (plugin?.status !== "CANVAS_SCREENSHOT_READY") {
+        throw new Error(plugin?.reason ?? plugin?.error ?? `Unexpected plugin screenshot status ${plugin?.status ?? "UNKNOWN"}`);
+    }
+    let filePath;
+    if (args.includeImage !== false) {
+        if (typeof plugin.base64 !== "string") {
+            throw new Error("Plugin screenshot did not include base64 image data.");
+        }
+        const outputDir = path.join(os.tmpdir(), "runelite-mcp-captures");
+        await mkdir(outputDir, { recursive: true });
+        filePath = path.join(outputDir, `plugin_canvas_${Date.now()}.png`);
+        await writeFile(filePath, Buffer.from(plugin.base64, "base64"));
+    }
+    const response = {
+        status: "CANVAS_SCREENSHOT_READY",
+        source: "plugin_canvas_screenshot",
+        mimeType: plugin.mimeType ?? "image/png",
+        capturedAt: plugin.capturedAt ?? Date.now(),
+        canvas: {
+            x: plugin.canvasX ?? 0,
+            y: plugin.canvasY ?? 0,
+            width: plugin.width,
+            height: plugin.height,
+        },
+        screen: Number.isFinite(plugin.screenX) && Number.isFinite(plugin.screenY)
+            ? {
+                x: plugin.screenX,
+                y: plugin.screenY,
+                width: plugin.width,
+                height: plugin.height,
+            }
+            : undefined,
+        canvasOriginNutX: plugin.canvasOriginX,
+        canvasOriginNutY: plugin.canvasOriginY,
+        canvasWidth: plugin.canvasWidth,
+        canvasHeight: plugin.canvasHeight,
+        byteLength: plugin.byteLength,
+    };
+    if (filePath) {
+        response.filePath = filePath;
+    }
+    if (args.includeImage !== false) {
+        response.base64 = plugin.base64;
     }
     return response;
 }
@@ -658,16 +754,13 @@ server.registerPrompt("experienced-player-loop", {
                     "1. Start with get_agent_context; it bundles identity, runtime freshness, state, risks, nearby targets, UI, chat, and recommended checks.",
                     "2. Use plan_next_action when you want a conservative ordered tool-call plan for the current objective before acting.",
                     "3. Run diagnose_runtime if get_agent_context reports stale runtime, 404/missing endpoint, or after rebuilding the plugin.",
-                    "4. Use run_agent_cycle for a read-only observe-plan-validate pass, then execute_agent_step for one explicitly armed action.",
-                    "5. execute_agent_step defaults to dry_run; real execution requires executionMode='execute' and confirmExecution='EXECUTE_ONE_STEP'.",
-                    "6. For perform_until plans, execute_agent_step performs only one loop interaction, then returns control for verification.",
-                    "7. Prefer high-level tools: interact_with, walk_to, wait_until_idle, wait_until_location, wait_for_chat_message.",
-                    "8. Prefer in-client actions: interact_with and click_* with option over raw screen clicks.",
-                    "9. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
-                    "10. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
-                    "11. When coordinates are needed, reject stale or warning-marked targets; use hover/verify tools before risky clicks.",
-                    "12. For navigation, use walk_route_to for multi-step movement and calculate_path_to/walk_path_to for inspection or one cautious step.",
-                    "13. Use wait_for_game_tick or tickAligned direct invoke_* actions for timing-sensitive sequences.",
+                    "4. For Twin-Brain autonomy, issue bounded policies through load_policy and monitor reflex_status/reflex_history.",
+                    "5. Use navigate_to for bounded travel planning or one explicitly armed navigation step.",
+                    "6. Prefer high-level policy tools over raw input; raw mouse/keyboard requires request_os_control approval.",
+                    "7. Verify each action through snapshot changes, chat messages, location, animation, inventory, or interfaceSummary.",
+                    "8. Before risky actions, call mark_action_baseline; afterward use verify_last_action for snapshot diffs.",
+                    "9. When coordinates are needed for debugging, reject stale or warning-marked targets; raw coordinate clicks are fallback only.",
+                    "10. Use wait_for_game_tick for timing-sensitive verification.",
                 ].join("\n"),
             },
         }],
@@ -755,8 +848,77 @@ server.registerPrompt("withdraw-and-equip", {
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+let osControlApprovedUntil = 0;
+async function fileExists(filePath) {
+    try {
+        await access(filePath);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function osControlPayload(reason) {
+    return {
+        status: "OS_CONTROL_REQUIRED",
+        reason,
+        requestFile: osControlRequestPath,
+        approvalCommand: "npm run approve-os-control",
+        timeoutMs: 60000,
+        note: "Gameplay uses in-client RuneLite actions by default. Hardware mouse/keyboard input is blocked unless this request is explicitly approved.",
+    };
+}
+async function requireOsControl(reason) {
+    if (Date.now() < osControlApprovedUntil && !(await fileExists(osControlRequestPath))) {
+        return;
+    }
+    throw new Error(JSON.stringify(osControlPayload(reason)));
+}
+async function notifyOsControlRequest(reason) {
+    try {
+        const notifier = require("node-notifier");
+        notifier.notify({
+            title: "OSRS MCP needs OS control",
+            message: reason,
+            wait: false,
+        });
+    }
+    catch {
+        // Notification support is best-effort; the request file is authoritative.
+    }
+}
+async function waitForOsControlApproval(timeoutMs = 60000, pollMs = 500) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (!(await fileExists(osControlRequestPath))) {
+            osControlApprovedUntil = Date.now() + timeoutMs;
+            return {
+                approved: true,
+                waitedMs: Date.now() - startedAt,
+                approvedUntil: osControlApprovedUntil,
+            };
+        }
+        await sleep(pollMs);
+    }
+    osControlApprovedUntil = 0;
+    return {
+        approved: false,
+        waitedMs: Date.now() - startedAt,
+        stopReason: "OS_CONTROL_REQUEST_TIMEOUT",
+    };
+}
+async function typeHardwareInput(input, reason) {
+    await requireOsControl(reason);
+    return keyboard.type(input);
+}
 async function readClientState(baseURL) {
-    return (await runeliteApi(baseURL).get("/state")).data;
+    const identity = (await runeliteApi(baseURL).get("/identity")).data;
+    return {
+        ...identity,
+        tick: identity?.gameTick,
+        status: identity?.playerName ? "LOGGED_IN" : "UNKNOWN",
+        name: identity?.playerName,
+    };
 }
 async function waitForGameTick(baseURL, minTicks = 1, timeoutMs = 1800, pollMs = 75) {
     const startedAt = Date.now();
@@ -830,13 +992,42 @@ async function interactWithTarget(args) {
             actionResult,
         };
     }
-    const targetAndMenu = await openContextMenuForTarget(args);
-    const selected = await selectContextMenuOption(args.option, args, args.exact);
     return {
-        actionMode: "os_context_menu_fallback",
-        ...targetAndMenu,
-        selected,
+        actionMode: "in_client_action_unavailable",
+        success: false,
+        executed: false,
+        target: compactTarget(target),
+        requestedOption: args.option,
+        stopReason: "OS_CONTROL_REQUIRED",
+        ...osControlPayload(`No direct in-client menu action was available for ${args.entityType} ${target.name ?? target.id} option '${args.option}'.`),
     };
+}
+function widgetActionIndex(widget, actionText) {
+    const needle = actionText.toLowerCase();
+    const actions = Array.isArray(widget?.actions) ? widget.actions : [];
+    const index = actions.findIndex((action) => String(action ?? "").toLowerCase().includes(needle));
+    if (index < 0) {
+        return undefined;
+    }
+    return { actionIndex: index + 1, option: String(actions[index]) };
+}
+async function invokeVisibleWidgetAction(baseURL, widget, actionText) {
+    const action = widgetActionIndex(widget, actionText);
+    if (!action) {
+        throw new Error(JSON.stringify(osControlPayload(`Visible widget has no in-client action matching '${actionText}'.`)));
+    }
+    if (!Number.isFinite(widget?.packedId) && !(Number.isFinite(widget?.groupId) && Number.isFinite(widget?.childId))) {
+        throw new Error(JSON.stringify(osControlPayload(`Visible widget for '${actionText}' has no packedId/groupId+childId for in-client invocation.`)));
+    }
+    return invokeWidgetAction(baseURL, {
+        packedId: widget.packedId,
+        groupId: widget.groupId,
+        childId: widget.childId,
+        actionIndex: action.actionIndex,
+        itemId: widget.itemId,
+        option: action.option,
+        target: widget.name ?? widget.text ?? "",
+    });
 }
 async function clickMinimapProjection(worldX, worldY, plane, target = {}, maxAgeMs = 1000) {
     const api = await apiForTarget(target);
@@ -861,8 +1052,8 @@ async function clickShopAction(actionText, itemName, itemId, rightClick, target 
             (!itemNeedle || label.includes(itemNeedle));
     });
     requireFreshClickable(shopTarget, 1000, "widgetBounds");
-    await clickPoint(shopTarget.screenX, shopTarget.screenY, rightClick);
-    return shopTarget;
+    const action = await invokeVisibleWidgetAction(baseURL, shopTarget, actionText);
+    return { ...shopTarget, actionMode: "in_client_widget_action", action };
 }
 async function clickBankAction(actionText, itemName, itemId, rightClick, target = {}) {
     const baseURL = await resolveRuneliteApi(target);
@@ -881,8 +1072,8 @@ async function clickBankAction(actionText, itemName, itemId, rightClick, target 
             (!itemNeedle || label.includes(itemNeedle));
     });
     requireFreshClickable(bankTarget, 1000, "widgetBounds");
-    await clickPoint(bankTarget.screenX, bankTarget.screenY, rightClick);
-    return bankTarget;
+    const action = await invokeVisibleWidgetAction(baseURL, bankTarget, actionText);
+    return { ...bankTarget, actionMode: "in_client_widget_action", action };
 }
 function findInventoryItem(snapshot, name, id, slot) {
     return (snapshot.inventory ?? []).find((item) => (slot === undefined || item.slot === slot) &&
@@ -902,19 +1093,30 @@ function requireFreshInventoryItem(item, maxAgeMs) {
     }
 }
 async function selectInventoryItemForUse(item, target, useRightClickMenu = true) {
-    if (useRightClickMenu) {
-        await clickPoint(item.slotScreenX, item.slotScreenY, true);
-        await sleep(150);
-        await selectContextMenuOption("Use", target, false);
+    const baseURL = await resolveRuneliteApi(target);
+    const directAction = directMenuActionForTarget(item, "Use");
+    if (!directAction) {
+        throw new Error(JSON.stringify(osControlPayload(`Inventory item ${item.name ?? item.id} has no direct in-client Use action.`)));
     }
-    else {
-        await clickPoint(item.slotScreenX, item.slotScreenY);
-    }
+    return invokeMenuAction(baseURL, directAction);
 }
 async function selectInventoryItemOption(item, option, target) {
-    await clickPoint(item.slotScreenX, item.slotScreenY, true);
-    await sleep(150);
-    return selectContextMenuOption(option, target, false);
+    const baseURL = await resolveRuneliteApi(target);
+    let directAction = directMenuActionForTarget(item, option);
+    const inventoryActions = Array.isArray(item.menuActions) ? item.menuActions : [];
+    const actionMetadata = inventoryActions.find((action) => matchesOption(action?.option, option));
+    if (directAction && String(directAction.menuAction).startsWith("ITEM_")) {
+        directAction = {
+            ...directAction,
+            menuAction: "CC_OP_LOW_PRIORITY",
+            identifier: Number.isFinite(actionMetadata?.actionIndex) ? Number(actionMetadata.actionIndex) + 2 : directAction.identifier,
+            target: directAction.target || `<col=ff9040>${item.name ?? ""}</col>`,
+        };
+    }
+    if (!directAction) {
+        throw new Error(JSON.stringify(osControlPayload(`Inventory item ${item.name ?? item.id} has no direct in-client '${option}' action.`)));
+    }
+    return invokeMenuAction(baseURL, directAction);
 }
 async function selectContextMenuOption(text, target = {}, exact) {
     const baseURL = await resolveRuneliteApi(target);
@@ -944,9 +1146,13 @@ async function selectContextMenuOption(text, target = {}, exact) {
         });
         return { ...match, actionMode: "client_menu_action", action };
     }
-    requireFreshClickable(match, 1000);
-    await clickPoint(match.screenX, match.screenY);
-    return { ...match, actionMode: "os_click_fallback" };
+    return {
+        ...match,
+        actionMode: "in_client_action_unavailable",
+        success: false,
+        executed: false,
+        ...osControlPayload(`Context menu entry '${text}' has no in-client menu params.`),
+    };
 }
 function isPlayerIdle(state) {
     return state?.isIdle === true || (state?.animation === -1 && !state?.interactingWith);
@@ -1471,13 +1677,11 @@ async function dropInventoryItemAction(args) {
             item: { id: item.id, name: item.name, slot: item.slot, quantity: item.quantity },
         };
     }
-    await clickPoint(item.slotScreenX, item.slotScreenY, true);
-    await sleep(120);
-    await selectContextMenuOption("Drop", target, false);
     return {
-        success: true,
-        executed: true,
-        actionMode: "drop_inventory_item",
+        success: false,
+        executed: false,
+        actionMode: "in_client_action_unavailable",
+        ...osControlPayload(`Inventory item ${item.name ?? item.id} has no direct in-client Drop action.`),
         item: { id: item.id, name: item.name, slot: item.slot, quantity: item.quantity },
     };
 }
@@ -1777,7 +1981,7 @@ async function navigateToDestinationAction(args) {
     let currentLocation;
     let baseURL;
     let snapshot;
-    if (!args.from || wantsExecution) {
+    if (!args.from || (wantsExecution && args.confirmExecution === NAVIGATE_EXECUTE_CONFIRMATION)) {
         const current = await getSnapshotForTarget(targetClient, true);
         baseURL = current.baseURL;
         snapshot = current.snapshot;
@@ -1790,6 +1994,9 @@ async function navigateToDestinationAction(args) {
         executed: false,
         executionMode: args.executionMode ?? "dry_run",
         oneStepOnly: true,
+        nextWaypoint: route.status === "ROUTE_PLANNED"
+            ? nextRouteWaypoint(route, currentLocation, args.waypointRadius ?? 8)
+            : undefined,
         callsLlm: false,
     };
     if (route.status !== "ROUTE_PLANNED") {
@@ -1812,8 +2019,14 @@ async function navigateToDestinationAction(args) {
     if (!snapshot || !baseURL) {
         throw new Error("A live RuneLite client is required to execute a navigation step.");
     }
-    const finalTile = route.finalTile;
-    const localStep = calculateStraightLineSteps(snapshot.state?.location, finalTile, args.maxStepTiles ?? 18, 1).steps[0];
+    const waypoint = nextRouteWaypoint(route, snapshot.state?.location, args.waypointRadius ?? 8);
+    if (!waypoint) {
+        return {
+            ...responseBase,
+            stopReason: "No next route waypoint is available.",
+        };
+    }
+    const localStep = calculateStraightLineSteps(snapshot.state?.location, waypoint, args.maxStepTiles ?? 18, 1).steps[0];
     let action;
     try {
         action = await invokeWalkAction(baseURL, {
@@ -1834,6 +2047,7 @@ async function navigateToDestinationAction(args) {
     return {
         ...responseBase,
         executed: true,
+        nextWaypoint: waypoint,
         selectedStep: localStep,
         action,
         nextInstruction: "System 1 moved one bounded step. Re-read state and call navigate_to again if the policy still requires travel.",
@@ -1841,6 +2055,20 @@ async function navigateToDestinationAction(args) {
 }
 async function observeReflexPolicy(policy) {
     const { baseURL, snapshot } = await getSnapshotForTarget(policy.targetClient, true);
+    let minimapThreat;
+    if (policy.stopOnMinimapPlayerThreat) {
+        try {
+            minimapThreat = (await runeliteApi(baseURL).get("/minimap/icons", {
+                params: { maxEntities: 80 },
+            })).data;
+        }
+        catch (error) {
+            minimapThreat = {
+                status: "MINIMAP_THREAT_UNAVAILABLE",
+                error: error?.message ?? String(error),
+            };
+        }
+    }
     return {
         baseURL,
         snapshot,
@@ -1850,6 +2078,8 @@ async function observeReflexPolicy(policy) {
         inventoryFull: inventorySlotsUsed(snapshot) >= 28,
         inventory: snapshot.inventory ?? [],
         visiblePlayers: snapshot.players ?? [],
+        minimapPlayerThreat: minimapThreat?.visiblePlayerThreat === true,
+        minimapThreat,
         bankOpen: snapshot.interfaceSummary?.bankContainerAvailable === true,
         location: snapshot.state?.location,
         isIdle: isPlayerIdle(snapshot.state ?? {}),
@@ -1859,6 +2089,8 @@ async function observeReflexPolicy(policy) {
             animation: snapshot.state?.animation,
             interacting: snapshot.state?.interacting,
             dialogueType: snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type,
+            minimapPlayerThreat: minimapThreat?.visiblePlayerThreat === true,
+            visibleMinimapPlayers: minimapThreat?.visiblePlayerCount,
         },
     };
 }
@@ -1946,10 +2178,91 @@ async function runReflexPolicyStep(step, policy, mode) {
 const reflexEngine = new ReflexEngine({
     observe: observeReflexPolicy,
     runStep: runReflexPolicyStep,
+    readGameTick: async (policy) => {
+        const baseURL = await resolveRuneliteApi(policy.targetClient ?? {});
+        const state = await readClientState(baseURL);
+        const tick = Number(state?.tick);
+        return Number.isFinite(tick) ? tick : undefined;
+    },
+    onPolicyOutcome: (policy, outcome) => {
+        void recordReflexPolicyOutcome(policy, outcome);
+    },
 }, {
     tickMs: 600,
     maxTicks: 100,
 });
+async function recordReflexPolicyOutcome(policy, outcome) {
+    await ensureAgentMemoryLoaded();
+    const goal = policy.objective ?? policy.task ?? policy.id;
+    const method = `reflex_policy_v2:${policy.task ?? policy.method ?? "general"}`;
+    const policySnapshot = compactReflexPolicyForMemory(policy);
+    await agentMemory.appendJournal({
+        at: Date.now(),
+        kind: "action",
+        goal,
+        data: {
+            source: "ReflexEngine",
+            policyId: policy.id,
+            task: policy.task,
+            method: policy.method,
+            success: outcome.success,
+            status: outcome.status,
+            stopReason: outcome.reason,
+            tickCount: policy.tickCount,
+            policy: policySnapshot,
+            lesson: outcome.success
+                ? `Successful Reflex policy for ${goal}: ${outcome.reason}`
+                : `Reflex policy blocked for ${goal}: ${outcome.reason}`,
+        },
+    });
+    if (outcome.success) {
+        await agentMemory.upsertStrategyCache({
+            goal,
+            method,
+            source: "system1_reflex_outcome",
+            status: "READY",
+            policy: policySnapshot,
+            contextSummary: {
+                stopReason: outcome.reason,
+                tickCount: policy.tickCount,
+                itemName: policy.itemName,
+                quantity: policy.quantity,
+                quantityMode: policy.quantityMode,
+                destination: policy.destination,
+            },
+            metadata: {
+                cachedBy: "ReflexEngine",
+                policyId: policy.id,
+                completedAt: Date.now(),
+            },
+        });
+        await agentMemory.recordStrategyCacheOutcome(goal, {
+            method,
+            success: true,
+            metadata: {
+                lastOutcome: outcome.reason,
+                policyId: policy.id,
+            },
+        });
+    }
+}
+function compactReflexPolicyForMemory(policy) {
+    const { status, loadedAt, startedAt, updatedAt, tickCount, lastProcessedGameTick, stepIndex, stopReason, startQuantity, targetQuantity, ...payload } = policy;
+    return {
+        ...payload,
+        startQuantity,
+        targetQuantity,
+        outcome: {
+            status,
+            stopReason,
+            tickCount,
+            startedAt,
+            updatedAt,
+            lastProcessedGameTick,
+            stepIndex,
+        },
+    };
+}
 server.registerResource("reflex-status", "osrs://reflex/status", {
     title: "System 1 Reflex Engine Status",
     description: "Active local policy state, tick-loop status, and recent Reflex Engine events. This resource never calls the LLM.",
@@ -2305,7 +2618,7 @@ async function prepareAutonomyStep(args) {
     }
     const baseURL = resolved.baseURL;
     const runtime = args.includeDiagnostics === false
-        ? { status: "not_checked" }
+        ? lightweightRuntimeStatus(resolved.client)
         : await diagnoseClientRuntime(resolved.client);
     const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
     const snapshot = await getSnapshotForBase(baseURL, true);
@@ -2638,6 +2951,7 @@ function normalizeReflexPolicyArgs(args) {
         destination: args.destination ?? policy.destination,
         from: args.from ?? policy.from,
         maxStepTiles: args.maxStepTiles ?? policy.maxStepTiles,
+        waypointRadius: args.waypointRadius ?? policy.waypointRadius,
         destinationWorldX: args.destinationWorldX ?? policy.destinationWorldX,
         destinationWorldY: args.destinationWorldY ?? policy.destinationWorldY,
         destinationPlane: args.destinationPlane ?? policy.destinationPlane,
@@ -2647,9 +2961,12 @@ function normalizeReflexPolicyArgs(args) {
         inventoryFullBehavior: args.inventoryFullBehavior ?? policy.inventoryFullBehavior,
         dropItemName: args.dropItemName ?? policy.dropItemName,
         dropItemId: args.dropItemId ?? policy.dropItemId,
+        bankAction: args.bankAction ?? policy.bankAction,
         bankItemName: args.bankItemName ?? policy.bankItemName,
         bankItemId: args.bankItemId ?? policy.bankItemId,
+        bankQuantity: args.bankQuantity ?? policy.bankQuantity,
         stopOnVisiblePlayers: args.stopOnVisiblePlayers ?? policy.stopOnVisiblePlayers,
+        stopOnMinimapPlayerThreat: args.stopOnMinimapPlayerThreat ?? policy.stopOnMinimapPlayerThreat,
         tickMs: args.tickMs ?? policy.tickMs,
         maxTicks: args.maxTicks ?? policy.maxTicks,
         executionMode: args.executionMode ?? policy.executionMode,
@@ -2660,6 +2977,16 @@ function loadReflexPolicyResponse(args) {
     const policy = normalizeReflexPolicyArgs(args);
     const executionMode = (args.executionMode ?? policy.executionMode ?? "dry_run");
     const hasExecutableIntent = Boolean(policy.task || policy.objective || policy.steps?.length || (policy.targetType && policy.actionOption));
+    const safetyErrors = validateReflexPolicySafety(policy);
+    if (safetyErrors.length > 0) {
+        return {
+            status: "POLICY_REJECTED",
+            willExecute: false,
+            executed: false,
+            reason: "Policy contains forbidden raw action capabilities. System 2 must issue high-level policies only.",
+            safetyErrors,
+        };
+    }
     if (!hasExecutableIntent) {
         return {
             status: "POLICY_REJECTED",
@@ -2720,6 +3047,7 @@ server.tool("load_policy", "Load a high-level System 1 Reflex Engine policy. Thi
     destination: z.string().optional().describe("Named transport destination for travel policies, for example Draynor Bank"),
     from: z.string().optional().describe("Optional named transport start node for travel policies"),
     maxStepTiles: z.number().optional().describe("Maximum tiles for one local navigation step, default 18"),
+    waypointRadius: z.number().optional().describe("Consider a transport waypoint reached when within this many tiles, default 8"),
     destinationWorldX: z.number().optional().describe("Optional destination world X for travel success checks"),
     destinationWorldY: z.number().optional().describe("Optional destination world Y for travel success checks"),
     destinationPlane: z.number().optional().describe("Optional destination plane for travel success checks"),
@@ -2729,9 +3057,12 @@ server.tool("load_policy", "Load a high-level System 1 Reflex Engine policy. Thi
     inventoryFullBehavior: z.enum(["stop", "bank", "drop"]).optional().describe("What System 1 does when inventory is full: stop, deposit item if bank is open, or drop item"),
     dropItemName: z.string().optional().describe("Inventory item name to drop when inventoryFullBehavior=drop; defaults to itemName"),
     dropItemId: z.number().optional().describe("Inventory item id to drop when inventoryFullBehavior=drop"),
+    bankAction: z.enum(["open", "deposit", "withdraw"]).optional().describe("Bank policy intent: open bank, deposit inventory item, or withdraw bank item"),
     bankItemName: z.string().optional().describe("Inventory item name to deposit when inventoryFullBehavior=bank; defaults to itemName"),
     bankItemId: z.number().optional().describe("Inventory item id to deposit when inventoryFullBehavior=bank"),
+    bankQuantity: z.union([z.string(), z.number()]).optional().describe("Bank action quantity, for example All, 1, 5, or X"),
     stopOnVisiblePlayers: z.boolean().optional().describe("Stop the policy if visible players are detected"),
+    stopOnMinimapPlayerThreat: z.boolean().optional().describe("Stop the policy if the minimap icon feed reports another player/red-dot threat"),
     tickMs: z.number().optional().describe("Policy tick interval in ms, default 600"),
     maxTicks: z.number().optional().describe("Maximum local ticks before stopping, default 100"),
     start: z.boolean().optional().describe("Start immediately after loading, default true"),
@@ -2817,10 +3148,10 @@ server.tool("get_agent_context", "Get one compact observe-plan-act context bundl
         }
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
-        const snapshot = await getSnapshotForBase(baseURL, true);
+        const snapshot = await getSnapshotForBase(baseURL, false);
         const context = buildAgentContext(baseURL, client, snapshot, runtime, {
             objective,
             includeNearbyLimit,
@@ -2848,7 +3179,7 @@ server.tool("observe_game", "Gather a read-only agent observation bundle: compac
     width: z.number().optional().describe("Optional screenshot crop width, or full canvas when omitted"),
     height: z.number().optional().describe("Optional screenshot crop height, or full canvas when omitted"),
     radius: z.number().optional().describe("Optional screenshot crop radius around canvasX/canvasY, default 140 canvas pixels"),
-    forceRefresh: z.boolean().optional().describe("Force a fresh plugin snapshot, default true"),
+    forceRefresh: z.boolean().optional().describe("Force a fresh plugin snapshot, default false"),
     ...clientTargetSchema(),
 }, async ({ objective, includeDiagnostics, includeNearbyLimit, includeInventoryLimit, includePlan, maxPreviewSteps, includeScreenshot, includeImage, canvasX, canvasY, width, height, radius, forceRefresh, instanceId, playerName, port, }) => {
     try {
@@ -2903,10 +3234,10 @@ server.tool("observe_game", "Gather a read-only agent observation bundle: compac
         }
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
-        const snapshot = await getSnapshotForBase(baseURL, forceRefresh !== false);
+        const snapshot = await getSnapshotForBase(baseURL, forceRefresh === true);
         const context = buildAgentContext(baseURL, client, snapshot, runtime, {
             objective,
             includeNearbyLimit,
@@ -3027,7 +3358,7 @@ server.tool("plan_next_action", "Plan safe next MCP tool calls for the current o
         }
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
         const snapshot = await getSnapshotForBase(baseURL, true);
@@ -3108,7 +3439,7 @@ server.tool("prepare_agent_step", "Prepare the next observe-plan-act-verify step
         }
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
         const snapshot = await getSnapshotForBase(baseURL, true);
@@ -3188,7 +3519,7 @@ server.tool("validate_prepared_step", "Validate a prepared next step against the
         }
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
         const snapshot = await getSnapshotForBase(baseURL, true);
@@ -3232,6 +3563,10 @@ server.tool("validate_prepared_step", "Validate a prepared next step against the
         return { content: [{ type: "text", text: errorText("validating prepared step", e) }] };
     }
 });
+/**
+ * @deprecated Old LLM-in-the-loop helper. Keep for compatibility only.
+ * System 2 must use compact perception/knowledge tools and load_policy instead.
+ */
 server.tool("run_agent_cycle", "Run one safe observe-plan-validate cycle for an objective without executing the chosen action. This is the control-loop primitive to call before any real play step.", {
     objective: z.string().describe("Current gameplay objective, for example 'chop 5 normal trees' or 'deposit logs in bank'"),
     stepChoice: z.enum(["firstAction", "nextStep"]).optional().describe("Which prepared step to validate. Defaults to firstAction when available."),
@@ -3302,7 +3637,7 @@ server.tool("run_agent_cycle", "Run one safe observe-plan-validate cycle for an 
         }
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
         const snapshot = await getSnapshotForBase(baseURL, true);
@@ -3376,6 +3711,10 @@ server.tool("run_agent_cycle", "Run one safe observe-plan-validate cycle for an 
         return { content: [{ type: "text", text: errorText("running agent cycle", e) }] };
     }
 });
+/**
+ * @deprecated Old LLM-in-the-loop execution helper. Keep for compatibility only.
+ * System 2 must not call this tool; real autonomy flows through load_policy.
+ */
 server.tool("execute_agent_step", "Validate and optionally execute exactly one prepared gameplay step. Defaults to dry-run; real execution requires confirmExecution='EXECUTE_ONE_STEP'.", {
     objective: z.string().optional().describe("Objective to prepare from when step is omitted, for example 'chop 5 normal trees'"),
     step: z.any().optional().describe("A step object from prepare_agent_step.package.firstAction/nextStep or plan_next_action.plan.steps[]"),
@@ -3447,7 +3786,7 @@ server.tool("execute_agent_step", "Validate and optionally execute exactly one p
         };
         const baseURL = baseUrlForClient(client);
         const runtime = includeDiagnostics === false
-            ? { status: "not_checked" }
+            ? lightweightRuntimeStatus(client)
             : await diagnoseClientRuntime(client);
         const pathfindingStatus = await getPathfindingStatusForBase(baseURL);
         const snapshot = await getSnapshotForBase(baseURL, true);
@@ -3612,7 +3951,7 @@ server.tool("execute_agent_step", "Validate and optionally execute exactly one p
         return { content: [{ type: "text", text: errorText("executing agent step", e) }] };
     }
 });
-server.tool("agent_start_goal", "Create an in-memory agent goal session. Use agent_run_goal for the bounded Phase 2 autonomy loop.", {
+server.tool("agent_start_goal", "Create an in-memory agent goal session. Twin-Brain autonomy should prefer load_policy/reflex_status; this session surface remains for compatibility.", {
     goal: z.string().describe("High-level gameplay goal to track"),
     executionMode: z.enum(["dry_run", "execute"]).optional().describe("Default execution mode for this session, default dry_run"),
     instanceId: z.string().optional(),
@@ -4128,7 +4467,7 @@ server.registerResource("semantic-interface", "osrs://semantic/interface", {
 }, async () => {
     const uri = "osrs://semantic/interface";
     try {
-        const semantic = await getSemanticInterfaceForTarget({}, { forceRefresh: true, maxWidgets: 150 });
+        const semantic = await getSemanticInterfaceForTarget({}, { maxWidgets: 150 });
         return resourceText(uri, {
             status: "SEMANTIC_READY",
             baseURL: semantic.baseURL,
@@ -4147,7 +4486,7 @@ server.tool("get_semantic_interface", "Read Phase 5 semantic controls inferred f
     widgetFilter: z.string().optional().describe("Optional widget text/action/id filter such as continue, quest, bank, spell, prayer"),
     maxWidgets: z.number().optional().describe("Maximum raw widgets to inspect, default 150"),
     includeHidden: z.boolean().optional().describe("Include hidden widgets, default false"),
-    forceRefresh: z.boolean().optional().describe("Force a fresh snapshot, default true"),
+    forceRefresh: z.boolean().optional().describe("Force a fresh snapshot, default false"),
     ...clientTargetSchema(),
 }, async ({ widgetFilter, maxWidgets, includeHidden, forceRefresh, instanceId, playerName, port }) => {
     try {
@@ -4249,7 +4588,7 @@ server.tool("semantic_invoke_control", `Validate or execute one semantic control
         }
         let actionResult;
         if (control.type === "dialogue_continue") {
-            await keyboard.type(Key.Space);
+            await typeHardwareInput(Key.Space, "Semantic dialogue continue requested hardware Space.");
             actionResult = { success: true, method: "keyboard_space" };
         }
         else if (control.type === "dialogue_option") {
@@ -4264,7 +4603,7 @@ server.tool("semantic_invoke_control", `Validate or execute one semantic control
                     stopReason: "Dialogue option execution supports number-key options 1-9 only in Phase 5 V1.",
                 });
             }
-            await keyboard.type(String(optionNumber));
+            await typeHardwareInput(String(optionNumber), `Semantic dialogue option requested hardware key ${optionNumber}.`);
             actionResult = { success: true, method: "keyboard_dialogue_option", optionNumber };
         }
         else if (control.widget?.packedId || (control.widget?.groupId !== undefined && control.widget?.childId !== undefined)) {
@@ -4413,10 +4752,10 @@ server.tool("complete_quest", "Phase 5 V1 quest engine entry point. Plans Tutori
         }
         if (dialogueControl.type === "dialogue_option") {
             const optionNumber = Number(dialogueControl.id.match(/dialogue\.option\.(\d+)/)?.[1]);
-            await keyboard.type(String(optionNumber));
+            await typeHardwareInput(String(optionNumber), `Quest dialogue option requested hardware key ${optionNumber}.`);
         }
         else {
-            await keyboard.type(Key.Space);
+            await typeHardwareInput(Key.Space, "Quest dialogue continue requested hardware Space.");
         }
         const after = await getSnapshotForBase(semanticResult.baseURL, true);
         return jsonTool({
@@ -4438,6 +4777,10 @@ server.tool("complete_quest", "Phase 5 V1 quest engine entry point. Plans Tutori
         return { content: [{ type: "text", text: errorText("running quest engine", e) }] };
     }
 });
+/**
+ * @deprecated Old LLM-in-the-loop goal runner. Keep for compatibility only.
+ * System 2 must issue policies to the ReflexEngine instead.
+ */
 server.tool("agent_run_goal", `Run a bounded Phase 2 observe-plan-execute-verify loop for an agent goal. Defaults to dry-run; real execution requires confirmExecution='${RUN_AUTONOMY_CONFIRMATION}'.`, {
     goal: z.string().optional().describe("High-level gameplay goal. Required unless sessionId points to an existing session."),
     sessionId: z.string().optional(),
@@ -4926,25 +5269,77 @@ server.tool("skill_train", "Train a skill through a bounded universal activity. 
         return { content: [{ type: "text", text: errorText("running skill_train", e) }] };
     }
 });
-server.tool("skill_travel", "Travel to a local-scene world tile through the safe walk action primitive. Named/global destinations arrive in Phase 6.", {
+server.tool("skill_travel", "Travel through safe System 1 primitives. Named destinations use the transport graph and execute at most one bounded movement step.", {
     destinationName: z.string().optional(),
+    from: z.string().optional().describe("Optional named transport start node for destinationName planning, for example Lumbridge Castle"),
     worldX: z.number().optional(),
     worldY: z.number().optional(),
     plane: z.number().optional(),
+    maxStepTiles: z.number().optional(),
+    waypointRadius: z.number().optional(),
     executionMode: z.enum(["dry_run", "execute"]).optional(),
+    confirmExecution: z.string().optional().describe(`Required for named destination execution: ${NAVIGATE_EXECUTE_CONFIRMATION}`),
     sessionId: z.string().optional(),
     ...clientTargetSchema(),
-}, async ({ destinationName, worldX, worldY, plane, executionMode, sessionId, instanceId, playerName, port }) => {
+}, async ({ destinationName, from, worldX, worldY, plane, maxStepTiles, waypointRadius, executionMode, confirmExecution, sessionId, instanceId, playerName, port }) => {
     try {
         await ensureAgentMemoryLoaded();
         const session = sessionId ? getAgentSession(sessionId) : undefined;
+        const mode = executionMode ?? session?.executionMode ?? "dry_run";
+        if (destinationName) {
+            const navigation = await navigateToDestinationAction({
+                destination: destinationName,
+                from,
+                executionMode: mode,
+                confirmExecution,
+                maxStepTiles,
+                waypointRadius,
+                targetClient: { instanceId, playerName, port },
+            });
+            const selectedStep = {
+                tool: "navigate_to",
+                arguments: {
+                    destination: destinationName,
+                    from,
+                    executionMode: mode,
+                    maxStepTiles,
+                    waypointRadius,
+                },
+            };
+            const result = {
+                status: navigation.executed
+                    ? "EXECUTED"
+                    : navigation.status === "ROUTE_PLANNED" && navigation.willExecute === false && mode === "execute"
+                        ? "EXECUTION_BLOCKED"
+                        : navigation.status === "ROUTE_PLANNED" && mode !== "execute"
+                            ? "DRY_RUN_READY"
+                            : navigation.status,
+                willExecute: navigation.willExecute,
+                executed: navigation.executed,
+                selectedStep,
+                verification: {
+                    verified: navigation.executed === true || mode !== "execute",
+                    dryRun: mode !== "execute",
+                    routeStatus: navigation.status,
+                },
+                stopReason: navigation.stopReason,
+                navigation,
+                destinationName,
+                session: publicAgentSession(session),
+            };
+            if (session && navigation.executed) {
+                session.stepCount += 1;
+            }
+            recordAgentEvent(session, navigation.executed ? "skill_travel:execute" : "skill_travel:dry_run", result);
+            return jsonTool(result);
+        }
         if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
-            return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "Phase 1 skill_travel requires worldX/worldY. Named/global destinations arrive in Phase 6.", destinationName, session: publicAgentSession(session) });
+            return jsonTool({ status: "UNSUPPORTED_ACTIVITY", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: "skill_travel requires either destinationName or worldX/worldY.", destinationName, session: publicAgentSession(session) });
         }
         const result = await runActivityStep({
             label: "skill_travel",
             step: { tool: "invoke_walk_action", arguments: { worldX, worldY, plane } },
-            executionMode: executionMode ?? session?.executionMode ?? "dry_run",
+            executionMode: mode,
             session,
             target: { instanceId, playerName, port },
             verification: { startedAt: Date.now(), expectedWorldX: worldX, expectedWorldY: worldY, expectedPlane: plane, locationRadius: 1, timeoutMs: 10000, pollMs: 500 },
@@ -4955,23 +5350,25 @@ server.tool("skill_travel", "Travel to a local-scene world tile through the safe
         return { content: [{ type: "text", text: errorText("running skill_travel", e) }] };
     }
 });
-server.tool("skill_manage_inventory", "Phase 1 inventory abstraction. Supports bounded item dropping through the safe agent step primitive; banking/eating policies arrive later.", {
-    action: z.enum(["deposit_all", "keep_only", "use_on_target", "eat_when_low", "drop"]),
+server.tool("skill_manage_inventory", "Inventory abstraction for bounded item drop/deposit/withdraw steps through safe System 1 primitives.", {
+    action: z.enum(["deposit_all", "deposit", "withdraw", "keep_only", "use_on_target", "eat_when_low", "drop"]),
     itemName: z.string().optional(),
     itemId: z.number().optional(),
     slot: z.number().optional(),
     quantity: z.number().optional(),
+    bankQuantity: z.union([z.string(), z.number()]).optional().describe("Bank action quantity, for example All, 1, 5, 10, or X"),
     executionMode: z.enum(["dry_run", "execute"]).optional(),
     sessionId: z.string().optional(),
     ...clientTargetSchema(),
-}, async ({ action, itemName, itemId, slot, quantity, executionMode, sessionId, instanceId, playerName, port }) => {
+}, async ({ action, itemName, itemId, slot, quantity, bankQuantity, executionMode, sessionId, instanceId, playerName, port }) => {
     try {
         await ensureAgentMemoryLoaded();
         const session = sessionId ? getAgentSession(sessionId) : undefined;
         if (session?.status === "stopped" || session?.status === "paused") {
             return jsonTool({ status: "SESSION_NOT_RUNNING", willExecute: false, executed: false, selectedStep: null, verification: { verified: false }, stopReason: session.stopReason ?? `Session is ${session.status}.`, session: publicAgentSession(session) });
         }
-        if (action !== "drop") {
+        const isBankAction = action === "deposit_all" || action === "deposit" || action === "withdraw";
+        if (action !== "drop" && !isBankAction) {
             return jsonTool({
                 status: "UNSUPPORTED_ACTIVITY",
                 willExecute: executionMode === "execute",
@@ -4982,11 +5379,11 @@ server.tool("skill_manage_inventory", "Phase 1 inventory abstraction. Supports b
                 itemName,
                 itemId,
                 quantity,
-                stopReason: "Phase 1 skill_manage_inventory currently implements drop only. Deposit/eat/use policies are exposed after live verification is hardened.",
+                stopReason: "skill_manage_inventory currently supports drop, deposit, deposit_all for a named item, and withdraw. Eat/use policies are exposed through other System 1 tools until hardened here.",
                 session: publicAgentSession(session),
             });
         }
-        if (!itemName && !Number.isFinite(itemId) && !Number.isFinite(slot)) {
+        if (action === "drop" && !itemName && !Number.isFinite(itemId) && !Number.isFinite(slot)) {
             return jsonTool({
                 status: "EXECUTION_BLOCKED",
                 willExecute: false,
@@ -4998,16 +5395,37 @@ server.tool("skill_manage_inventory", "Phase 1 inventory abstraction. Supports b
                 session: publicAgentSession(session),
             });
         }
+        if (isBankAction && !itemName && !Number.isFinite(itemId)) {
+            return jsonTool({
+                status: "EXECUTION_BLOCKED",
+                willExecute: false,
+                executed: false,
+                selectedStep: null,
+                verification: { verified: false, reason: "Bank inventory management requires itemName or itemId." },
+                action,
+                stopReason: "Bank inventory management requires itemName or itemId.",
+                session: publicAgentSession(session),
+            });
+        }
         const resolved = await resolveActivityClient({ instanceId, playerName, port });
         if (resolved.status !== "READY") {
             return jsonTool({ status: resolved.status, willExecute: false, executed: false, selectedStep: null, verification: { verified: false, reason: resolved.reason }, stopReason: resolved.reason, clients: resolved.clients, session: publicAgentSession(session) });
         }
         const snapshot = await getSnapshotForBase(resolved.baseURL, true);
         const currentQuantity = inventoryQuantity(snapshot, itemName, itemId);
-        const selectedStep = {
-            tool: "drop_inventory_item",
-            arguments: { name: itemName, id: itemId, slot },
-        };
+        const selectedStep = isBankAction
+            ? {
+                tool: action === "withdraw" ? "withdraw_bank_item" : "deposit_inventory_item",
+                arguments: {
+                    itemName,
+                    itemId,
+                    quantity: String(action === "deposit_all" ? "All" : bankQuantity ?? quantity ?? (action === "withdraw" ? 1 : "All")),
+                },
+            }
+            : {
+                tool: "drop_inventory_item",
+                arguments: { name: itemName, id: itemId, slot },
+            };
         const result = await runActivityStep({
             label: "skill_manage_inventory",
             step: selectedStep,
@@ -5129,6 +5547,11 @@ server.tool("skill_combat", "Fight a visible NPC through bounded Attack interact
             target,
             style,
             killCount: killCount ?? 1,
+            lootIntent: loot ? {
+                enabled: true,
+                itemName: lootName ?? "Bones",
+                selectedStep: { tool: "interact_with", arguments: { entityType: "ground_item", name: lootName ?? "Bones", option: "Take", nearestToPlayer: true } },
+            } : { enabled: false },
             attempts,
             selectedStep: attempts.at(-1)?.selectedStep ?? null,
             verification: attempts.at(-1)?.verification ?? { verified: false },
@@ -5729,8 +6152,9 @@ server.tool("navigate_to", `Plan a System 1 route to a named destination and opt
     executionMode: z.enum(["dry_run", "execute"]).optional().describe("dry_run plans only; execute performs at most one bounded movement step"),
     confirmExecution: z.string().optional().describe(`Required for executionMode=execute: ${NAVIGATE_EXECUTE_CONFIRMATION}`),
     maxStepTiles: z.number().optional().describe("Maximum tiles for the one movement step, default 18"),
+    waypointRadius: z.number().optional().describe("Consider a transport waypoint reached when within this many tiles, default 8"),
     ...clientTargetSchema(),
-}, async ({ destination, from, executionMode, confirmExecution, maxStepTiles, instanceId, playerName, port }) => {
+}, async ({ destination, from, executionMode, confirmExecution, maxStepTiles, waypointRadius, instanceId, playerName, port }) => {
     try {
         const result = await navigateToDestinationAction({
             destination,
@@ -5738,6 +6162,7 @@ server.tool("navigate_to", `Plan a System 1 route to a named destination and opt
             executionMode,
             confirmExecution,
             maxStepTiles,
+            waypointRadius,
             targetClient: { instanceId, playerName, port },
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -6943,7 +7368,7 @@ server.tool("handle_dialogue", "Continue dialogue and optionally select a dialog
             }
             if (type === "NPC_DIALOGUE" || type === "PLAYER_DIALOGUE") {
                 if (preferKeyboardContinue ?? true) {
-                    await keyboard.type(Key.Space);
+                    await typeHardwareInput(Key.Space, "Dialogue continue requested hardware Space.");
                     steps.push({ action: "continue", method: "keyboard_space", dialogueType: type, text: cleanUiText(dialogue.text) });
                 }
                 else if (Number.isFinite(dialogue.continueScreenX) && Number.isFinite(dialogue.continueScreenY)) {
@@ -6983,7 +7408,7 @@ server.tool("handle_dialogue", "Continue dialogue and optionally select a dialog
                     steps.push({ action: "select_option", method: "click_option_widget", index: selectedIndex + 1, text: cleanUiText(selected.text) });
                 }
                 else if (selectedIndex >= 0 && selectedIndex <= 8) {
-                    await keyboard.type([Key.Num1, Key.Num2, Key.Num3, Key.Num4, Key.Num5, Key.Num6, Key.Num7, Key.Num8, Key.Num9][selectedIndex]);
+                    await typeHardwareInput([Key.Num1, Key.Num2, Key.Num3, Key.Num4, Key.Num5, Key.Num6, Key.Num7, Key.Num8, Key.Num9][selectedIndex], `Dialogue option requested hardware number key ${selectedIndex + 1}.`);
                     steps.push({ action: "select_option", method: "keyboard_number", index: selectedIndex + 1, text: cleanUiText(selected.text) });
                 }
                 else {
@@ -7407,6 +7832,61 @@ server.tool("hover_ground_item", "Refresh the newest ground-item snapshot, find 
     }
 });
 // --- Action Tools (OS-Level) ---
+server.tool("request_os_control", "Request temporary permission to use the hardware mouse/keyboard. Standard gameplay tools should prefer in-client RuneLite actions and call this only for unmapped UI emergencies.", {
+    reason: z.string().describe("Why OS-level mouse/keyboard control is needed"),
+    timeoutMs: z.number().optional().describe("Approval timeout in milliseconds, default 60000"),
+}, async ({ reason, timeoutMs }) => {
+    const safeTimeout = Math.max(1000, Math.min(timeoutMs ?? 60000, 120000));
+    const policyPaused = reflexEngine.pause("OS_CONTROL_REQUESTED");
+    const request = {
+        reason,
+        timestamp: Date.now(),
+        policy_paused: policyPaused,
+        approvalCommand: "npm run approve-os-control",
+        requestFile: osControlRequestPath,
+        timeoutMs: safeTimeout,
+    };
+    try {
+        await mkdir(workDir, { recursive: true });
+        await writeFile(osControlRequestPath, JSON.stringify(request, null, 2), "utf8");
+        await notifyOsControlRequest(reason);
+        const approval = await waitForOsControlApproval(safeTimeout);
+        if (!approval.approved) {
+            reflexEngine.stop("OS_CONTROL_REQUEST_TIMEOUT");
+            return {
+                content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: "OS_CONTROL_TIMEOUT",
+                            executed: false,
+                            willExecute: false,
+                            request,
+                            approval,
+                            stopReason: "OS_CONTROL_REQUEST_TIMEOUT",
+                            next: "System 2 should re-plan using in-client tools or ask the user before trying OS control again.",
+                        }, null, 2)
+                    }]
+            };
+        }
+        return {
+            content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        status: "OS_CONTROL_APPROVED",
+                        executed: false,
+                        willExecute: true,
+                        request,
+                        approval,
+                        approvedForMs: safeTimeout,
+                        expiresAt: osControlApprovedUntil,
+                    }, null, 2)
+                }]
+        };
+    }
+    catch (e) {
+        return { content: [{ type: "text", text: `Error requesting OS control: ${e.message}` }] };
+    }
+});
 server.tool("get_input_profile", "Inspect OS fallback input settings. In-client menu actions are still preferred over OS mouse input.", {}, async () => ({
     content: [{
             type: "text",
@@ -7414,7 +7894,11 @@ server.tool("get_input_profile", "Inspect OS fallback input settings. In-client 
                 humanizeMouse: HUMANIZE_MOUSE,
                 mouseSpeed: mouse.config.mouseSpeed,
                 mouseDelayMs: { min: MOUSE_MIN_DELAY_MS, max: MOUSE_MAX_DELAY_MS },
-                note: "These settings apply only to nut-js OS fallback mouse movement; interact_with and invoke_* use in-client actions when possible.",
+                osControlRequestPath,
+                osControlPending: await fileExists(osControlRequestPath),
+                osControlApprovedUntil,
+                osControlApproved: Date.now() < osControlApprovedUntil,
+                note: "Hardware input is blocked by default for gameplay. Use request_os_control, then approve with npm run approve-os-control, before OS mouse/keyboard tools can run.",
             }, null, 2)
         }]
 }));
@@ -7438,6 +7922,7 @@ server.tool("move_mouse_and_click", "Moves the hardware mouse to an absolute des
     rightClick: z.boolean().optional().describe("Whether to right click instead of left click")
 }, async ({ x, y, rightClick }) => {
     try {
+        await requireOsControl(`Hardware mouse click requested at ${Math.round(x)}, ${Math.round(y)}.`);
         await moveMouseHumanized(x, y);
         await settleBeforeClick();
         if (rightClick) {
@@ -7459,9 +7944,9 @@ server.tool("type_text", "Types text using the hardware keyboard. Useful for nam
     pressEnter: z.boolean().optional().describe("Whether to press Enter after typing")
 }, async ({ text, pressEnter }) => {
     try {
-        await keyboard.type(text);
+        await typeHardwareInput(text, "Hardware keyboard text input requested.");
         if (pressEnter) {
-            await keyboard.type(Key.Enter);
+            await typeHardwareInput(Key.Enter, "Hardware Enter key requested after text input.");
         }
         return {
             content: [{ type: "text", text: `Successfully typed: "${text}"` }]
@@ -7520,7 +8005,7 @@ server.tool("press_key", "Press a specific key on the keyboard, like 'Space' (of
         if (k === undefined) {
             return { content: [{ type: "text", text: `Unsupported key: ${keyName}` }] };
         }
-        await keyboard.type(k);
+        await typeHardwareInput(k, `Hardware key press requested: ${keyName}.`);
         return {
             content: [{ type: "text", text: `Successfully pressed key: ${keyName}` }]
         };

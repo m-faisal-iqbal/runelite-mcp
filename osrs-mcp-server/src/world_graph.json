@@ -11,6 +11,14 @@
       "tags": ["lumbridge", "castle", "starter"]
     },
     {
+      "id": "lumbridge_castle_bank",
+      "name": "Lumbridge Castle Bank",
+      "worldX": 3208,
+      "worldY": 3220,
+      "plane": 2,
+      "tags": ["lumbridge", "lumbridge bank", "castle", "bank", "top floor", "upstairs"]
+    },
+    {
       "id": "lumbridge_trees",
       "name": "Lumbridge Trees",
       "worldX": 3207,
@@ -33,6 +41,14 @@
       "worldY": 3298,
       "plane": 0,
       "tags": ["lumbridge", "combat", "chickens"]
+    },
+    {
+      "id": "wizard_tower",
+      "name": "Wizards' Tower",
+      "worldX": 3109,
+      "worldY": 3164,
+      "plane": 0,
+      "tags": ["wizard tower", "wizards tower", "runes", "quest"]
     },
     {
       "id": "draynor_village",
@@ -59,12 +75,52 @@
       "tags": ["draynor", "woodcutting", "willow", "bank"]
     },
     {
+      "id": "draynor_manor",
+      "name": "Draynor Manor",
+      "worldX": 3109,
+      "worldY": 3351,
+      "plane": 0,
+      "tags": ["draynor", "manor", "quest"]
+    },
+    {
+      "id": "barbarian_village",
+      "name": "Barbarian Village",
+      "worldX": 3082,
+      "worldY": 3420,
+      "plane": 0,
+      "tags": ["barbarian village", "stronghold", "fishing", "fly fishing"]
+    },
+    {
+      "id": "edgeville_bank",
+      "name": "Edgeville Bank",
+      "worldX": 3094,
+      "worldY": 3492,
+      "plane": 0,
+      "tags": ["edgeville", "bank", "wilderness edge"]
+    },
+    {
       "id": "varrock_center",
       "name": "Varrock Center",
       "worldX": 3210,
       "worldY": 3424,
       "plane": 0,
       "tags": ["varrock", "city"]
+    },
+    {
+      "id": "varrock_east_bank",
+      "name": "Varrock East Bank",
+      "worldX": 3253,
+      "worldY": 3420,
+      "plane": 0,
+      "tags": ["varrock", "bank", "east"]
+    },
+    {
+      "id": "varrock_east_mine",
+      "name": "Varrock East Mine",
+      "worldX": 3286,
+      "worldY": 3365,
+      "plane": 0,
+      "tags": ["varrock", "mining", "tin", "copper", "iron"]
     },
     {
       "id": "varrock_west_bank",
@@ -91,27 +147,231 @@
       "tags": ["varrock", "grand exchange", "ge", "bank", "trade"]
     },
     {
+      "id": "falador_center",
+      "name": "Falador Center",
+      "worldX": 2965,
+      "worldY": 3378,
+      "plane": 0,
+      "tags": ["falador", "city"]
+    },
+    {
+      "id": "falador_east_bank",
+      "name": "Falador East Bank",
+      "worldX": 3012,
+      "worldY": 3355,
+      "plane": 0,
+      "tags": ["falador", "bank", "east"]
+    },
+    {
+      "id": "falador_west_bank",
+      "name": "Falador West Bank",
+      "worldX": 2946,
+      "worldY": 3368,
+      "plane": 0,
+      "tags": ["falador", "bank", "west"]
+    },
+    {
+      "id": "rimmington",
+      "name": "Rimmington",
+      "worldX": 2957,
+      "worldY": 3214,
+      "plane": 0,
+      "tags": ["rimmington", "crafting", "mining"]
+    },
+    {
+      "id": "port_sarim",
+      "name": "Port Sarim",
+      "worldX": 3028,
+      "worldY": 3217,
+      "plane": 0,
+      "tags": ["port sarim", "port", "ships"]
+    },
+    {
       "id": "al_kharid_bank",
       "name": "Al Kharid Bank",
       "worldX": 3270,
       "worldY": 3167,
       "plane": 0,
       "tags": ["al kharid", "bank"]
+    },
+    {
+      "id": "al_kharid_mine",
+      "name": "Al Kharid Mine",
+      "worldX": 3298,
+      "worldY": 3299,
+      "plane": 0,
+      "tags": ["al kharid", "mining", "tin", "copper", "iron", "coal", "gold", "silver"]
+    },
+    {
+      "id": "duel_arena_gate",
+      "name": "Al Kharid North Gate",
+      "worldX": 3315,
+      "worldY": 3235,
+      "plane": 0,
+      "tags": ["al kharid", "north gate", "desert route"]
+    },
+    {
+      "id": "varrock_south_gate",
+      "name": "Varrock South Gate",
+      "worldX": 3211,
+      "worldY": 3380,
+      "plane": 0,
+      "tags": ["varrock", "south gate", "road"]
+    },
+    {
+      "id": "varrock_southeast_mine",
+      "name": "Varrock Southeast Mine",
+      "worldX": 3286,
+      "worldY": 3365,
+      "plane": 0,
+      "tags": ["varrock", "southeast mine", "mining", "tin", "copper", "iron"]
+    },
+    {
+      "id": "varrock_museum",
+      "name": "Varrock Museum",
+      "worldX": 3255,
+      "worldY": 3444,
+      "plane": 0,
+      "tags": ["varrock", "museum", "quest", "knowledge"]
+    },
+    {
+      "id": "edgeville_yews",
+      "name": "Edgeville Yews",
+      "worldX": 3087,
+      "worldY": 3471,
+      "plane": 0,
+      "tags": ["edgeville", "woodcutting", "yew", "bank"]
+    },
+    {
+      "id": "edgeville_willows",
+      "name": "Edgeville Willows",
+      "worldX": 3097,
+      "worldY": 3481,
+      "plane": 0,
+      "tags": ["edgeville", "woodcutting", "willow", "willows", "bank"]
+    },
+    {
+      "id": "barbarian_fishing",
+      "name": "Barbarian Village Fishing",
+      "worldX": 3105,
+      "worldY": 3433,
+      "plane": 0,
+      "tags": ["barbarian village", "fishing", "trout", "salmon", "fly fishing"]
+    },
+    {
+      "id": "falador_mine",
+      "name": "Falador Mine",
+      "worldX": 3059,
+      "worldY": 3375,
+      "plane": 0,
+      "tags": ["falador", "dwarven mine", "mining", "coal", "iron", "tin", "copper"]
+    },
+    {
+      "id": "falador_yews",
+      "name": "Falador Yews",
+      "worldX": 2998,
+      "worldY": 3312,
+      "plane": 0,
+      "tags": ["falador", "woodcutting", "yew"]
+    },
+    {
+      "id": "rimmington_mine",
+      "name": "Rimmington Mine",
+      "worldX": 2977,
+      "worldY": 3239,
+      "plane": 0,
+      "tags": ["rimmington", "mining", "clay", "tin", "copper", "iron", "gold"]
+    },
+    {
+      "id": "port_sarim_fishing",
+      "name": "Port Sarim Fishing",
+      "worldX": 3022,
+      "worldY": 3229,
+      "plane": 0,
+      "tags": ["port sarim", "fishing", "net", "bait", "shrimp", "sardine"]
+    },
+    {
+      "id": "karamja_dock",
+      "name": "Karamja Dock",
+      "worldX": 2956,
+      "worldY": 3146,
+      "plane": 0,
+      "tags": ["karamja", "dock", "ship", "banana", "fishing"]
+    },
+    {
+      "id": "karamja_fishing",
+      "name": "Karamja Fishing",
+      "worldX": 2924,
+      "worldY": 3179,
+      "plane": 0,
+      "tags": ["karamja", "fishing", "lobster", "tuna", "swordfish"]
+    },
+    {
+      "id": "draynor_fishing",
+      "name": "Draynor Fishing",
+      "worldX": 3085,
+      "worldY": 3230,
+      "plane": 0,
+      "tags": ["draynor", "fishing", "net", "bait", "shrimp"]
+    },
+    {
+      "id": "lumbridge_swamp_mine",
+      "name": "Lumbridge Swamp Mine",
+      "worldX": 3227,
+      "worldY": 3148,
+      "plane": 0,
+      "tags": ["lumbridge", "swamp", "mining", "coal", "mithril", "adamant"]
     }
   ],
   "edges": [
-    { "from": "lumbridge_castle", "to": "lumbridge_trees", "mode": "walk", "cost": 18 },
-    { "from": "lumbridge_trees", "to": "lumbridge_cows", "mode": "walk", "cost": 58 },
-    { "from": "lumbridge_cows", "to": "lumbridge_chickens", "mode": "walk", "cost": 39 },
-    { "from": "lumbridge_castle", "to": "draynor_village", "mode": "walk", "cost": 132 },
-    { "from": "draynor_village", "to": "draynor_bank", "mode": "walk", "cost": 3 },
-    { "from": "draynor_bank", "to": "draynor_willows", "mode": "walk", "cost": 11 },
-    { "from": "lumbridge_castle", "to": "al_kharid_bank", "mode": "walk", "cost": 96, "requirements": ["10 gp gate toll or quest/unlocked access if using gate"] },
-    { "from": "lumbridge_cows", "to": "varrock_center", "mode": "walk", "cost": 170 },
-    { "from": "draynor_village", "to": "varrock_west_bank", "mode": "walk", "cost": 185 },
-    { "from": "varrock_center", "to": "varrock_west_bank", "mode": "walk", "cost": 29 },
-    { "from": "varrock_west_bank", "to": "varrock_west_trees", "mode": "walk", "cost": 24 },
-    { "from": "varrock_west_bank", "to": "grand_exchange", "mode": "walk", "cost": 61 },
-    { "from": "varrock_center", "to": "grand_exchange", "mode": "walk", "cost": 96 }
+    { "from": "lumbridge_castle", "to": "lumbridge_castle_bank", "mode": "stairs", "cost": 14, "f2p": true, "risk": "low", "requirements": ["climb two staircases to the top floor"], "action": "use Lumbridge Castle stairs to reach the top-floor bank" },
+    { "from": "lumbridge_castle", "to": "lumbridge_trees", "mode": "walk", "cost": 18, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_trees", "to": "lumbridge_cows", "mode": "walk", "cost": 58, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_cows", "to": "lumbridge_chickens", "mode": "walk", "cost": 39, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_castle", "to": "wizard_tower", "mode": "walk", "cost": 132, "f2p": true, "risk": "low" },
+    { "from": "wizard_tower", "to": "draynor_village", "mode": "walk", "cost": 82, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_castle", "to": "draynor_village", "mode": "walk", "cost": 132, "f2p": true, "risk": "low" },
+    { "from": "draynor_village", "to": "draynor_bank", "mode": "walk", "cost": 3, "f2p": true, "risk": "low" },
+    { "from": "draynor_bank", "to": "draynor_willows", "mode": "walk", "cost": 11, "f2p": true, "risk": "low" },
+    { "from": "draynor_willows", "to": "draynor_fishing", "mode": "walk", "cost": 5, "f2p": true, "risk": "low" },
+    { "from": "draynor_village", "to": "draynor_manor", "mode": "walk", "cost": 107, "f2p": true, "risk": "medium", "action": "avoid aggressive manor-area NPCs if low level" },
+    { "from": "draynor_manor", "to": "barbarian_village", "mode": "walk", "cost": 85, "f2p": true, "risk": "low" },
+    { "from": "barbarian_village", "to": "barbarian_fishing", "mode": "walk", "cost": 23, "f2p": true, "risk": "low" },
+    { "from": "barbarian_village", "to": "edgeville_bank", "mode": "walk", "cost": 73, "f2p": true, "risk": "medium", "action": "avoid entering Wilderness unless explicitly requested" },
+    { "from": "edgeville_bank", "to": "edgeville_yews", "mode": "walk", "cost": 22, "f2p": true, "risk": "medium", "action": "stay south of Wilderness ditch" },
+    { "from": "edgeville_bank", "to": "edgeville_willows", "mode": "walk", "cost": 15, "f2p": true, "risk": "medium", "action": "stay south of Wilderness ditch" },
+    { "from": "grand_exchange", "to": "edgeville_bank", "mode": "walk", "cost": 55, "f2p": true, "risk": "low" },
+    { "from": "barbarian_village", "to": "varrock_west_bank", "mode": "walk", "cost": 103, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_castle", "to": "al_kharid_bank", "mode": "walk", "cost": 96, "f2p": true, "risk": "low", "requirements": ["10 gp gate toll or quest/unlocked access if using gate"], "action": "open/pay toll at Al Kharid gate if route uses gate" },
+    { "from": "al_kharid_bank", "to": "al_kharid_mine", "mode": "walk", "cost": 132, "f2p": true, "risk": "medium", "action": "watch for aggressive scorpions at low combat level" },
+    { "from": "al_kharid_bank", "to": "duel_arena_gate", "mode": "walk", "cost": 72, "f2p": true, "risk": "low" },
+    { "from": "duel_arena_gate", "to": "varrock_south_gate", "mode": "walk", "cost": 145, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_cows", "to": "varrock_center", "mode": "walk", "cost": 170, "f2p": true, "risk": "low" },
+    { "from": "draynor_village", "to": "varrock_west_bank", "mode": "walk", "cost": 185, "f2p": true, "risk": "low" },
+    { "from": "varrock_south_gate", "to": "varrock_center", "mode": "walk", "cost": 45, "f2p": true, "risk": "low" },
+    { "from": "varrock_center", "to": "varrock_west_bank", "mode": "walk", "cost": 29, "f2p": true, "risk": "low" },
+    { "from": "varrock_center", "to": "varrock_east_bank", "mode": "walk", "cost": 44, "f2p": true, "risk": "low" },
+    { "from": "varrock_east_bank", "to": "varrock_east_mine", "mode": "walk", "cost": 62, "f2p": true, "risk": "low" },
+    { "from": "varrock_east_mine", "to": "varrock_southeast_mine", "mode": "walk", "cost": 8, "f2p": true, "risk": "low" },
+    { "from": "varrock_east_bank", "to": "varrock_museum", "mode": "walk", "cost": 45, "f2p": true, "risk": "low" },
+    { "from": "varrock_west_bank", "to": "varrock_west_trees", "mode": "walk", "cost": 24, "f2p": true, "risk": "low" },
+    { "from": "varrock_west_bank", "to": "grand_exchange", "mode": "walk", "cost": 61, "f2p": true, "risk": "low" },
+    { "from": "varrock_center", "to": "grand_exchange", "mode": "walk", "cost": 96, "f2p": true, "risk": "low" },
+    { "from": "draynor_village", "to": "falador_east_bank", "mode": "walk", "cost": 135, "f2p": true, "risk": "low" },
+    { "from": "falador_east_bank", "to": "falador_center", "mode": "walk", "cost": 52, "f2p": true, "risk": "low" },
+    { "from": "falador_center", "to": "falador_west_bank", "mode": "walk", "cost": 22, "f2p": true, "risk": "low" },
+    { "from": "falador_east_bank", "to": "falador_mine", "mode": "walk", "cost": 48, "f2p": true, "risk": "low", "action": "use mine entrance/ladders if routing underground later" },
+    { "from": "falador_east_bank", "to": "falador_yews", "mode": "walk", "cost": 65, "f2p": true, "risk": "low" },
+    { "from": "falador_east_bank", "to": "barbarian_village", "mode": "walk", "cost": 106, "f2p": true, "risk": "low" },
+    { "from": "falador_east_bank", "to": "port_sarim", "mode": "walk", "cost": 141, "f2p": true, "risk": "low" },
+    { "from": "port_sarim", "to": "port_sarim_fishing", "mode": "walk", "cost": 12, "f2p": true, "risk": "low" },
+    { "from": "port_sarim", "to": "rimmington", "mode": "walk", "cost": 71, "f2p": true, "risk": "low" },
+    { "from": "rimmington", "to": "rimmington_mine", "mode": "walk", "cost": 24, "f2p": true, "risk": "low" },
+    { "from": "rimmington", "to": "falador_west_bank", "mode": "walk", "cost": 154, "f2p": true, "risk": "low" },
+    { "from": "port_sarim", "to": "draynor_village", "mode": "walk", "cost": 67, "f2p": true, "risk": "low" },
+    { "from": "port_sarim", "to": "karamja_dock", "mode": "ship", "cost": 55, "f2p": true, "risk": "low", "requirements": ["30 gp ship fare"], "action": "talk-to/pay Seaman at Port Sarim for Karamja ship" },
+    { "from": "karamja_dock", "to": "karamja_fishing", "mode": "walk", "cost": 44, "f2p": true, "risk": "low" },
+    { "from": "lumbridge_castle", "to": "lumbridge_swamp_mine", "mode": "walk", "cost": 70, "f2p": true, "risk": "medium", "action": "avoid swamp monsters if low level" },
+    { "from": "lumbridge_swamp_mine", "to": "al_kharid_bank", "mode": "walk", "cost": 92, "f2p": true, "risk": "medium" }
   ]
 }

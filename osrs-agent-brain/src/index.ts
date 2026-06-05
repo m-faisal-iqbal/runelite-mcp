@@ -1,4 +1,5 @@
 import { getBrainConfig } from "./config.js";
+import { runBrainWithResponses } from "./brain.js";
 import { inspectSystem1 } from "./mcp-client.js";
 import { draftStrategistPolicy, issueSystem1Policy } from "./strategist.js";
 import { STRATEGIST_SYSTEM_PROMPT } from "./system-prompt.js";
@@ -29,9 +30,24 @@ async function main() {
 
   const goal = argValue("--goal");
   if (goal) {
+    if (args.has("--responses-brain") || args.has("--use-qwen")) {
+      const result = await runBrainWithResponses({
+        goal,
+        live: args.has("--live"),
+        target: {
+          port: argValue("--port") ? Number(argValue("--port")) : undefined,
+          instanceId: argValue("--instance-id"),
+          playerName: argValue("--player-name"),
+        },
+        maxToolRounds: argValue("--max-tool-rounds") ? Number(argValue("--max-tool-rounds")) : undefined,
+      }, config);
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
     const draft = await draftStrategistPolicy({
       goal,
-      useQwen: args.has("--use-qwen"),
+      useQwen: false,
       live: args.has("--live"),
       port: argValue("--port") ? Number(argValue("--port")) : undefined,
       instanceId: argValue("--instance-id"),
@@ -59,8 +75,11 @@ async function main() {
     role: "System 2 Strategist",
     mcpServerPath: config.mcpServerPath,
     qwenConfigured: Boolean(config.qwenApiKey),
+    qwenApiKeySource: config.qwenApiKeySource,
+    qwenBaseUrl: config.qwenBaseUrl,
+    qwenModel: config.qwenModel,
     tavilyConfigured: Boolean(config.tavilyApiKey),
-    next: "Run npm run smoke:mcp, pass --print-system-prompt, or use --goal \"chop 5 logs\"."
+    next: "Run npm run smoke:mcp, pass --print-system-prompt, or use --goal \"chop 5 logs\". Add --responses-brain to invoke Qwen function tools."
   }, null, 2));
 }
 

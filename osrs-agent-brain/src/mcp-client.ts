@@ -6,6 +6,7 @@ import { getBrainConfig } from "./config.js";
 
 export type BrainMcpConnection = {
   client: Client;
+  enableSystem1Logs: () => void;
   close: () => Promise<void>;
 };
 
@@ -29,8 +30,35 @@ export async function connectToSystem1(config: BrainConfig = getBrainConfig()): 
       OSRS_MCP_CLIENT: "osrs-agent-brain"
     }
   });
-  transport.stderr?.on("data", () => {
-    // Keep smoke output machine-readable; stderr is still available by changing this handler during debugging.
+  let showSystem1Logs = true;
+
+  transport.stderr?.on("data", (chunk: Buffer) => {
+    if (showSystem1Logs) {
+      const text = chunk.toString();
+      // Pretty-print Reflex Engine log lines to stdout so they interleave visibly
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+        if (line.startsWith("[Reflex Engine]")) {
+          // Reformat for clearer display
+          const formatted = line
+            .replace("[Reflex Engine] [POLICY_LOADED]", "  🟢 [S1] Policy loaded")
+            .replace("[Reflex Engine] [POLICY_STARTED]", "  ▶️  [S1] Policy started")
+            .replace("[Reflex Engine] [POLICY_COMPLETED]", "  ✅ [S1] Policy completed")
+            .replace("[Reflex Engine] [POLICY_BLOCKED]", "  🔴 [S1] Policy BLOCKED")
+            .replace("[Reflex Engine] [POLICY_STOPPED]", "  ⏹️  [S1] Policy stopped")
+            .replace("[Reflex Engine] [POLICY_PAUSED]", "  ⏸️  [S1] Policy paused")
+            .replace("[Reflex Engine] [STEP_RESULT]", "  🔧 [S1] Step result")
+            .replace("[Reflex Engine] [TICK_STALLED]", "  ⏳ [S1] Tick stalled")
+            .replace(/\[Reflex Engine\] \[TICK (\d+)\] (.+)/, "  🔄 [S1] Tick $1: $2");
+          console.log(formatted);
+        } else {
+          process.stderr.write(line + "\n");
+        }
+      }
+    }
   });
 
   await client.connect(transport);
@@ -38,6 +66,7 @@ export async function connectToSystem1(config: BrainConfig = getBrainConfig()): 
 
   return {
     client,
+    enableSystem1Logs: () => { showSystem1Logs = true; },
     close: async () => {
       if (closed) {
         return;

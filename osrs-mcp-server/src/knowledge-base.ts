@@ -652,7 +652,7 @@ function methodWithPlan(method: KnowledgeMethod, args: { currentLevel?: number; 
 
 function toolsForMethod(method: KnowledgeMethod) {
   if (method.skill === "woodcutting") {
-    return ["skill_acquire", "skill_train", "skill_manage_inventory", "agent_run_goal"];
+    return ["skill_acquire", "skill_train", "skill_manage_inventory", "load_policy"];
   }
   if (method.skill === "magic") {
     return ["memory_get_profile", "skill_gear_equip", "skill_cast_spell", "skill_combat"];
@@ -666,7 +666,7 @@ function toolsForMethod(method: KnowledgeMethod) {
   if (method.domain === "economy") {
     return ["skill_earn_gp", "skill_acquire", "skill_manage_inventory"];
   }
-  return ["observe_game", "plan_next_action", "agent_run_goal"];
+  return ["observe_game", "plan_next_action", "load_policy"];
 }
 
 export function knowledgeSummary() {

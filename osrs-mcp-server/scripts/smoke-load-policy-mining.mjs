@@ -149,7 +149,7 @@ const client = new Client({ name: "osrs-load-policy-mining-smoke", version: "1.0
 
 try {
   const identity = await fetchJson(`${baseApi}/identity`, 2500, "identity");
-  if (identity.apiVersion !== 4 || identity.supportsDirectMenuActions !== true) {
+  if (Number(identity.apiVersion) < 4 || identity.supportsDirectMenuActions !== true) {
     throw new Error(`RuneLite plugin is not current enough for load_policy mining smoke: ${JSON.stringify({
       apiVersion: identity.apiVersion,
       supportsDirectMenuActions: identity.supportsDirectMenuActions,

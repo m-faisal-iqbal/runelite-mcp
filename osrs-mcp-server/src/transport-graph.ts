@@ -19,6 +19,10 @@ export type TransportEdge = {
   mode: string;
   cost?: number;
   requirements?: string[];
+  risk?: string;
+  members?: boolean;
+  f2p?: boolean;
+  action?: string;
 };
 
 export type TransportRouteStep = {
@@ -27,11 +31,15 @@ export type TransportRouteStep = {
   worldX: number;
   worldY: number;
   plane: number;
-  edgeFromPrevious?: {
-    mode: string;
-    cost: number;
-    requirements?: string[];
-  };
+    edgeFromPrevious?: {
+      mode: string;
+      cost: number;
+      requirements?: string[];
+      risk?: string;
+      members?: boolean;
+      f2p?: boolean;
+      action?: string;
+    };
 };
 
 type TransportGraphData = {
@@ -138,6 +146,10 @@ export function planTransportRoute(args: {
         mode: edge.mode,
         cost: edge.cost ?? edgeCost(nodeById(edge.from), nodeById(edge.to)),
         requirements: edge.requirements,
+        risk: edge.risk,
+        members: edge.members,
+        f2p: edge.f2p,
+        action: edge.action,
       } : undefined,
     } satisfies TransportRouteStep;
   });
@@ -162,6 +174,33 @@ export function planTransportRoute(args: {
       edgeCount: data.edges.length,
     },
   };
+}
+
+export function nextRouteWaypoint(route: any, currentLocation?: any, reachedRadius = 8): TransportRouteStep | undefined {
+  const steps = Array.isArray(route?.steps) ? route.steps as TransportRouteStep[] : [];
+  if (steps.length === 0) {
+    return undefined;
+  }
+
+  if (!currentLocation || !Number.isFinite(currentLocation.x) || !Number.isFinite(currentLocation.y)) {
+    return steps[1] ?? steps[0];
+  }
+
+  const distances = steps.map((step, index) => ({
+    index,
+    distance: tileDistance(currentLocation, step.worldX, step.worldY, step.plane),
+  }));
+  const nearest = distances.sort((a, b) => a.distance - b.distance)[0];
+  if (!nearest) {
+    return steps[0];
+  }
+
+  const safeRadius = Math.max(0, reachedRadius);
+  if (nearest.distance <= safeRadius) {
+    return steps[Math.min(nearest.index + 1, steps.length - 1)];
+  }
+
+  return steps[nearest.index];
 }
 
 function buildGraph() {
