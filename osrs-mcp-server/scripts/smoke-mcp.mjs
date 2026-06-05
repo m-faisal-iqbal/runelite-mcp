@@ -59,6 +59,7 @@ const requiredTools = [
   "list_clients",
   "select_client",
   "get_game_state",
+  "get_current_location",
   "get_inventory",
   "get_game_objects",
   "get_npcs",

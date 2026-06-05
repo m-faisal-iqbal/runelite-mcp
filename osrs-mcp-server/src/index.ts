@@ -2675,12 +2675,24 @@ async function navigateToDestinationAction(args: {
     }
     localStep = chooseLocalPathStep(localPath, args.maxStepTiles ?? 18);
   } catch (pathError: any) {
-    localPath = {
-      success: false,
-      error: "COLLISION_LOCAL_PATH_FAILED",
-      message: pathError?.message ?? String(pathError),
+    return {
+      ...responseBase,
+      status: "NAVIGATION_BLOCKED",
+      willExecute: false,
+      executed: false,
+      nextWaypoint: waypoint,
+      stopReason: "LOCAL_COLLISION_PATH_REQUIRED",
+      action: {
+        mode: "in_client_only",
+        osFallback: false,
+        localPath: {
+          success: false,
+          error: "COLLISION_LOCAL_PATH_FAILED",
+          message: pathError?.message ?? String(pathError),
+        },
+      },
+      nextInstruction: "The next waypoint is not reachable through the loaded-scene collision map. Add a global path bridge, more intermediate waypoints, or explicitly approve a different travel primitive.",
     };
-    localStep = calculateStraightLineSteps(snapshot.state?.location, waypoint, args.maxStepTiles ?? 18, 1).steps[0];
   }
 
   if (!localStep) {
@@ -7148,6 +7160,24 @@ server.tool(
 );
 
 server.tool(
+  "get_current_location",
+  "Alias for get_player_location. Get the current player name, world location, health, run energy, tick, capturedAt, and ageMs.",
+  {
+    ...clientTargetSchema(),
+  },
+  async ({ instanceId, playerName, port }) => {
+    try {
+      const { snapshot } = await getSnapshotForTarget({ instanceId, playerName, port });
+      return {
+        content: [{ type: "text", text: JSON.stringify(snapshot.state ?? {}, null, 2) }]
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: errorText("fetching current location", e) }] };
+    }
+  }
+);
+
+server.tool(
   "find_nearest_object",
   "Refresh object data and return the nearest matching object without clicking.",
   {
@@ -8132,17 +8162,16 @@ server.tool(
 
 server.tool(
   "walk_path_to",
-  "Walk one bounded step toward a target world tile, preferring local collision-aware in-client walking and falling back to minimap projection when needed.",
+  "Walk one bounded step toward a target world tile using local collision-aware in-client walking only. Does not use hardware mouse or minimap fallback.",
   {
     worldX: z.number().describe("Target world X tile"),
     worldY: z.number().describe("Target world Y tile"),
     plane: z.number().optional().describe("Target plane, defaults to the player's current plane"),
-    maxStepTiles: z.number().optional().describe("Maximum tiles per minimap step, default 18"),
+    maxStepTiles: z.number().optional().describe("Maximum local in-client step length in tiles, default 18"),
     maxNodes: z.number().optional().describe("Maximum local collision-map nodes to search, default 4096"),
-    maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age in milliseconds, default 1000"),
     ...clientTargetSchema(),
   },
-  async ({ worldX, worldY, plane, maxStepTiles, maxNodes, maxAgeMs, instanceId, playerName, port }) => {
+  async ({ worldX, worldY, plane, maxStepTiles, maxNodes, instanceId, playerName, port }) => {
     try {
       const targetClient = { instanceId, playerName, port };
       const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
@@ -8183,23 +8212,15 @@ server.tool(
         };
       }
 
-      const path = withStraightLineFallback(
-        snapshot,
-        { worldX, worldY, plane },
-        safeMaxStepTiles,
-        1,
-        collisionPath,
-      );
-      const step = path.steps[0];
-      const clicked = await clickMinimapProjection(step.worldX, step.worldY, step.plane, targetClient, maxAgeMs ?? 1000);
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            mode: "minimap_fallback",
-            clickedStep: step,
-            clickedAt: { screenX: clicked.screenX, screenY: clicked.screenY },
-            path,
+            mode: "in_client_only",
+            status: "NAVIGATION_BLOCKED",
+            executed: false,
+            stopReason: "COLLISION_LOCAL_PATH_UNAVAILABLE",
+            path: collisionPath,
           }, null, 2)
         }]
       };
@@ -8223,8 +8244,8 @@ server.tool(
     maxNodes: z.number().optional().describe("Maximum local collision-map nodes to search per re-plan, default 4096"),
     stepTimeoutMs: z.number().optional().describe("Maximum wait after each movement action, default 8000"),
     pollMs: z.number().optional().describe("Location polling interval while waiting, default 500"),
-    maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age for fallback clicks, default 1000"),
-    allowMinimapFallback: z.boolean().optional().describe("Use bounded minimap fallback when local collision path is unavailable, default true"),
+    maxAgeMs: z.number().optional().describe("Maximum accepted minimap projection age only when deprecated allowMinimapFallback=true, default 1000"),
+    allowMinimapFallback: z.boolean().optional().describe("Deprecated safety switch. Defaults false; normal navigation never uses hardware mouse/minimap fallback."),
     tickAligned: z.boolean().optional().describe("Wait for the next OSRS game tick before each in-client walk action, default true"),
     ...clientTargetSchema(),
   },
@@ -8254,7 +8275,7 @@ server.tool(
     const intermediateRadius = Math.max(0, stepRadius ?? 2);
     const movementTimeout = Math.max(500, stepTimeoutMs ?? 8000);
     const interval = Math.max(100, pollMs ?? 500);
-    const useFallback = allowMinimapFallback ?? true;
+    const useFallback = allowMinimapFallback === true;
     const steps: any[] = [];
     let lastSnapshot: RuneLiteSnapshot | undefined;
     let lastDistance = Number.MAX_SAFE_INTEGER;

@@ -1857,8 +1857,15 @@ public class ApiServer {
             throw new IllegalArgumentException("Target world tile is not in the loaded scene");
         }
 
-        int param0 = localPoint.getSceneX();
-        int param1 = localPoint.getSceneY();
+        Point canvasPoint = Perspective.localToCanvas(client, localPoint, plane);
+        if (canvasPoint == null) {
+            throw new IllegalArgumentException("Target world tile is not visible on the game canvas");
+        }
+
+        int sceneX = localPoint.getSceneX();
+        int sceneY = localPoint.getSceneY();
+        int param0 = canvasPoint.getX();
+        int param1 = canvasPoint.getY();
         JsonObject response = new JsonObject();
         addCaptureMeta(response, capturedAt);
         response.addProperty("success", true);
@@ -1866,6 +1873,10 @@ public class ApiServer {
         response.addProperty("worldX", worldX);
         response.addProperty("worldY", worldY);
         response.addProperty("plane", plane);
+        response.addProperty("sceneX", sceneX);
+        response.addProperty("sceneY", sceneY);
+        response.addProperty("coordinateSource", "tileCanvas");
+        addCanvasAndScreenCoordinates(response, param0, param1);
         response.addProperty("param0", param0);
         response.addProperty("param1", param1);
         response.addProperty("identifier", 0);

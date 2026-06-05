@@ -110,7 +110,7 @@ export function buildAgentContext(baseURL, client, snapshot, runtime, args) {
         recommendedNext.push("Use handle_dialogue or get_widgets with a focused filter before other actions.");
     }
     if (args.pathfindingStatus?.supportsGlobalPathfinding === false) {
-        recommendedNext.push("Navigation currently has loaded-scene pathfinding only; use calculate_path_to/walk_path_to for local movement and expect fallback for off-scene routes.");
+        recommendedNext.push("Navigation currently has loaded-scene pathfinding only; use get_player_location first, then calculate_path_to/walk_path_to for local movement; stop with LOCAL_COLLISION_PATH_REQUIRED for off-scene or obstacle-blocked routes.");
     }
     recommendedNext.push("Before the next risky action, call mark_action_baseline; afterward call verify_last_action.");
     recommendedNext.push("Prefer interact_with/click_* with option for in-client menu actions.");
