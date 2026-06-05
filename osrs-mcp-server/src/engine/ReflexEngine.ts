@@ -114,6 +114,7 @@ export type LoadedReflexPolicy = ReflexPolicy & {
   lastProcessedGameTick?: number;
   stepIndex: number;
   stopReason?: string;
+  lastActionAt?: number;
 };
 
 export type ReflexEvent = {
@@ -274,6 +275,17 @@ export class ReflexEngine {
       return;
     }
 
+    const cooldownMs = actionCooldownMs(policy);
+    if (cooldownMs > 0 && policy.lastActionAt && this.now() - policy.lastActionAt < cooldownMs) {
+      this.record("action_cooldown", {
+        id: policy.id,
+        tickIndex,
+        elapsedMs: this.now() - policy.lastActionAt,
+        cooldownMs,
+      });
+      return;
+    }
+
     const nextStep = this.nextPolicyStep(policy, observation);
     if (!nextStep) {
       this.block(policy, "NO_POLICY_STEP_AVAILABLE");
@@ -289,6 +301,9 @@ export class ReflexEngine {
     if (result.status === "EXECUTION_BLOCKED" || result.status === "BLOCKED" || result.actionResult?.success === false) {
       this.block(policy, result.reason ?? result.actionResult?.reason ?? "STEP_BLOCKED");
       return;
+    }
+    if (result.executed) {
+      policy.lastActionAt = this.now();
     }
     if (source === "policy" && policy.steps?.length) {
       policy.stepIndex = Math.min(policy.stepIndex + 1, policy.steps.length);
@@ -785,13 +800,40 @@ function normalizePolicyStep(step: any): ReflexStep {
 
 function inventoryQuantity(inventory: RuneLiteTarget[] | undefined, name: string): number {
   const needle = name.toLowerCase();
-  return (inventory ?? []).reduce((total, item) => {
+  const items = inventory ?? [];
+  const exactMatches = items.filter((item) => String(item?.name ?? "").toLowerCase() === needle);
+  const matches = exactMatches.length > 0
+    ? exactMatches
+    : items.filter((item) => {
+        const itemName = String(item?.name ?? "").toLowerCase();
+        return itemName.includes(needle);
+      });
+  return matches.reduce((total, item) => {
     const itemName = String(item?.name ?? "").toLowerCase();
-    if (!itemName.includes(needle)) {
+    if (!itemName) {
       return total;
     }
     return total + Math.max(1, Number(item.quantity ?? 1));
   }, 0);
+}
+
+function actionCooldownMs(policy: LoadedReflexPolicy): number {
+  const explicit = Number(policy.actionCooldownMs);
+  if (Number.isFinite(explicit) && explicit >= 0) {
+    return explicit;
+  }
+  const taskText = `${policy.task ?? ""} ${policy.objective ?? ""} ${policy.method ?? ""}`.toLowerCase();
+  if (
+    taskText.includes("woodcut") ||
+    taskText.includes("chop") ||
+    taskText.includes("log") ||
+    taskText.includes("mining") ||
+    taskText.includes("mine") ||
+    taskText.includes(" ore")
+  ) {
+    return 2200;
+  }
+  return 0;
 }
 
 function miningRockNameForItem(itemName: string) {

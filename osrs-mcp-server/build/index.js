@@ -1013,12 +1013,18 @@ async function typeHardwareInput(input, reason) {
     return keyboard.type(input);
 }
 async function readClientState(baseURL) {
-    const identity = (await runeliteApi(baseURL).get("/identity")).data;
+    const [identityResponse, stateResponse] = await Promise.all([
+        runeliteApi(baseURL).get("/identity"),
+        runeliteApi(baseURL).get("/state").catch(() => undefined),
+    ]);
+    const identity = identityResponse.data;
+    const state = stateResponse?.data ?? {};
     return {
         ...identity,
-        tick: identity?.gameTick,
+        ...state,
+        tick: state?.tick ?? identity?.gameTick,
         status: identity?.playerName ? "LOGGED_IN" : "UNKNOWN",
-        name: identity?.playerName,
+        name: state?.name ?? identity?.playerName,
     };
 }
 async function waitForGameTick(baseURL, minTicks = 1, timeoutMs = 1800, pollMs = 75) {
@@ -2237,7 +2243,22 @@ async function navigateToDestinationAction(args) {
     };
 }
 async function observeReflexPolicy(policy) {
-    const { baseURL, snapshot } = await getSnapshotForTarget(policy.targetClient, true);
+    const baseURL = await resolveRuneliteApi(policy.targetClient ?? {});
+    const [snapshot, stateResponse, inventoryResponse, playersResponse] = await Promise.all([
+        getSnapshotForBase(baseURL, true),
+        runeliteApi(baseURL).get("/state").catch(() => undefined),
+        runeliteApi(baseURL).get("/inventory").catch(() => undefined),
+        runeliteApi(baseURL).get("/players").catch(() => undefined),
+    ]);
+    const liveState = stateResponse?.data ?? snapshot.state ?? {};
+    const liveInventory = Array.isArray(inventoryResponse?.data) ? inventoryResponse.data : (snapshot.inventory ?? []);
+    const livePlayers = Array.isArray(playersResponse?.data) ? playersResponse.data : (snapshot.players ?? []);
+    const liveSnapshot = {
+        ...snapshot,
+        state: liveState,
+        inventory: liveInventory,
+        players: livePlayers,
+    };
     let minimapThreat;
     if (policy.stopOnMinimapPlayerThreat) {
         try {
@@ -2254,24 +2275,24 @@ async function observeReflexPolicy(policy) {
     }
     return {
         baseURL,
-        snapshot,
-        health: Number.isFinite(Number(snapshot.state?.health)) ? Number(snapshot.state?.health) : undefined,
-        healthPercent: healthPercent(snapshot),
-        inventorySlotsUsed: inventorySlotsUsed(snapshot),
-        inventoryFull: inventorySlotsUsed(snapshot) >= 28,
-        inventory: snapshot.inventory ?? [],
-        visiblePlayers: snapshot.players ?? [],
+        snapshot: liveSnapshot,
+        health: Number.isFinite(Number(liveSnapshot.state?.health)) ? Number(liveSnapshot.state?.health) : undefined,
+        healthPercent: healthPercent(liveSnapshot),
+        inventorySlotsUsed: inventorySlotsUsed(liveSnapshot),
+        inventoryFull: inventorySlotsUsed(liveSnapshot) >= 28,
+        inventory: liveSnapshot.inventory ?? [],
+        visiblePlayers: liveSnapshot.players ?? [],
         minimapPlayerThreat: minimapThreat?.visiblePlayerThreat === true,
         minimapThreat,
-        bankOpen: snapshot.interfaceSummary?.bankContainerAvailable === true,
-        location: snapshot.state?.location,
-        isIdle: isPlayerIdle(snapshot.state ?? {}),
-        capturedAt: snapshot.capturedAt,
+        bankOpen: liveSnapshot.interfaceSummary?.bankContainerAvailable === true,
+        location: liveSnapshot.state?.location,
+        isIdle: isPlayerIdle(liveSnapshot.state ?? {}),
+        capturedAt: liveSnapshot.state?.capturedAt ?? liveSnapshot.capturedAt,
         summary: {
-            location: snapshot.state?.location,
-            animation: snapshot.state?.animation,
-            interacting: snapshot.state?.interacting,
-            dialogueType: snapshot.interfaceSummary?.dialogueType ?? snapshot.dialogue?.type,
+            location: liveSnapshot.state?.location,
+            animation: liveSnapshot.state?.animation,
+            interacting: liveSnapshot.state?.interacting,
+            dialogueType: liveSnapshot.interfaceSummary?.dialogueType ?? liveSnapshot.dialogue?.type,
             minimapPlayerThreat: minimapThreat?.visiblePlayerThreat === true,
             visibleMinimapPlayers: minimapThreat?.visiblePlayerCount,
         },
