@@ -418,11 +418,37 @@ function buildGoalInstruction(execute: boolean): string {
 function normalizeGoalText(text: string): string {
   return text
     .toLowerCase()
+    .replace(/[^\w\s'-]/g, " ")
     .replace(/\bedgvillage\b/g, "edgeville")
     .replace(/\bedgville\b/g, "edgeville")
     .replace(/\bedville\b/g, "edgeville")
+    .replace(/\bedgevill\b/g, "edgeville")
+    .replace(/\bedgevil\b/g, "edgeville")
     .replace(/\bvarrok\b/g, "varrock")
-    .replace(/\binventories\b/g, "inventory");
+    .replace(/\bvarock\b/g, "varrock")
+    .replace(/\bvarroc\b/g, "varrock")
+    .replace(/\blumbrige\b/g, "lumbridge")
+    .replace(/\blumbridg\b/g, "lumbridge")
+    .replace(/\bdraynor\b/g, "draynor")
+    .replace(/\bdranor\b/g, "draynor")
+    .replace(/\btravle\b/g, "travel")
+    .replace(/\btraval\b/g, "travel")
+    .replace(/\btravell?\b/g, "travel")
+    .replace(/\bnav(?:igate|igation|gation|gate)?\b/g, "navigate")
+    .replace(/\bhead(?:ing)?\b/g, "go")
+    .replace(/\bmove\b/g, "go")
+    .replace(/\brun\b/g, "go")
+    .replace(/\bwalk\b/g, "go")
+    .replace(/\bfarm\b/g, "get")
+    .replace(/\bacquire\b/g, "get")
+    .replace(/\bgather\b/g, "get")
+    .replace(/\btrain\b/g, "get")
+    .replace(/\bcut(?:ting)?\b/g, "cut")
+    .replace(/\bchopp?ing\b/g, "chop")
+    .replace(/\bminning\b/g, "mining")
+    .replace(/\binventories\b/g, "inventory")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function firstGoalNumber(text: string): number | undefined {
@@ -458,11 +484,61 @@ function findWorldNode(nameOrTag: string): WorldGraphNode | undefined {
   if (!needle) {
     return undefined;
   }
-  return loadWorldGraphNodes().find((node) => {
+  const nodes = loadWorldGraphNodes();
+  const exact = nodes.find((node) => {
     const names = [node.id, node.name, ...(node.tags ?? [])]
       .map((value) => normalizeGoalText(String(value)).replace(/[_-]+/g, " ").trim());
     return names.includes(needle) || names.some((value) => value.includes(needle));
   });
+  if (exact) {
+    return exact;
+  }
+
+  const needleTokens = tokenSet(needle);
+  let best: { node: WorldGraphNode; score: number } | undefined;
+  for (const node of nodes) {
+    const aliases = [node.id, node.name, ...(node.tags ?? [])]
+      .map((value) => normalizeGoalText(String(value)).replace(/[_-]+/g, " ").trim());
+    const score = Math.max(...aliases.map((alias) => fuzzyTextScore(needle, alias, needleTokens)));
+    if (score >= 0.58 && (!best || score > best.score)) {
+      best = { node, score };
+    }
+  }
+  return best?.node;
+}
+
+function tokenSet(text: string): Set<string> {
+  return new Set(text.split(/\s+/).filter((token) => token.length > 1));
+}
+
+function fuzzyTextScore(needle: string, alias: string, needleTokens = tokenSet(needle)): number {
+  if (!needle || !alias) {
+    return 0;
+  }
+  const aliasTokens = tokenSet(alias);
+  const shared = [...needleTokens].filter((token) =>
+    aliasTokens.has(token) || [...aliasTokens].some((other) => editDistance(token, other) <= Math.max(1, Math.floor(Math.min(token.length, other.length) / 4)))
+  ).length;
+  const tokenScore = shared / Math.max(needleTokens.size, 1);
+  const distance = editDistance(needle, alias);
+  const charScore = 1 - distance / Math.max(needle.length, alias.length, 1);
+  return Math.max(tokenScore, charScore);
+}
+
+function editDistance(a: string, b: string): number {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[b.length] ?? 0;
 }
 
 function nodeDestinationFields(node: WorldGraphNode | undefined): Record<string, unknown> {
@@ -483,8 +559,18 @@ function inferTravelDestination(goal: string): WorldGraphNode | undefined {
   if (/\b(edgeville|willow)\b/.test(text) && /\bwillow/.test(text)) {
     return findWorldNode("edgeville willows") ?? findWorldNode("draynor willows");
   }
+  if (/\blumbridge\b/.test(text) && /\b(tree|log|woodcut|chop|cut)\b/.test(text)) {
+    return findWorldNode("lumbridge trees");
+  }
   if (/\bdraynor\b/.test(text) && /\bwillow/.test(text)) {
     return findWorldNode("draynor willows");
+  }
+  if (/\b(varrock|al kharid|falador|rimmington|lumbridge)\b/.test(text) && /\b(mine|mining|ore|tin|copper|iron|coal|clay)\b/.test(text)) {
+    if (text.includes("al kharid")) return findWorldNode("al kharid mine");
+    if (text.includes("varrock")) return findWorldNode("varrock east mine");
+    if (text.includes("falador")) return findWorldNode("falador mine");
+    if (text.includes("rimmington")) return findWorldNode("rimmington mine");
+    if (text.includes("lumbridge")) return findWorldNode("lumbridge swamp mine");
   }
   if (/\bvarrock\b/.test(text) && /\b(tree|oak|woodcut|chop|log)\b/.test(text)) {
     return findWorldNode("varrock west trees");
@@ -504,7 +590,7 @@ function inferTravelDestination(goal: string): WorldGraphNode | undefined {
   if (/\blumbridge\b/.test(text)) {
     return findWorldNode("lumbridge castle");
   }
-  const match = text.match(/\b(?:go to|go|travel to|travel|navigate to|walk to)\s+([a-z][a-z\s'-]{2,40})/i);
+  const match = text.match(/\b(?:go to|go|travel to|travel|navigate to|navigate|walk to|route to)\s+([a-z][a-z\s'-]{2,40})/i);
   return match ? findWorldNode(match[1]) : undefined;
 }
 
@@ -527,7 +613,7 @@ function inferBankForNode(node: WorldGraphNode | undefined): WorldGraphNode | un
 
 function inferWoodcutSpec(goal: string) {
   const text = normalizeGoalText(goal);
-  if (!/\b(cut|chop|woodcut|tree|log|logs|willow|oak|yew)\b/.test(text)) {
+  if (!/\b(cut|chop|get|woodcut|tree|log|logs|willow|oak|yew)\b/.test(text)) {
     return undefined;
   }
   if (text.includes("willow")) {
@@ -540,6 +626,30 @@ function inferWoodcutSpec(goal: string) {
     return { itemName: "Yew logs", targetName: "Yew", location: inferTravelDestination(goal) ?? findWorldNode("edgeville yews") };
   }
   return { itemName: "Logs", targetName: "Tree", location: inferTravelDestination(goal) ?? findWorldNode("lumbridge trees") };
+}
+
+function inferMiningSpec(goal: string) {
+  const text = normalizeGoalText(goal);
+  if (!/\b(mine|mining|ore|tin|copper|iron|coal|clay|silver|gold)\b/.test(text)) {
+    return undefined;
+  }
+  const itemName = text.includes("copper") ? "Copper ore"
+    : text.includes("iron") ? "Iron ore"
+      : text.includes("coal") ? "Coal"
+        : text.includes("clay") ? "Clay"
+          : text.includes("silver") ? "Silver ore"
+            : text.includes("gold") ? "Gold ore"
+              : "Tin ore";
+  const targetName = itemName === "Clay" ? "Clay rocks"
+    : itemName === "Coal" ? "Coal rocks"
+      : itemName.replace(/ ore$/i, " rocks");
+  const location = inferTravelDestination(goal)
+    ?? (text.includes("rimmington") ? findWorldNode("rimmington mine")
+      : text.includes("varrock") ? findWorldNode("varrock east mine")
+        : text.includes("falador") ? findWorldNode("falador mine")
+          : text.includes("al kharid") ? findWorldNode("al kharid mine")
+            : findWorldNode("lumbridge swamp mine"));
+  return { itemName, targetName, location };
 }
 
 function inventorySlotsFromContext(context: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
@@ -632,20 +742,23 @@ async function buildLocalExecutionPlan(
   const text = normalizeGoalText(goal);
   const policies: LocalPolicyStage[] = [];
   const warnings: string[] = [];
-  const wantsTravel = /\b(go|travel|navigate|walk)\b/.test(text);
+  const wantsTravel = /\b(go|travel|navigate|route)\b/.test(text);
   const woodcut = inferWoodcutSpec(goal);
+  const mining = woodcut ? undefined : inferMiningSpec(goal);
   const wantsBank = /\bbank\b/.test(text);
   const wantsPreBank = /\b(before starting|first|start)\b[\s\S]{0,80}\b(bank|deposit|put everything|empty inventory)\b/.test(text)
     || /\bput everything\b[\s\S]{0,80}\bbank\b/.test(text);
   const keepText = text.includes("axe") ? "axe" : text.includes("pickaxe") ? "pickaxe" : "";
 
-  if (!wantsTravel && !woodcut && !wantsBank) {
+  if (!wantsTravel && !woodcut && !mining && !wantsBank) {
     return undefined;
   }
 
-  const resourceNode = woodcut?.location;
+  const resourceNode = woodcut?.location ?? mining?.location;
   const bankNode = inferBankForNode(resourceNode) ?? (wantsBank ? inferTravelDestination(`${goal} bank`) : undefined);
-  const travelNode = woodcut ? resourceNode : inferTravelDestination(goal);
+  const travelNode = wantsTravel
+    ? ((woodcut || mining) ? resourceNode : inferTravelDestination(goal))
+    : undefined;
 
   if (wantsPreBank) {
     if (bankNode) {
@@ -766,6 +879,88 @@ async function buildLocalExecutionPlan(
             objective: goal,
             itemName: woodcut.itemName,
             bankItemName: woodcut.itemName,
+            bankQuantity: "All",
+            bankAction: "deposit",
+            executionMode: "execute",
+            tickMs: 600,
+            maxTicks: 20,
+          },
+        });
+      }
+    }
+  }
+
+  if (mining) {
+    const inventoryRunsMatch = text.match(/\b(\d{1,2})\s*(?:full\s*)?inventory\b/);
+    const wordInventoryRuns = /\btwo\s*(?:full\s*)?inventory\b/.test(text) ? 2 : undefined;
+    const inventoryRuns = inventoryRunsMatch ? Number(inventoryRunsMatch[1]) : wordInventoryRuns;
+    const shouldBankOre = wantsBank || /\bput them\b[\s\S]{0,30}\bbank\b/.test(text);
+    const perInventoryQuantity = keepText === "pickaxe" ? 27 : 28;
+    const quantity = inventoryRuns ? perInventoryQuantity : firstGoalNumber(text) ?? 1;
+    const runs = inventoryRuns ?? 1;
+
+    for (let index = 0; index < runs; index += 1) {
+      if (index > 0 && resourceNode) {
+        policies.push({
+          label: `Return to ${resourceNode.name} for mining inventory ${index + 1}`,
+          policy: {
+            task: "travel",
+            objective: goal,
+            executionMode: "execute",
+            tickMs: 600,
+            maxTicks: 600,
+            ...nodeDestinationFields(resourceNode),
+          },
+        });
+      }
+
+      policies.push({
+        label: inventoryRuns ? `Mine inventory ${index + 1}/${runs} of ${mining.itemName}` : `Mine ${quantity} ${mining.itemName}`,
+        policy: {
+          task: `mine_${mining.itemName.toLowerCase().replace(/\s+/g, "_").replace(/_ore$/, "")}`,
+          objective: goal,
+          itemName: mining.itemName,
+          targetName: mining.targetName,
+          actionOption: "Mine",
+          quantity,
+          quantityMode: "gain",
+          method: "mining",
+          inventoryFullBehavior: "stop",
+          eatAtHpPercent: 35,
+          executionMode: "execute",
+          tickMs: 600,
+          maxTicks: 900,
+        },
+      });
+
+      if (shouldBankOre) {
+        if (!bankNode) {
+          return {
+            status: "LOCAL_PLAN_BLOCKED",
+            reason: "local_fast_path",
+            policies,
+            warnings,
+            blocker: "Banking was requested, but no nearby bank could be inferred for this mining location.",
+          };
+        }
+        policies.push({
+          label: `Travel to ${bankNode.name} to bank ${mining.itemName}`,
+          policy: {
+            task: "travel",
+            objective: goal,
+            executionMode: "execute",
+            tickMs: 600,
+            maxTicks: 600,
+            ...nodeDestinationFields(bankNode),
+          },
+        });
+        policies.push({
+          label: `Deposit ${mining.itemName}`,
+          policy: {
+            task: "deposit_ore",
+            objective: goal,
+            itemName: mining.itemName,
+            bankItemName: mining.itemName,
             bankQuantity: "All",
             bankAction: "deposit",
             executionMode: "execute",

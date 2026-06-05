@@ -311,7 +311,7 @@ async function getPathfindingStatusForBase(baseURL: string) {
   }
 }
 
-async function assertClientReady(baseURL: string) {
+async function assertClientReady(baseURL: string, options: { requireActiveWindow?: boolean } = {}) {
   const identity = (await runeliteApi(baseURL).get("/identity")).data;
   if (identity?.windowMinimized) {
     throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} is minimized`);
@@ -319,7 +319,7 @@ async function assertClientReady(baseURL: string) {
   if (identity?.canvasShowing === false) {
     throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} canvas is not visible`);
   }
-  if (identity?.windowActive === false) {
+  if (options.requireActiveWindow === true && identity?.windowActive === false) {
     throw new Error(`RuneLite client ${identity.instanceId ?? baseURL} window is not active; focus RuneLite before OS click tools`);
   }
   await assertClientLoggedIn(baseURL, identity);
@@ -812,6 +812,105 @@ function targetsForType(snapshot: RuneLiteSnapshot, entityType: string): RuneLit
   }
 }
 
+function hasDirectMenuParams(target: any): boolean {
+  return Boolean(
+    target &&
+    Number.isFinite(target.param0) &&
+    Number.isFinite(target.param1) &&
+    (Number.isFinite(target.identifier) || Number.isFinite(target.id)) &&
+    target.menuAction
+  );
+}
+
+function scenePoiDefaultOption(poi: any, requestedOption?: string): string | undefined {
+  if (requestedOption) {
+    return requestedOption;
+  }
+  const semantic = String(poi?.semantic ?? "").toLowerCase();
+  const name = String(poi?.name ?? "").toLowerCase();
+  if (semantic === "resource_tree" || name === "tree" || name.includes("tree")) {
+    return "Chop down";
+  }
+  if (semantic === "resource_rocks" || name.includes("rocks")) {
+    return "Mine";
+  }
+  if (semantic === "bank") {
+    return "Bank";
+  }
+  if (semantic === "door") {
+    return "Open";
+  }
+  return requestedOption;
+}
+
+async function scenePoiObjectTargets(baseURL: string, name?: string, id?: number, option?: string): Promise<RuneLiteTarget[]> {
+  const [iconsResponse, pathStatusResponse] = await Promise.all([
+    runeliteApi(baseURL).get("/minimap/icons", { params: { maxEntities: 120 } }),
+    runeliteApi(baseURL).get("/path/status"),
+  ]);
+  const icons = Array.isArray(iconsResponse.data?.icons) ? iconsResponse.data.icons : [];
+  const pathStatus = pathStatusResponse.data ?? {};
+  const baseX = Number(pathStatus.baseX);
+  const baseY = Number(pathStatus.baseY);
+  const sceneSizeX = Number(pathStatus.sceneSizeX ?? 104);
+  const sceneSizeY = Number(pathStatus.sceneSizeY ?? 104);
+  if (!Number.isFinite(baseX) || !Number.isFinite(baseY)) {
+    return [];
+  }
+
+  return icons
+    .filter((poi: any) => poi?.type === "scenePoi")
+    .filter((poi: any) => targetMatches(poi, name, id))
+    .map((poi: any) => {
+      const worldX = Number(poi.worldX);
+      const worldY = Number(poi.worldY);
+      const sceneX = worldX - baseX;
+      const sceneY = worldY - baseY;
+      if (
+        !Number.isFinite(worldX) ||
+        !Number.isFinite(worldY) ||
+        !Number.isFinite(sceneX) ||
+        !Number.isFinite(sceneY) ||
+        sceneX < 0 ||
+        sceneY < 0 ||
+        sceneX >= sceneSizeX ||
+        sceneY >= sceneSizeY
+      ) {
+        return undefined;
+      }
+
+      const selectedOption = scenePoiDefaultOption(poi, option);
+      const targetText = poi.name ? `<col=ffff>${poi.name}</col>` : "";
+      const action = selectedOption
+        ? {
+            option: selectedOption,
+            actionIndex: 1,
+            menuAction: "GAME_OBJECT_FIRST_OPTION",
+            identifier: Number(poi.id),
+            param0: sceneX,
+            param1: sceneY,
+            itemId: -1,
+            target: targetText,
+          }
+        : undefined;
+
+      return {
+        ...poi,
+        coordinateSource: "scenePoiMenuAction",
+        param0: sceneX,
+        param1: sceneY,
+        identifier: Number(poi.id),
+        itemId: -1,
+        menuAction: action?.menuAction,
+        option: action?.option,
+        target: targetText,
+        menuActions: action ? [action] : [],
+        scenePoiFallback: true,
+      } as RuneLiteTarget;
+    })
+    .filter((target: RuneLiteTarget | undefined): target is RuneLiteTarget => Boolean(target));
+}
+
 function defaultCoordinateSourceForType(entityType: string): string | undefined {
   switch (entityType.toLowerCase()) {
     case "npc":
@@ -847,6 +946,33 @@ function selectLiveTarget(
   }
 
   return matches.find((target: any) => hasScreenPoint(target));
+}
+
+async function selectActionTarget(
+  baseURL: string,
+  snapshot: RuneLiteSnapshot,
+  entityType: string,
+  name?: string,
+  id?: number,
+  nearestToPlayer?: boolean,
+  coordinateSource?: string,
+  option?: string
+): Promise<RuneLiteTarget | undefined> {
+  const target = selectLiveTarget(snapshot, entityType, name, id, nearestToPlayer, coordinateSource);
+  if (target) {
+    return target;
+  }
+
+  if (entityType.toLowerCase() !== "object" && entityType.toLowerCase() !== "objects") {
+    return undefined;
+  }
+
+  const playerLocation = nearestToPlayer ? snapshot.state?.location : null;
+  const fallbackTargets = sortNearestToPlayer(
+    sortByDistance(await scenePoiObjectTargets(baseURL, name, id, option)),
+    playerLocation
+  );
+  return fallbackTargets.find((candidate: any) => hasDirectMenuParams(candidate));
 }
 
 function clientTargetSchema() {
@@ -1217,7 +1343,8 @@ async function openContextMenuForTarget(args: OpenContextMenuArgs) {
   const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
   await assertClientReady(baseURL);
   const expectedSource = args.coordinateSource ?? defaultCoordinateSourceForType(args.entityType);
-  const target = selectLiveTarget(
+  const target = await selectActionTarget(
+    baseURL,
     snapshot,
     args.entityType,
     args.name,
@@ -1251,15 +1378,31 @@ async function interactWithTarget(args: OpenContextMenuArgs & { option: string; 
   const { baseURL, snapshot } = await getSnapshotForTarget(targetClient, true);
   await assertClientLoggedIn(baseURL);
   const expectedSource = args.coordinateSource ?? defaultCoordinateSourceForType(args.entityType);
-  const target = selectLiveTarget(
+  const target = await selectActionTarget(
+    baseURL,
     snapshot,
     args.entityType,
     args.name,
     args.id,
     args.nearestToPlayer ?? true,
-    args.coordinateSource
+    args.coordinateSource,
+    args.option
   );
-  requireFreshClickable(target, args.maxAgeMs ?? 600, expectedSource);
+  if (!target) {
+    return {
+      actionMode: "target_not_visible",
+      success: false,
+      executed: false,
+      requested: {
+        entityType: args.entityType,
+        name: args.name,
+        id: args.id,
+        option: args.option,
+      },
+      stopReason: "TARGET_NOT_VISIBLE",
+      reason: "No matching target is currently visible in the RuneLite snapshot or scene POI feed.",
+    };
+  }
 
   const directAction = directMenuActionForTarget(target, args.option);
   if (directAction) {
@@ -1278,6 +1421,8 @@ async function interactWithTarget(args: OpenContextMenuArgs & { option: string; 
       actionResult,
     };
   }
+
+  requireFreshClickable(target, args.maxAgeMs ?? 600, expectedSource);
 
   return {
     actionMode: "in_client_action_unavailable",
@@ -1321,7 +1466,7 @@ async function invokeVisibleWidgetAction(baseURL: string, widget: any, actionTex
 
 async function clickMinimapProjection(worldX: number, worldY: number, plane: number | undefined, target: ClientTarget = {}, maxAgeMs = 1000) {
   const api = await apiForTarget(target);
-  await assertClientReady(api.defaults.baseURL ?? selectedRuneliteApi);
+  await assertClientReady(api.defaults.baseURL ?? selectedRuneliteApi, { requireActiveWindow: true });
   const res = await api.get("/minimap", { params: { worldX, worldY, plane } });
   const minimapTarget = res.data?.target as RuneLiteTarget | undefined;
   requireFreshClickable(minimapTarget, maxAgeMs, "minimapProjection");
@@ -1937,21 +2082,33 @@ async function validatePreparedStep(baseURL: string, snapshot: RuneLiteSnapshot,
     const entityType = stepArgs.entityType ??
       (tool === "click_object" ? "object" : tool === "click_npc" ? "npc" : tool === "click_ground_item" ? "ground_item" : undefined);
     const target = entityType
-      ? selectLiveTarget(snapshot, entityType, stepArgs.name, stepArgs.id, stepArgs.nearestToPlayer ?? true)
+      ? await selectActionTarget(baseURL, snapshot, entityType, stepArgs.name, stepArgs.id, stepArgs.nearestToPlayer ?? true, undefined, stepArgs.option)
       : undefined;
     const fresh = Boolean(target && (!target.ageMs || target.ageMs <= maxAgeMs));
+    const directAction = target && stepArgs.option ? directMenuActionForTarget(target, stepArgs.option) : undefined;
+    const actionReady = Boolean(directAction || (target && hasScreenPoint(target)));
     return {
       ...base,
-      valid: Boolean(target) && fresh,
-      validationMode: "fresh_target_snapshot",
-      reason: target ? (fresh ? "Matching live target is present and fresh." : "Matching target exists but is stale.") : "No matching target is currently visible in the snapshot.",
+      valid: Boolean(target) && fresh && actionReady,
+      validationMode: directAction ? "fresh_target_direct_menu_action" : "fresh_target_snapshot",
+      reason: target
+        ? fresh
+          ? actionReady
+            ? directAction
+              ? "Matching live target is present with in-client menu action params."
+              : "Matching live target is present and fresh."
+            : "Matching target exists but has no direct in-client menu params or screen point."
+          : "Matching target exists but is stale."
+        : "No matching target is currently visible in the snapshot.",
       target: compactTarget(target),
     };
   }
 
   if (tool === "perform_until") {
-    const target = selectLiveTarget(snapshot, stepArgs.actionEntityType, stepArgs.actionName, stepArgs.actionId, stepArgs.nearestToPlayer ?? true);
+    const target = await selectActionTarget(baseURL, snapshot, stepArgs.actionEntityType, stepArgs.actionName, stepArgs.actionId, stepArgs.nearestToPlayer ?? true, undefined, stepArgs.actionOption);
     const fresh = Boolean(target && (!target.ageMs || target.ageMs <= maxAgeMs));
+    const directAction = target && stepArgs.actionOption ? directMenuActionForTarget(target, stepArgs.actionOption) : undefined;
+    const actionReady = Boolean(directAction || (target && hasScreenPoint(target)));
     const currentCondition = conditionMet(snapshot, {
       condition: stepArgs.condition,
       startedAt: Date.now(),
@@ -1971,9 +2128,17 @@ async function validatePreparedStep(baseURL: string, snapshot: RuneLiteSnapshot,
     });
     return {
       ...base,
-      valid: Boolean(target) && fresh,
-      validationMode: "loop_target_and_condition_snapshot",
-      reason: target ? (fresh ? "Loop target is present and fresh." : "Loop target exists but is stale.") : "No matching loop action target is currently visible.",
+      valid: Boolean(target) && fresh && actionReady,
+      validationMode: directAction ? "loop_target_direct_menu_action" : "loop_target_and_condition_snapshot",
+      reason: target
+        ? fresh
+          ? actionReady
+            ? directAction
+              ? "Loop target is present with in-client menu action params."
+              : "Loop target is present and fresh."
+            : "Loop target exists but has no direct in-client menu params or screen point."
+          : "Loop target exists but is stale."
+        : "No matching loop action target is currently visible.",
       target: compactTarget(target),
       currentCondition,
     };
@@ -2495,21 +2660,77 @@ async function navigateToDestinationAction(args: {
       stopReason: "No next route waypoint is available.",
     };
   }
-  const localStep = calculateStraightLineSteps(snapshot.state?.location, waypoint, args.maxStepTiles ?? 18, 1).steps[0];
+  let localStep: PathStep | undefined;
+  let localPath: any;
+  try {
+    localPath = await calculateCollisionAwarePath(baseURL, waypoint.worldX, waypoint.worldY, waypoint.plane, 4096);
+    if (!localPath.success) {
+      throw new Error(localPath.message ?? localPath.error ?? "Collision-aware local path unavailable");
+    }
+    localStep = chooseLocalPathStep(localPath, args.maxStepTiles ?? 18);
+  } catch (pathError: any) {
+    localPath = {
+      success: false,
+      error: "COLLISION_LOCAL_PATH_FAILED",
+      message: pathError?.message ?? String(pathError),
+    };
+    localStep = calculateStraightLineSteps(snapshot.state?.location, waypoint, args.maxStepTiles ?? 18, 1).steps[0];
+  }
+
+  if (!localStep) {
+    return {
+      ...responseBase,
+      status: "NAVIGATION_BLOCKED",
+      willExecute: false,
+      executed: false,
+      nextWaypoint: waypoint,
+      stopReason: "NO_LOCAL_NAVIGATION_STEP_AVAILABLE",
+      action: {
+        mode: "in_client_only",
+        osFallback: false,
+        localPath,
+      },
+    };
+  }
+
   let action: any;
   try {
-    action = await invokeWalkAction(baseURL, {
+    const walk = await invokeWalkAction(baseURL, {
       worldX: localStep.worldX,
       worldY: localStep.worldY,
       plane: localStep.plane,
       tickAligned: true,
     });
-  } catch (clientActionError: any) {
-    const minimapTarget = await clickMinimapProjection(localStep.worldX, localStep.worldY, localStep.plane, targetClient);
+    const wait = await waitUntilBaseLocation(
+      baseURL,
+      localStep.worldX,
+      localStep.worldY,
+      localStep.plane,
+      localStep.final ? Math.max(1, args.waypointRadius ?? 3) : 2,
+      8000,
+      500,
+    );
     action = {
-      mode: "minimap_fallback",
-      reason: clientActionError?.message ?? String(clientActionError),
-      target: minimapTarget,
+      mode: localPath?.success ? "collision_aware_local" : "straight_line_local",
+      walk,
+      wait,
+      localPath,
+    };
+  } catch (clientActionError: any) {
+    return {
+      ...responseBase,
+      status: "NAVIGATION_BLOCKED",
+      willExecute: false,
+      executed: false,
+      nextWaypoint: waypoint,
+      selectedStep: localStep,
+      stopReason: `IN_CLIENT_NAVIGATION_STEP_FAILED:${clientActionError?.message ?? String(clientActionError)}`,
+      action: {
+        mode: "in_client_only",
+        osFallback: false,
+        reason: clientActionError?.message ?? String(clientActionError),
+      },
+      nextInstruction: "System 1 did not use minimap/OS fallback. Re-plan with a closer in-client route step or request OS control explicitly.",
     };
   }
 
