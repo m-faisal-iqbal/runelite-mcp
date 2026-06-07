@@ -1,3 +1,14 @@
+import {
+  loadMonsters,
+  loadQuests,
+  findItemByName,
+  getCachedPrice,
+  findMonsterByName,
+  findQuestByName,
+  loadSkillIndex,
+  type WikiItem,
+} from "./knowledge-loader.js";
+
 export type KnowledgeMethod = {
   id: string;
   domain: "skill" | "combat" | "economy" | "quest" | "travel";
@@ -506,13 +517,24 @@ function compactRecord(record: KnowledgeRecord) {
 }
 
 export function allKnowledgeRecords(): KnowledgeRecord[] {
-  return [
+  const curated = [
     ...knowledgeBase.methods.map((record) => ({ ...record, kind: "method" as const })),
     ...knowledgeBase.locations.map((record) => ({ ...record, kind: "location" as const })),
     ...knowledgeBase.quests.map((record) => ({ ...record, kind: "quest" as const })),
     ...knowledgeBase.monsters.map((record) => ({ ...record, kind: "monster" as const })),
     ...knowledgeBase.gear.map((record) => ({ ...record, kind: "gear" as const })),
   ];
+
+  // Merge wiki monsters/quests that aren't already in curated data
+  const curatedIds = new Set(curated.map((r) => r.id));
+  const wikiMonsters = loadMonsters()
+    .filter((m) => !curatedIds.has(m.id))
+    .map((record) => ({ ...record, kind: "monster" as const }));
+  const wikiQuests = loadQuests()
+    .filter((q) => !curatedIds.has(q.id))
+    .map((record) => ({ ...record, kind: "quest" as const }));
+
+  return [...curated, ...wikiMonsters, ...wikiQuests];
 }
 
 function searchableText(record: KnowledgeRecord) {
@@ -690,5 +712,70 @@ export function knowledgeSummary() {
       "Cook's Assistant",
       "starter magic gear",
     ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Live-data helpers – use wiki-scraped JSON alongside curated knowledge
+// ---------------------------------------------------------------------------
+
+export function getItemPrice(itemName: string) {
+  const item = findItemByName(itemName);
+  if (!item) return undefined;
+
+  const price = getCachedPrice(item.id);
+  if (!price) {
+    return {
+      name: item.name,
+      id: item.id,
+      high: undefined as number | undefined,
+      low: undefined as number | undefined,
+      margin: undefined as number | undefined,
+      geLimit: item.geLimit,
+    };
+  }
+
+  return {
+    name: item.name,
+    id: item.id,
+    high: price.high,
+    low: price.low,
+    margin: price.high - price.low,
+    geLimit: item.geLimit,
+  };
+}
+
+export function getMonsterInfo(name: string): KnowledgeMonster | undefined {
+  // Check curated monsters first
+  const curated = knowledgeBase.monsters.find(
+    (m) => m.name.toLowerCase() === name.toLowerCase() || m.id === name.toLowerCase().replace(/\s+/g, "_"),
+  );
+  if (curated) return curated;
+
+  // Fall back to wiki data
+  return findMonsterByName(name);
+}
+
+export function getQuestInfo(name: string): KnowledgeQuest | undefined {
+  // Check curated quests first
+  const curated = knowledgeBase.quests.find(
+    (q) => q.name.toLowerCase() === name.toLowerCase() || q.id === name.toLowerCase().replace(/\s+/g, "_"),
+  );
+  if (curated) return curated;
+
+  // Fall back to wiki data
+  return findQuestByName(name);
+}
+
+export function getSkillMethods(skill: string): { f2pPages: string[]; p2pPages: string[] } {
+  const index = loadSkillIndex();
+  // Case-insensitive lookup
+  const key = Object.keys(index).find((k) => k.toLowerCase() === skill.toLowerCase());
+  if (!key) return { f2pPages: [], p2pPages: [] };
+
+  const entry = index[key];
+  return {
+    f2pPages: entry.f2p_training ?? [],
+    p2pPages: entry.p2p_training ?? [],
   };
 }

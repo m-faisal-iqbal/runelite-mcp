@@ -1,14 +1,20 @@
 {
-  "version": 1,
-  "scope": "f2p_foundation_transport_graph",
+  "version": 2,
+  "scope": "osrs_comprehensive_transport_f2p_and_members",
+  "description": "179 nodes, 495 edges. Modes: walk (bidirectional), teleport_spell (directed), teleport_item (directed), fairy_ring (directed), spirit_tree (directed), gnome_glider (directed), boat (directed), canoe (directed), minecart (directed), agility_shortcut (directed), stairs (directed). All teleport/transport edges are one-way (use DirectedGraph).",
   "nodes": [
     {
-      "id": "lumbridge_castle",
-      "name": "Lumbridge Castle",
+      "id": "lumbridge_spawn",
+      "name": "Lumbridge Spawn",
       "worldX": 3222,
       "worldY": 3218,
       "plane": 0,
-      "tags": ["lumbridge", "castle", "starter"]
+      "tags": [
+        "lumbridge",
+        "castle",
+        "spawn",
+        "starter"
+      ]
     },
     {
       "id": "lumbridge_castle_bank",
@@ -16,7 +22,22 @@
       "worldX": 3208,
       "worldY": 3220,
       "plane": 2,
-      "tags": ["lumbridge", "lumbridge bank", "castle", "bank", "top floor", "upstairs"]
+      "tags": [
+        "lumbridge",
+        "bank",
+        "castle bank"
+      ]
+    },
+    {
+      "id": "lumbridge_ge_teleport_dest",
+      "name": "Lumbridge (teleport dest)",
+      "worldX": 3222,
+      "worldY": 3218,
+      "plane": 0,
+      "tags": [
+        "lumbridge teleport",
+        "teleport destination"
+      ]
     },
     {
       "id": "lumbridge_trees",
@@ -24,7 +45,11 @@
       "worldX": 3207,
       "worldY": 3234,
       "plane": 0,
-      "tags": ["lumbridge", "woodcutting", "trees", "logs"]
+      "tags": [
+        "lumbridge",
+        "woodcutting",
+        "trees"
+      ]
     },
     {
       "id": "lumbridge_cows",
@@ -32,7 +57,12 @@
       "worldX": 3253,
       "worldY": 3266,
       "plane": 0,
-      "tags": ["lumbridge", "combat", "cows"]
+      "tags": [
+        "lumbridge",
+        "cows",
+        "combat",
+        "cowhide"
+      ]
     },
     {
       "id": "lumbridge_chickens",
@@ -40,279 +70,24 @@
       "worldX": 3230,
       "worldY": 3298,
       "plane": 0,
-      "tags": ["lumbridge", "combat", "chickens"]
+      "tags": [
+        "lumbridge",
+        "chickens",
+        "combat",
+        "feathers"
+      ]
     },
     {
-      "id": "wizard_tower",
-      "name": "Wizards' Tower",
-      "worldX": 3109,
-      "worldY": 3164,
+      "id": "lumbridge_swamp",
+      "name": "Lumbridge Swamp",
+      "worldX": 3147,
+      "worldY": 3177,
       "plane": 0,
-      "tags": ["wizard tower", "wizards tower", "runes", "quest"]
-    },
-    {
-      "id": "draynor_village",
-      "name": "Draynor Village",
-      "worldX": 3093,
-      "worldY": 3244,
-      "plane": 0,
-      "tags": ["draynor", "village"]
-    },
-    {
-      "id": "draynor_bank",
-      "name": "Draynor Bank",
-      "worldX": 3092,
-      "worldY": 3243,
-      "plane": 0,
-      "tags": ["draynor", "bank"]
-    },
-    {
-      "id": "draynor_willows",
-      "name": "Draynor Willows",
-      "worldX": 3087,
-      "worldY": 3235,
-      "plane": 0,
-      "tags": ["draynor", "woodcutting", "willow", "bank"]
-    },
-    {
-      "id": "draynor_manor",
-      "name": "Draynor Manor",
-      "worldX": 3109,
-      "worldY": 3351,
-      "plane": 0,
-      "tags": ["draynor", "manor", "quest"]
-    },
-    {
-      "id": "barbarian_village",
-      "name": "Barbarian Village",
-      "worldX": 3082,
-      "worldY": 3420,
-      "plane": 0,
-      "tags": ["barbarian village", "stronghold", "fishing", "fly fishing"]
-    },
-    {
-      "id": "edgeville_bank",
-      "name": "Edgeville Bank",
-      "worldX": 3094,
-      "worldY": 3492,
-      "plane": 0,
-      "tags": ["edgeville", "bank", "wilderness edge"]
-    },
-    {
-      "id": "varrock_center",
-      "name": "Varrock Center",
-      "worldX": 3210,
-      "worldY": 3424,
-      "plane": 0,
-      "tags": ["varrock", "city"]
-    },
-    {
-      "id": "varrock_east_bank",
-      "name": "Varrock East Bank",
-      "worldX": 3253,
-      "worldY": 3420,
-      "plane": 0,
-      "tags": ["varrock", "bank", "east"]
-    },
-    {
-      "id": "varrock_east_mine",
-      "name": "Varrock East Mine",
-      "worldX": 3286,
-      "worldY": 3365,
-      "plane": 0,
-      "tags": ["varrock", "mining", "tin", "copper", "iron"]
-    },
-    {
-      "id": "varrock_west_bank",
-      "name": "Varrock West Bank",
-      "worldX": 3185,
-      "worldY": 3436,
-      "plane": 0,
-      "tags": ["varrock", "bank", "west"]
-    },
-    {
-      "id": "varrock_west_trees",
-      "name": "Varrock West Trees",
-      "worldX": 3163,
-      "worldY": 3428,
-      "plane": 0,
-      "tags": ["varrock", "woodcutting", "trees", "oak", "bank"]
-    },
-    {
-      "id": "grand_exchange",
-      "name": "Grand Exchange",
-      "worldX": 3164,
-      "worldY": 3487,
-      "plane": 0,
-      "tags": ["varrock", "grand exchange", "ge", "bank", "trade"]
-    },
-    {
-      "id": "falador_center",
-      "name": "Falador Center",
-      "worldX": 2965,
-      "worldY": 3378,
-      "plane": 0,
-      "tags": ["falador", "city"]
-    },
-    {
-      "id": "falador_east_bank",
-      "name": "Falador East Bank",
-      "worldX": 3012,
-      "worldY": 3355,
-      "plane": 0,
-      "tags": ["falador", "bank", "east"]
-    },
-    {
-      "id": "falador_west_bank",
-      "name": "Falador West Bank",
-      "worldX": 2946,
-      "worldY": 3368,
-      "plane": 0,
-      "tags": ["falador", "bank", "west"]
-    },
-    {
-      "id": "rimmington",
-      "name": "Rimmington",
-      "worldX": 2957,
-      "worldY": 3214,
-      "plane": 0,
-      "tags": ["rimmington", "crafting", "mining"]
-    },
-    {
-      "id": "port_sarim",
-      "name": "Port Sarim",
-      "worldX": 3028,
-      "worldY": 3217,
-      "plane": 0,
-      "tags": ["port sarim", "port", "ships"]
-    },
-    {
-      "id": "al_kharid_bank",
-      "name": "Al Kharid Bank",
-      "worldX": 3270,
-      "worldY": 3167,
-      "plane": 0,
-      "tags": ["al kharid", "bank"]
-    },
-    {
-      "id": "al_kharid_mine",
-      "name": "Al Kharid Mine",
-      "worldX": 3298,
-      "worldY": 3299,
-      "plane": 0,
-      "tags": ["al kharid", "mining", "tin", "copper", "iron", "coal", "gold", "silver"]
-    },
-    {
-      "id": "duel_arena_gate",
-      "name": "Al Kharid North Gate",
-      "worldX": 3315,
-      "worldY": 3235,
-      "plane": 0,
-      "tags": ["al kharid", "north gate", "desert route"]
-    },
-    {
-      "id": "varrock_south_gate",
-      "name": "Varrock South Gate",
-      "worldX": 3211,
-      "worldY": 3380,
-      "plane": 0,
-      "tags": ["varrock", "south gate", "road"]
-    },
-    {
-      "id": "varrock_southeast_mine",
-      "name": "Varrock Southeast Mine",
-      "worldX": 3286,
-      "worldY": 3365,
-      "plane": 0,
-      "tags": ["varrock", "southeast mine", "mining", "tin", "copper", "iron"]
-    },
-    {
-      "id": "varrock_museum",
-      "name": "Varrock Museum",
-      "worldX": 3255,
-      "worldY": 3444,
-      "plane": 0,
-      "tags": ["varrock", "museum", "quest", "knowledge"]
-    },
-    {
-      "id": "edgeville_yews",
-      "name": "Edgeville Yews",
-      "worldX": 3087,
-      "worldY": 3471,
-      "plane": 0,
-      "tags": ["edgeville", "woodcutting", "yew", "bank"]
-    },
-    {
-      "id": "edgeville_willows",
-      "name": "Edgeville Willows",
-      "worldX": 3097,
-      "worldY": 3481,
-      "plane": 0,
-      "tags": ["edgeville", "woodcutting", "willow", "willows", "bank"]
-    },
-    {
-      "id": "barbarian_fishing",
-      "name": "Barbarian Village Fishing",
-      "worldX": 3105,
-      "worldY": 3433,
-      "plane": 0,
-      "tags": ["barbarian village", "fishing", "trout", "salmon", "fly fishing"]
-    },
-    {
-      "id": "falador_mine",
-      "name": "Falador Mine",
-      "worldX": 3059,
-      "worldY": 3375,
-      "plane": 0,
-      "tags": ["falador", "dwarven mine", "mining", "coal", "iron", "tin", "copper"]
-    },
-    {
-      "id": "falador_yews",
-      "name": "Falador Yews",
-      "worldX": 2998,
-      "worldY": 3312,
-      "plane": 0,
-      "tags": ["falador", "woodcutting", "yew"]
-    },
-    {
-      "id": "rimmington_mine",
-      "name": "Rimmington Mine",
-      "worldX": 2977,
-      "worldY": 3239,
-      "plane": 0,
-      "tags": ["rimmington", "mining", "clay", "tin", "copper", "iron", "gold"]
-    },
-    {
-      "id": "port_sarim_fishing",
-      "name": "Port Sarim Fishing",
-      "worldX": 3022,
-      "worldY": 3229,
-      "plane": 0,
-      "tags": ["port sarim", "fishing", "net", "bait", "shrimp", "sardine"]
-    },
-    {
-      "id": "karamja_dock",
-      "name": "Karamja Dock",
-      "worldX": 2956,
-      "worldY": 3146,
-      "plane": 0,
-      "tags": ["karamja", "dock", "ship", "banana", "fishing"]
-    },
-    {
-      "id": "karamja_fishing",
-      "name": "Karamja Fishing",
-      "worldX": 2924,
-      "worldY": 3179,
-      "plane": 0,
-      "tags": ["karamja", "fishing", "lobster", "tuna", "swordfish"]
-    },
-    {
-      "id": "draynor_fishing",
-      "name": "Draynor Fishing",
-      "worldX": 3085,
-      "worldY": 3230,
-      "plane": 0,
-      "tags": ["draynor", "fishing", "net", "bait", "shrimp"]
+      "tags": [
+        "lumbridge",
+        "swamp",
+        "net fishing"
+      ]
     },
     {
       "id": "lumbridge_swamp_mine",
@@ -320,58 +95,7307 @@
       "worldX": 3227,
       "worldY": 3148,
       "plane": 0,
-      "tags": ["lumbridge", "swamp", "mining", "coal", "mithril", "adamant"]
+      "tags": [
+        "lumbridge",
+        "swamp",
+        "mining",
+        "coal",
+        "mithril"
+      ]
+    },
+    {
+      "id": "lumbridge_guide",
+      "name": "Lumbridge Guide",
+      "worldX": 3232,
+      "worldY": 3232,
+      "plane": 0,
+      "tags": [
+        "lumbridge",
+        "guide",
+        "tutorial"
+      ]
+    },
+    {
+      "id": "draynor_village",
+      "name": "Draynor Village",
+      "worldX": 3093,
+      "worldY": 3244,
+      "plane": 0,
+      "tags": [
+        "draynor",
+        "village"
+      ]
+    },
+    {
+      "id": "draynor_bank",
+      "name": "Draynor Bank",
+      "worldX": 3092,
+      "worldY": 3243,
+      "plane": 0,
+      "tags": [
+        "draynor",
+        "bank"
+      ]
+    },
+    {
+      "id": "draynor_willows",
+      "name": "Draynor Willows",
+      "worldX": 3087,
+      "worldY": 3235,
+      "plane": 0,
+      "tags": [
+        "draynor",
+        "woodcutting",
+        "willow",
+        "willows",
+        "bank nearby"
+      ]
+    },
+    {
+      "id": "draynor_fishing",
+      "name": "Draynor Fishing Spots",
+      "worldX": 3085,
+      "worldY": 3230,
+      "plane": 0,
+      "tags": [
+        "draynor",
+        "fishing",
+        "shrimp",
+        "anchovies",
+        "net fishing"
+      ]
+    },
+    {
+      "id": "draynor_manor",
+      "name": "Draynor Manor",
+      "worldX": 3109,
+      "worldY": 3351,
+      "plane": 0,
+      "tags": [
+        "draynor",
+        "manor",
+        "quest"
+      ]
+    },
+    {
+      "id": "draynor_market",
+      "name": "Draynor Market",
+      "worldX": 3081,
+      "worldY": 3254,
+      "plane": 0,
+      "tags": [
+        "draynor",
+        "market",
+        "general store"
+      ]
+    },
+    {
+      "id": "wizard_tower",
+      "name": "Wizards' Tower",
+      "worldX": 3109,
+      "worldY": 3164,
+      "plane": 0,
+      "tags": [
+        "wizard tower",
+        "runes",
+        "quest",
+        "rune essence"
+      ]
+    },
+    {
+      "id": "fairy_ring_dis",
+      "name": "Fairy Ring DIS",
+      "worldX": 3110,
+      "worldY": 3150,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "dis",
+        "wizards tower"
+      ]
+    },
+    {
+      "id": "champions_guild",
+      "name": "Champions' Guild",
+      "worldX": 3191,
+      "worldY": 3368,
+      "plane": 0,
+      "tags": [
+        "champions guild",
+        "combat",
+        "quest"
+      ]
+    },
+    {
+      "id": "al_kharid_bank",
+      "name": "Al Kharid Bank",
+      "worldX": 3270,
+      "worldY": 3167,
+      "plane": 0,
+      "tags": [
+        "al kharid",
+        "bank",
+        "desert"
+      ]
+    },
+    {
+      "id": "al_kharid_mine",
+      "name": "Al Kharid Mine",
+      "worldX": 3298,
+      "worldY": 3299,
+      "plane": 0,
+      "tags": [
+        "al kharid",
+        "mining",
+        "tin",
+        "copper",
+        "iron",
+        "coal",
+        "gold",
+        "silver",
+        "scorpions"
+      ]
+    },
+    {
+      "id": "al_kharid_gate",
+      "name": "Al Kharid Gate",
+      "worldX": 3268,
+      "worldY": 3228,
+      "plane": 0,
+      "tags": [
+        "al kharid",
+        "gate",
+        "toll",
+        "10gp"
+      ]
+    },
+    {
+      "id": "al_kharid_crafting",
+      "name": "Al Kharid Crafting Area",
+      "worldX": 3289,
+      "worldY": 3188,
+      "plane": 0,
+      "tags": [
+        "al kharid",
+        "crafting",
+        "range"
+      ]
+    },
+    {
+      "id": "al_kharid_tanner",
+      "name": "Al Kharid Tanner",
+      "worldX": 3274,
+      "worldY": 3190,
+      "plane": 0,
+      "tags": [
+        "al kharid",
+        "tanner",
+        "leather",
+        "crafting"
+      ]
+    },
+    {
+      "id": "duel_arena_gate",
+      "name": "Al Kharid North Gate",
+      "worldX": 3315,
+      "worldY": 3235,
+      "plane": 0,
+      "tags": [
+        "al kharid",
+        "north gate",
+        "desert route"
+      ]
+    },
+    {
+      "id": "shantay_pass",
+      "name": "Shantay Pass",
+      "worldX": 3304,
+      "worldY": 3124,
+      "plane": 0,
+      "tags": [
+        "shantay pass",
+        "desert",
+        "kq route"
+      ]
+    },
+    {
+      "id": "varrock_center",
+      "name": "Varrock Centre",
+      "worldX": 3210,
+      "worldY": 3424,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "city",
+        "centre",
+        "fountain"
+      ]
+    },
+    {
+      "id": "varrock_teleport_dest",
+      "name": "Varrock (teleport dest)",
+      "worldX": 3213,
+      "worldY": 3424,
+      "plane": 0,
+      "tags": [
+        "varrock teleport",
+        "teleport destination",
+        "varrock"
+      ]
+    },
+    {
+      "id": "varrock_east_bank",
+      "name": "Varrock East Bank",
+      "worldX": 3253,
+      "worldY": 3420,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "bank",
+        "east bank",
+        "varrock east bank"
+      ]
+    },
+    {
+      "id": "varrock_west_bank",
+      "name": "Varrock West Bank",
+      "worldX": 3185,
+      "worldY": 3436,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "bank",
+        "west bank",
+        "varrock west bank"
+      ]
+    },
+    {
+      "id": "varrock_east_mine",
+      "name": "Varrock East Mine",
+      "worldX": 3286,
+      "worldY": 3365,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "mining",
+        "tin",
+        "copper",
+        "iron",
+        "east mine"
+      ]
+    },
+    {
+      "id": "varrock_west_mine",
+      "name": "Varrock West Mine",
+      "worldX": 3177,
+      "worldY": 3366,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "mining",
+        "tin",
+        "copper",
+        "west mine",
+        "barbarian village"
+      ]
+    },
+    {
+      "id": "varrock_west_trees",
+      "name": "Varrock West Oak Trees",
+      "worldX": 3163,
+      "worldY": 3428,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "woodcutting",
+        "trees",
+        "oak",
+        "bank nearby"
+      ]
+    },
+    {
+      "id": "varrock_museum",
+      "name": "Varrock Museum",
+      "worldX": 3255,
+      "worldY": 3444,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "museum",
+        "quest",
+        "kudos"
+      ]
+    },
+    {
+      "id": "varrock_anvil",
+      "name": "Varrock Anvil",
+      "worldX": 3188,
+      "worldY": 3421,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "smithing",
+        "anvil"
+      ]
+    },
+    {
+      "id": "varrock_palace",
+      "name": "Varrock Palace",
+      "worldX": 3212,
+      "worldY": 3463,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "palace",
+        "quest"
+      ]
+    },
+    {
+      "id": "varrock_magic_shop",
+      "name": "Varrock Magic Shop",
+      "worldX": 3253,
+      "worldY": 3403,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "magic shop",
+        "runes"
+      ]
+    },
+    {
+      "id": "varrock_general_store",
+      "name": "Varrock General Store",
+      "worldX": 3212,
+      "worldY": 3405,
+      "plane": 0,
+      "tags": [
+        "varrock",
+        "general store"
+      ]
+    },
+    {
+      "id": "grand_exchange",
+      "name": "Grand Exchange",
+      "worldX": 3164,
+      "worldY": 3487,
+      "plane": 0,
+      "tags": [
+        "grand exchange",
+        "ge",
+        "trading",
+        "bank",
+        "varrock"
+      ]
+    },
+    {
+      "id": "ge_bank",
+      "name": "Grand Exchange Bank",
+      "worldX": 3166,
+      "worldY": 3489,
+      "plane": 0,
+      "tags": [
+        "grand exchange",
+        "bank",
+        "ge bank"
+      ]
+    },
+    {
+      "id": "edgeville_bank",
+      "name": "Edgeville Bank",
+      "worldX": 3094,
+      "worldY": 3492,
+      "plane": 0,
+      "tags": [
+        "edgeville",
+        "bank",
+        "wilderness edge"
+      ]
+    },
+    {
+      "id": "edgeville_yews",
+      "name": "Edgeville Yews",
+      "worldX": 3087,
+      "worldY": 3471,
+      "plane": 0,
+      "tags": [
+        "edgeville",
+        "woodcutting",
+        "yew",
+        "bank nearby"
+      ]
+    },
+    {
+      "id": "edgeville_willows",
+      "name": "Edgeville Willows",
+      "worldX": 3097,
+      "worldY": 3481,
+      "plane": 0,
+      "tags": [
+        "edgeville",
+        "woodcutting",
+        "willows",
+        "bank nearby"
+      ]
+    },
+    {
+      "id": "edgeville_monastery",
+      "name": "Edgeville Monastery",
+      "worldX": 3052,
+      "worldY": 3489,
+      "plane": 0,
+      "tags": [
+        "edgeville",
+        "monastery",
+        "prayer",
+        "monk"
+      ]
+    },
+    {
+      "id": "edgeville_dungeon",
+      "name": "Edgeville Dungeon Entrance",
+      "worldX": 3096,
+      "worldY": 3468,
+      "plane": 0,
+      "tags": [
+        "edgeville",
+        "dungeon",
+        "men",
+        "chaos druids",
+        "hill giants"
+      ]
+    },
+    {
+      "id": "fairy_ring_dkr",
+      "name": "Fairy Ring DKR",
+      "worldX": 3128,
+      "worldY": 3496,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "dkr",
+        "edgeville",
+        "grand exchange"
+      ]
+    },
+    {
+      "id": "barbarian_village",
+      "name": "Barbarian Village",
+      "worldX": 3082,
+      "worldY": 3420,
+      "plane": 0,
+      "tags": [
+        "barbarian village",
+        "stronghold",
+        "mining",
+        "fishing"
+      ]
+    },
+    {
+      "id": "barbarian_fishing",
+      "name": "Barbarian Village Fly Fishing",
+      "worldX": 3105,
+      "worldY": 3433,
+      "plane": 0,
+      "tags": [
+        "barbarian village",
+        "fishing",
+        "fly fishing",
+        "trout",
+        "salmon"
+      ]
+    },
+    {
+      "id": "stronghold_security",
+      "name": "Stronghold of Security",
+      "worldX": 3081,
+      "worldY": 3420,
+      "plane": 0,
+      "tags": [
+        "stronghold",
+        "barbarian village",
+        "security",
+        "coins"
+      ]
+    },
+    {
+      "id": "falador_center",
+      "name": "Falador Centre",
+      "worldX": 2965,
+      "worldY": 3378,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "city"
+      ]
+    },
+    {
+      "id": "falador_teleport_dest",
+      "name": "Falador (teleport dest)",
+      "worldX": 2965,
+      "worldY": 3378,
+      "plane": 0,
+      "tags": [
+        "falador teleport",
+        "teleport destination",
+        "falador"
+      ]
+    },
+    {
+      "id": "falador_east_bank",
+      "name": "Falador East Bank",
+      "worldX": 3012,
+      "worldY": 3355,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "bank",
+        "east bank",
+        "falador east bank"
+      ]
+    },
+    {
+      "id": "falador_west_bank",
+      "name": "Falador West Bank",
+      "worldX": 2946,
+      "worldY": 3368,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "bank",
+        "west bank",
+        "falador west bank"
+      ]
+    },
+    {
+      "id": "falador_mine_entrance",
+      "name": "Dwarven Mine Entrance (Falador)",
+      "worldX": 3059,
+      "worldY": 3375,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "dwarven mine",
+        "mining",
+        "entrance"
+      ]
+    },
+    {
+      "id": "dwarven_mine",
+      "name": "Dwarven Mine",
+      "worldX": 3036,
+      "worldY": 9779,
+      "plane": 0,
+      "tags": [
+        "dwarven mine",
+        "mining",
+        "coal",
+        "iron",
+        "mithril",
+        "adamantite",
+        "rune rocks",
+        "underground"
+      ]
+    },
+    {
+      "id": "mining_guild",
+      "name": "Mining Guild",
+      "worldX": 3016,
+      "worldY": 9721,
+      "plane": 0,
+      "tags": [
+        "mining guild",
+        "mining",
+        "coal",
+        "mithril",
+        "underground",
+        "falador"
+      ]
+    },
+    {
+      "id": "falador_yews",
+      "name": "Falador Park Yews",
+      "worldX": 2998,
+      "worldY": 3312,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "woodcutting",
+        "yew",
+        "park"
+      ]
+    },
+    {
+      "id": "falador_party_room",
+      "name": "Falador Party Room",
+      "worldX": 3042,
+      "worldY": 3376,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "party room",
+        "bank nearby"
+      ]
+    },
+    {
+      "id": "falador_white_knights",
+      "name": "White Knights' Castle",
+      "worldX": 2976,
+      "worldY": 3344,
+      "plane": 0,
+      "tags": [
+        "falador",
+        "white knights",
+        "castle",
+        "quest"
+      ]
+    },
+    {
+      "id": "crafting_guild",
+      "name": "Crafting Guild",
+      "worldX": 2934,
+      "worldY": 3294,
+      "plane": 0,
+      "tags": [
+        "crafting guild",
+        "crafting",
+        "gold ore",
+        "silver ore",
+        "members"
+      ]
+    },
+    {
+      "id": "port_sarim",
+      "name": "Port Sarim",
+      "worldX": 3028,
+      "worldY": 3217,
+      "plane": 0,
+      "tags": [
+        "port sarim",
+        "port",
+        "boats",
+        "ships"
+      ]
+    },
+    {
+      "id": "port_sarim_fishing",
+      "name": "Port Sarim Fishing Spots",
+      "worldX": 3022,
+      "worldY": 3229,
+      "plane": 0,
+      "tags": [
+        "port sarim",
+        "fishing",
+        "shrimp",
+        "sardine",
+        "herring"
+      ]
+    },
+    {
+      "id": "port_sarim_docks",
+      "name": "Port Sarim Docks",
+      "worldX": 3026,
+      "worldY": 3207,
+      "plane": 0,
+      "tags": [
+        "port sarim",
+        "docks",
+        "ship",
+        "karamja",
+        "entrana"
+      ]
+    },
+    {
+      "id": "rimmington",
+      "name": "Rimmington",
+      "worldX": 2957,
+      "worldY": 3214,
+      "plane": 0,
+      "tags": [
+        "rimmington",
+        "crafting",
+        "mining"
+      ]
+    },
+    {
+      "id": "rimmington_mine",
+      "name": "Rimmington Mine",
+      "worldX": 2977,
+      "worldY": 3239,
+      "plane": 0,
+      "tags": [
+        "rimmington",
+        "mining",
+        "clay",
+        "tin",
+        "copper",
+        "iron",
+        "gold"
+      ]
+    },
+    {
+      "id": "fairy_ring_aiq",
+      "name": "Fairy Ring AIQ",
+      "worldX": 2998,
+      "worldY": 3104,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "aiq",
+        "mudskipper point",
+        "port sarim",
+        "rimmington"
+      ]
+    },
+    {
+      "id": "karamja_dock",
+      "name": "Karamja Dock (Musa Point)",
+      "worldX": 2956,
+      "worldY": 3146,
+      "plane": 0,
+      "tags": [
+        "karamja",
+        "dock",
+        "ship",
+        "banana",
+        "musa point"
+      ]
+    },
+    {
+      "id": "karamja_fishing",
+      "name": "Karamja Fishing Spots",
+      "worldX": 2924,
+      "worldY": 3179,
+      "plane": 0,
+      "tags": [
+        "karamja",
+        "fishing",
+        "lobster",
+        "tuna",
+        "swordfish",
+        "harpoon",
+        "cage"
+      ]
+    },
+    {
+      "id": "brimhaven",
+      "name": "Brimhaven",
+      "worldX": 2757,
+      "worldY": 3179,
+      "plane": 0,
+      "tags": [
+        "brimhaven",
+        "karamja",
+        "boat",
+        "members"
+      ]
+    },
+    {
+      "id": "tai_bwo_wannai",
+      "name": "Tai Bwo Wannai",
+      "worldX": 2791,
+      "worldY": 3085,
+      "plane": 0,
+      "tags": [
+        "tai bwo wannai",
+        "karamja",
+        "jungle",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_ckr",
+      "name": "Fairy Ring CKR",
+      "worldX": 2800,
+      "worldY": 3003,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "ckr",
+        "tai bwo wannai",
+        "shilo village",
+        "karamja"
+      ]
+    },
+    {
+      "id": "gnome_glider_gandius",
+      "name": "Gnome Glider (Karamja / Gandius)",
+      "worldX": 2970,
+      "worldY": 2971,
+      "plane": 0,
+      "tags": [
+        "gnome glider",
+        "gandius",
+        "karamja",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_dkp",
+      "name": "Fairy Ring DKP",
+      "worldX": 2900,
+      "worldY": 3112,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "dkp",
+        "karamja",
+        "gnome glider",
+        "members"
+      ]
+    },
+    {
+      "id": "camelot_teleport_dest",
+      "name": "Camelot (teleport dest)",
+      "worldX": 2757,
+      "worldY": 3477,
+      "plane": 0,
+      "tags": [
+        "camelot teleport",
+        "teleport destination",
+        "camelot",
+        "seers village"
+      ]
+    },
+    {
+      "id": "seers_village_bank",
+      "name": "Seers' Village Bank",
+      "worldX": 2727,
+      "worldY": 3493,
+      "plane": 0,
+      "tags": [
+        "seers village",
+        "bank",
+        "camelot",
+        "members"
+      ]
+    },
+    {
+      "id": "seers_village_maples",
+      "name": "Seers' Village Maples",
+      "worldX": 2725,
+      "worldY": 3501,
+      "plane": 0,
+      "tags": [
+        "seers village",
+        "woodcutting",
+        "maple",
+        "members"
+      ]
+    },
+    {
+      "id": "camelot_castle",
+      "name": "Camelot Castle",
+      "worldX": 2757,
+      "worldY": 3477,
+      "plane": 0,
+      "tags": [
+        "camelot",
+        "castle",
+        "quest",
+        "members"
+      ]
+    },
+    {
+      "id": "barbarian_outpost",
+      "name": "Barbarian Outpost",
+      "worldX": 2520,
+      "worldY": 3572,
+      "plane": 0,
+      "tags": [
+        "barbarian outpost",
+        "agility",
+        "members",
+        "ranging"
+      ]
+    },
+    {
+      "id": "fairy_ring_als",
+      "name": "Fairy Ring ALS",
+      "worldX": 2575,
+      "worldY": 3475,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "als",
+        "mcgrubors wood",
+        "seers village",
+        "fishing guild"
+      ]
+    },
+    {
+      "id": "fairy_ring_cjr",
+      "name": "Fairy Ring CJR",
+      "worldX": 2691,
+      "worldY": 3576,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "cjr",
+        "sinclair mansion",
+        "seers village",
+        "members"
+      ]
+    },
+    {
+      "id": "ardougne_teleport_dest",
+      "name": "East Ardougne (teleport dest)",
+      "worldX": 2662,
+      "worldY": 3305,
+      "plane": 0,
+      "tags": [
+        "ardougne teleport",
+        "teleport destination",
+        "ardougne",
+        "members"
+      ]
+    },
+    {
+      "id": "ardougne_east_bank",
+      "name": "East Ardougne Bank",
+      "worldX": 2653,
+      "worldY": 3286,
+      "plane": 0,
+      "tags": [
+        "ardougne",
+        "east ardougne",
+        "bank",
+        "members"
+      ]
+    },
+    {
+      "id": "ardougne_west_bank",
+      "name": "West Ardougne Bank",
+      "worldX": 2521,
+      "worldY": 3274,
+      "plane": 0,
+      "tags": [
+        "ardougne",
+        "west ardougne",
+        "bank",
+        "members"
+      ]
+    },
+    {
+      "id": "ardougne_market",
+      "name": "East Ardougne Market",
+      "worldX": 2657,
+      "worldY": 3313,
+      "plane": 0,
+      "tags": [
+        "ardougne",
+        "market",
+        "stalls",
+        "thieving",
+        "members"
+      ]
+    },
+    {
+      "id": "port_khazard",
+      "name": "Port Khazard",
+      "worldX": 2660,
+      "worldY": 3162,
+      "plane": 0,
+      "tags": [
+        "port khazard",
+        "fishing",
+        "tuna",
+        "swordfish",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_djp",
+      "name": "Fairy Ring DJP",
+      "worldX": 2658,
+      "worldY": 3230,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "djp",
+        "ardougne",
+        "tower of life",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_blr",
+      "name": "Fairy Ring BLR",
+      "worldX": 2740,
+      "worldY": 3351,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "blr",
+        "legends guild",
+        "ardougne",
+        "members"
+      ]
+    },
+    {
+      "id": "yanille_bank",
+      "name": "Yanille Bank",
+      "worldX": 2612,
+      "worldY": 3095,
+      "plane": 0,
+      "tags": [
+        "yanille",
+        "bank",
+        "members"
+      ]
+    },
+    {
+      "id": "castle_wars",
+      "name": "Castle Wars",
+      "worldX": 2440,
+      "worldY": 3093,
+      "plane": 0,
+      "tags": [
+        "castle wars",
+        "minigame",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_ciq",
+      "name": "Fairy Ring CIQ",
+      "worldX": 2570,
+      "worldY": 3249,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "ciq",
+        "yanille",
+        "tree gnome village",
+        "members"
+      ]
+    },
+    {
+      "id": "tree_gnome_village",
+      "name": "Tree Gnome Village",
+      "worldX": 2461,
+      "worldY": 3444,
+      "plane": 0,
+      "tags": [
+        "tree gnome village",
+        "gnome",
+        "quest",
+        "members",
+        "spirit tree"
+      ]
+    },
+    {
+      "id": "gnome_stronghold",
+      "name": "Tree Gnome Stronghold",
+      "worldX": 2461,
+      "worldY": 3444,
+      "plane": 0,
+      "tags": [
+        "gnome stronghold",
+        "gnome",
+        "bank",
+        "agility",
+        "members",
+        "spirit tree"
+      ]
+    },
+    {
+      "id": "gnome_stronghold_bank",
+      "name": "Tree Gnome Stronghold Bank",
+      "worldX": 2444,
+      "worldY": 3425,
+      "plane": 0,
+      "tags": [
+        "gnome stronghold",
+        "bank",
+        "members"
+      ]
+    },
+    {
+      "id": "gnome_agility_course",
+      "name": "Gnome Agility Course",
+      "worldX": 2474,
+      "worldY": 3436,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "gnome course",
+        "gnome stronghold",
+        "members",
+        "beginner"
+      ]
+    },
+    {
+      "id": "slayer_master_nieve",
+      "name": "Nieve / Steve (Gnome Stronghold)",
+      "worldX": 2432,
+      "worldY": 3423,
+      "plane": 0,
+      "tags": [
+        "slayer",
+        "nieve",
+        "steve",
+        "gnome stronghold",
+        "slayer master",
+        "members"
+      ]
+    },
+    {
+      "id": "gnome_glider_ta_quir_priw",
+      "name": "Gnome Glider (Gnome Stronghold)",
+      "worldX": 2465,
+      "worldY": 3498,
+      "plane": 3,
+      "tags": [
+        "gnome glider",
+        "ta quir priw",
+        "gnome stronghold",
+        "members"
+      ]
+    },
+    {
+      "id": "fishing_guild",
+      "name": "Fishing Guild",
+      "worldX": 2612,
+      "worldY": 3390,
+      "plane": 0,
+      "tags": [
+        "fishing guild",
+        "fishing",
+        "members",
+        "tuna",
+        "swordfish",
+        "sharks"
+      ]
+    },
+    {
+      "id": "ranging_guild",
+      "name": "Ranging Guild",
+      "worldX": 2668,
+      "worldY": 3416,
+      "plane": 0,
+      "tags": [
+        "ranging guild",
+        "ranging",
+        "members",
+        "arrows"
+      ]
+    },
+    {
+      "id": "catherby_bank",
+      "name": "Catherby Bank",
+      "worldX": 2810,
+      "worldY": 3441,
+      "plane": 0,
+      "tags": [
+        "catherby",
+        "bank",
+        "members"
+      ]
+    },
+    {
+      "id": "catherby_fishing",
+      "name": "Catherby Fishing",
+      "worldX": 2838,
+      "worldY": 3432,
+      "plane": 0,
+      "tags": [
+        "catherby",
+        "fishing",
+        "lobster",
+        "tuna",
+        "swordfish",
+        "members"
+      ]
+    },
+    {
+      "id": "catherby_teleport_dest",
+      "name": "Catherby (lunar teleport dest)",
+      "worldX": 2800,
+      "worldY": 3492,
+      "plane": 0,
+      "tags": [
+        "catherby teleport",
+        "lunar",
+        "members"
+      ]
+    },
+    {
+      "id": "gnome_glider_sindarpos",
+      "name": "Gnome Glider (White Wolf Mountain)",
+      "worldX": 2847,
+      "worldY": 3499,
+      "plane": 0,
+      "tags": [
+        "gnome glider",
+        "sindarpos",
+        "white wolf mountain",
+        "members"
+      ]
+    },
+    {
+      "id": "rellekka",
+      "name": "Rellekka",
+      "worldX": 2664,
+      "worldY": 3658,
+      "plane": 0,
+      "tags": [
+        "rellekka",
+        "fremennik",
+        "members",
+        "boat"
+      ]
+    },
+    {
+      "id": "rellekka_bank",
+      "name": "Rellekka Bank (Peer the Seer)",
+      "worldX": 2632,
+      "worldY": 3687,
+      "plane": 0,
+      "tags": [
+        "rellekka",
+        "bank",
+        "peer the seer",
+        "members"
+      ]
+    },
+    {
+      "id": "waterbirth_island",
+      "name": "Waterbirth Island",
+      "worldX": 2521,
+      "worldY": 3740,
+      "plane": 0,
+      "tags": [
+        "waterbirth island",
+        "members",
+        "dagannoth"
+      ]
+    },
+    {
+      "id": "fairy_ring_ajr",
+      "name": "Fairy Ring AJR",
+      "worldX": 2700,
+      "worldY": 3610,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "ajr",
+        "fremennik slayer dungeon",
+        "rellekka",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_dks",
+      "name": "Fairy Ring DKS",
+      "worldX": 2743,
+      "worldY": 3719,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "dks",
+        "keldagrim entrance",
+        "rock crabs",
+        "rellekka",
+        "members"
+      ]
+    },
+    {
+      "id": "keldagrim_bank",
+      "name": "Keldagrim Bank",
+      "worldX": 2839,
+      "worldY": 10210,
+      "plane": 0,
+      "tags": [
+        "keldagrim",
+        "bank",
+        "members",
+        "blast furnace nearby"
+      ]
+    },
+    {
+      "id": "blast_furnace",
+      "name": "Blast Furnace",
+      "worldX": 1940,
+      "worldY": 4956,
+      "plane": 0,
+      "tags": [
+        "blast furnace",
+        "smithing",
+        "members",
+        "keldagrim",
+        "minigame",
+        "bars"
+      ]
+    },
+    {
+      "id": "canifis",
+      "name": "Canifis",
+      "worldX": 3503,
+      "worldY": 3488,
+      "plane": 0,
+      "tags": [
+        "canifis",
+        "morytania",
+        "bank",
+        "members",
+        "werewolf"
+      ]
+    },
+    {
+      "id": "canifis_bank",
+      "name": "Canifis Bank",
+      "worldX": 3512,
+      "worldY": 3480,
+      "plane": 0,
+      "tags": [
+        "canifis",
+        "bank",
+        "morytania",
+        "members"
+      ]
+    },
+    {
+      "id": "slayer_tower",
+      "name": "Slayer Tower",
+      "worldX": 3428,
+      "worldY": 3551,
+      "plane": 0,
+      "tags": [
+        "slayer tower",
+        "morytania",
+        "slayer",
+        "members"
+      ]
+    },
+    {
+      "id": "barrows",
+      "name": "Barrows",
+      "worldX": 3565,
+      "worldY": 3314,
+      "plane": 0,
+      "tags": [
+        "barrows",
+        "morytania",
+        "members",
+        "boss"
+      ]
+    },
+    {
+      "id": "burgh_de_rott",
+      "name": "Burgh de Rott",
+      "worldX": 3495,
+      "worldY": 3210,
+      "plane": 0,
+      "tags": [
+        "burgh de rott",
+        "morytania",
+        "members",
+        "bank"
+      ]
+    },
+    {
+      "id": "port_phasmatys",
+      "name": "Port Phasmatys",
+      "worldX": 3702,
+      "worldY": 3502,
+      "plane": 0,
+      "tags": [
+        "port phasmatys",
+        "morytania",
+        "members",
+        "bank",
+        "fishing"
+      ]
+    },
+    {
+      "id": "fairy_ring_cks",
+      "name": "Fairy Ring CKS",
+      "worldX": 3507,
+      "worldY": 3444,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "cks",
+        "canifis",
+        "morytania",
+        "members",
+        "mushroom patch"
+      ]
+    },
+    {
+      "id": "fairy_ring_bkr",
+      "name": "Fairy Ring BKR",
+      "worldX": 3469,
+      "worldY": 3431,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "bkr",
+        "mort myre",
+        "morytania",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_alq",
+      "name": "Fairy Ring ALQ",
+      "worldX": 3678,
+      "worldY": 3508,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "alq",
+        "haunted woods",
+        "morytania",
+        "members"
+      ]
+    },
+    {
+      "id": "taverly",
+      "name": "Taverly",
+      "worldX": 2921,
+      "worldY": 3431,
+      "plane": 0,
+      "tags": [
+        "taverly",
+        "taverley",
+        "members",
+        "herblore",
+        "druid"
+      ]
+    },
+    {
+      "id": "taverly_dungeon",
+      "name": "Taverly Dungeon",
+      "worldX": 2884,
+      "worldY": 9799,
+      "plane": 0,
+      "tags": [
+        "taverly dungeon",
+        "members",
+        "blue dragons",
+        "black knights"
+      ]
+    },
+    {
+      "id": "burthorpe",
+      "name": "Burthorpe",
+      "worldX": 2899,
+      "worldY": 3545,
+      "plane": 0,
+      "tags": [
+        "burthorpe",
+        "warriors guild",
+        "members",
+        "combat"
+      ]
+    },
+    {
+      "id": "slayer_master_turael",
+      "name": "Turael (Burthorpe)",
+      "worldX": 2930,
+      "worldY": 3536,
+      "plane": 0,
+      "tags": [
+        "slayer",
+        "turael",
+        "burthorpe",
+        "slayer master"
+      ]
+    },
+    {
+      "id": "hosidius_bank",
+      "name": "Hosidius Bank",
+      "worldX": 1676,
+      "worldY": 3616,
+      "plane": 0,
+      "tags": [
+        "hosidius",
+        "bank",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "kourend_castle_teleport_dest",
+      "name": "Kourend Castle (teleport dest)",
+      "worldX": 1619,
+      "worldY": 3666,
+      "plane": 0,
+      "tags": [
+        "kourend castle teleport",
+        "teleport destination",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "shayzien_bank",
+      "name": "Shayzien Bank",
+      "worldX": 1504,
+      "worldY": 3632,
+      "plane": 0,
+      "tags": [
+        "shayzien",
+        "bank",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "arceuus_bank",
+      "name": "Arceuus Bank",
+      "worldX": 1624,
+      "worldY": 3733,
+      "plane": 0,
+      "tags": [
+        "arceuus",
+        "bank",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "piscarilius_bank",
+      "name": "Port Piscarilius Bank",
+      "worldX": 1794,
+      "worldY": 3790,
+      "plane": 0,
+      "tags": [
+        "piscarilius",
+        "bank",
+        "great kourend",
+        "members",
+        "fishing"
+      ]
+    },
+    {
+      "id": "lovakengj_bank",
+      "name": "Lovakengj Bank",
+      "worldX": 1498,
+      "worldY": 3818,
+      "plane": 0,
+      "tags": [
+        "lovakengj",
+        "bank",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "farming_guild",
+      "name": "Farming Guild",
+      "worldX": 1248,
+      "worldY": 3727,
+      "plane": 0,
+      "tags": [
+        "farming guild",
+        "farming",
+        "members",
+        "great kourend"
+      ]
+    },
+    {
+      "id": "fairy_ring_cis",
+      "name": "Fairy Ring CIS",
+      "worldX": 1646,
+      "worldY": 3866,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "cis",
+        "arceuus library",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_djr",
+      "name": "Fairy Ring DJR",
+      "worldX": 1478,
+      "worldY": 3602,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "djr",
+        "chasm of fire",
+        "shayzien",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_cir",
+      "name": "Fairy Ring CIR",
+      "worldX": 1302,
+      "worldY": 3764,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "cir",
+        "mount karuulm",
+        "farming guild",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_akr",
+      "name": "Fairy Ring AKR",
+      "worldX": 1809,
+      "worldY": 3565,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "akr",
+        "hosidius vinery",
+        "tithe farm",
+        "great kourend",
+        "members"
+      ]
+    },
+    {
+      "id": "slayer_master_konar",
+      "name": "Konar quo Maten (Mount Karuulm)",
+      "worldX": 1313,
+      "worldY": 3789,
+      "plane": 0,
+      "tags": [
+        "slayer",
+        "konar",
+        "mount karuulm",
+        "slayer master",
+        "members"
+      ]
+    },
+    {
+      "id": "fairy_ring_bls",
+      "name": "Fairy Ring BLS",
+      "worldX": 1245,
+      "worldY": 3644,
+      "plane": 0,
+      "tags": [
+        "fairy ring",
+        "bls",
+        "mount quidamortem",
+        "chambers of xeric",
+        "members"
+      ]
+    },
+    {
+      "id": "spirit_tree_gnome_stronghold",
+      "name": "Spirit Tree (Gnome Stronghold)",
+      "worldX": 2461,
+      "worldY": 3444,
+      "plane": 0,
+      "tags": [
+        "spirit tree",
+        "gnome stronghold",
+        "members"
+      ]
+    },
+    {
+      "id": "spirit_tree_ge",
+      "name": "Spirit Tree (Grand Exchange)",
+      "worldX": 3182,
+      "worldY": 3508,
+      "plane": 0,
+      "tags": [
+        "spirit tree",
+        "grand exchange",
+        "ge",
+        "members"
+      ]
+    },
+    {
+      "id": "spirit_tree_feldip",
+      "name": "Spirit Tree (Feldip Hills)",
+      "worldX": 2490,
+      "worldY": 2899,
+      "plane": 0,
+      "tags": [
+        "spirit tree",
+        "feldip hills",
+        "members"
+      ]
+    },
+    {
+      "id": "spirit_tree_farming_guild",
+      "name": "Spirit Tree (Farming Guild)",
+      "worldX": 1248,
+      "worldY": 3727,
+      "plane": 0,
+      "tags": [
+        "spirit tree",
+        "farming guild",
+        "members"
+      ]
+    },
+    {
+      "id": "gnome_glider_kar_hewo",
+      "name": "Gnome Glider (Feldip Hills)",
+      "worldX": 2541,
+      "worldY": 2971,
+      "plane": 0,
+      "tags": [
+        "gnome glider",
+        "kar hewo",
+        "feldip hills",
+        "members"
+      ]
+    },
+    {
+      "id": "gnome_glider_lemantolly",
+      "name": "Gnome Glider (Lemantolly Undri)",
+      "worldX": 2680,
+      "worldY": 3509,
+      "plane": 3,
+      "tags": [
+        "gnome glider",
+        "lemantolly undri",
+        "ardougne",
+        "members"
+      ]
+    },
+    {
+      "id": "wilderness_level_1",
+      "name": "Wilderness Entry (level 1)",
+      "worldX": 3098,
+      "worldY": 3523,
+      "plane": 0,
+      "tags": [
+        "wilderness",
+        "level 1",
+        "wildy",
+        "ditch"
+      ]
+    },
+    {
+      "id": "wilderness_green_dragons",
+      "name": "Wilderness Green Dragons (lvl 13)",
+      "worldX": 3096,
+      "worldY": 3537,
+      "plane": 0,
+      "tags": [
+        "wilderness",
+        "green dragons",
+        "level 13",
+        "members",
+        "wildy"
+      ]
+    },
+    {
+      "id": "wilderness_rev_caves",
+      "name": "Wilderness Revenants (lvl 17-40)",
+      "worldX": 3076,
+      "worldY": 3651,
+      "plane": 0,
+      "tags": [
+        "wilderness",
+        "revenants",
+        "level 17",
+        "members",
+        "wildy",
+        "pkers"
+      ]
+    },
+    {
+      "id": "wilderness_chaos_altar",
+      "name": "Wilderness Chaos Altar (lvl 38)",
+      "worldX": 2952,
+      "worldY": 3820,
+      "plane": 0,
+      "tags": [
+        "wilderness",
+        "chaos altar",
+        "level 38",
+        "wildy",
+        "prayer",
+        "bones"
+      ]
+    },
+    {
+      "id": "ferox_enclave",
+      "name": "Ferox Enclave (Wilderness bank)",
+      "worldX": 3151,
+      "worldY": 3635,
+      "plane": 0,
+      "tags": [
+        "ferox enclave",
+        "wilderness",
+        "bank",
+        "members",
+        "rod teleport"
+      ]
+    },
+    {
+      "id": "canoe_lumbridge",
+      "name": "Canoe Station (Lumbridge)",
+      "worldX": 3239,
+      "worldY": 3238,
+      "plane": 0,
+      "tags": [
+        "canoe",
+        "lumbridge",
+        "river lum",
+        "woodcutting 12"
+      ]
+    },
+    {
+      "id": "canoe_champions_guild",
+      "name": "Canoe Station (Champions' Guild)",
+      "worldX": 3239,
+      "worldY": 3352,
+      "plane": 0,
+      "tags": [
+        "canoe",
+        "champions guild",
+        "river lum",
+        "woodcutting 12"
+      ]
+    },
+    {
+      "id": "canoe_barbarian",
+      "name": "Canoe Station (Barbarian Village)",
+      "worldX": 3109,
+      "worldY": 3413,
+      "plane": 0,
+      "tags": [
+        "canoe",
+        "barbarian village",
+        "river lum",
+        "woodcutting 12"
+      ]
+    },
+    {
+      "id": "canoe_edgeville",
+      "name": "Canoe Station (Edgeville)",
+      "worldX": 3131,
+      "worldY": 3510,
+      "plane": 0,
+      "tags": [
+        "canoe",
+        "edgeville",
+        "river lum",
+        "woodcutting 12"
+      ]
+    },
+    {
+      "id": "wilderness_canoe",
+      "name": "Wilderness Canoe Landing (lvl 35)",
+      "worldX": 3094,
+      "worldY": 3511,
+      "plane": 0,
+      "tags": [
+        "wilderness",
+        "canoe",
+        "woodcutting 57",
+        "wildy"
+      ]
+    },
+    {
+      "id": "glory_edgeville",
+      "name": "Amulet of Glory → Edgeville",
+      "worldX": 3087,
+      "worldY": 3496,
+      "plane": 0,
+      "tags": [
+        "glory",
+        "amulet of glory",
+        "edgeville",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "glory_draynor",
+      "name": "Amulet of Glory → Draynor Village",
+      "worldX": 3105,
+      "worldY": 3251,
+      "plane": 0,
+      "tags": [
+        "glory",
+        "amulet of glory",
+        "draynor village",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "glory_al_kharid",
+      "name": "Amulet of Glory → Al Kharid",
+      "worldX": 3293,
+      "worldY": 3163,
+      "plane": 0,
+      "tags": [
+        "glory",
+        "amulet of glory",
+        "al kharid",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "glory_karamja",
+      "name": "Amulet of Glory → Karamja",
+      "worldX": 2918,
+      "worldY": 3176,
+      "plane": 0,
+      "tags": [
+        "glory",
+        "amulet of glory",
+        "karamja",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "rod_castle_wars",
+      "name": "Ring of Dueling → Castle Wars",
+      "worldX": 2440,
+      "worldY": 3090,
+      "plane": 0,
+      "tags": [
+        "ring of dueling",
+        "rod",
+        "castle wars",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "rod_brimhaven",
+      "name": "Ring of Dueling → Brimhaven",
+      "worldX": 2762,
+      "worldY": 3176,
+      "plane": 0,
+      "tags": [
+        "ring of dueling",
+        "rod",
+        "brimhaven",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "skills_necklace_fishing_guild",
+      "name": "Skills Necklace → Fishing Guild",
+      "worldX": 2611,
+      "worldY": 3390,
+      "plane": 0,
+      "tags": [
+        "skills necklace",
+        "fishing guild",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "skills_necklace_crafting_guild",
+      "name": "Skills Necklace → Crafting Guild",
+      "worldX": 2933,
+      "worldY": 3293,
+      "plane": 0,
+      "tags": [
+        "skills necklace",
+        "crafting guild",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "skills_necklace_farming_guild",
+      "name": "Skills Necklace → Farming Guild",
+      "worldX": 1251,
+      "worldY": 3726,
+      "plane": 0,
+      "tags": [
+        "skills necklace",
+        "farming guild",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "combat_bracelet_warriors_guild",
+      "name": "Combat Bracelet → Warriors' Guild",
+      "worldX": 2882,
+      "worldY": 3549,
+      "plane": 0,
+      "tags": [
+        "combat bracelet",
+        "warriors guild",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "combat_bracelet_champions_guild",
+      "name": "Combat Bracelet → Champions' Guild",
+      "worldX": 3191,
+      "worldY": 3368,
+      "plane": 0,
+      "tags": [
+        "combat bracelet",
+        "champions guild",
+        "teleport item"
+      ]
+    },
+    {
+      "id": "combat_bracelet_ranging_guild",
+      "name": "Combat Bracelet → Ranging Guild",
+      "worldX": 2655,
+      "worldY": 3440,
+      "plane": 0,
+      "tags": [
+        "combat bracelet",
+        "ranging guild",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "combat_bracelet_monastery",
+      "name": "Combat Bracelet → Monastery",
+      "worldX": 3052,
+      "worldY": 3489,
+      "plane": 0,
+      "tags": [
+        "combat bracelet",
+        "monastery",
+        "teleport item"
+      ]
+    },
+    {
+      "id": "necklace_passage_wizards_tower",
+      "name": "Necklace of Passage → Wizards' Tower",
+      "worldX": 3113,
+      "worldY": 3179,
+      "plane": 0,
+      "tags": [
+        "necklace of passage",
+        "wizards tower",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "necklace_passage_goblin_village",
+      "name": "Necklace of Passage → Goblin Village",
+      "worldX": 2957,
+      "worldY": 3508,
+      "plane": 0,
+      "tags": [
+        "necklace of passage",
+        "goblin village",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "necklace_passage_desert_eagle",
+      "name": "Necklace of Passage → Desert Eagle Station",
+      "worldX": 3406,
+      "worldY": 3157,
+      "plane": 0,
+      "tags": [
+        "necklace of passage",
+        "desert eagle station",
+        "teleport item",
+        "members"
+      ]
+    },
+    {
+      "id": "burning_amulet_chaos_temple",
+      "name": "Burning Amulet → Chaos Temple (lvl 38)",
+      "worldX": 3235,
+      "worldY": 3639,
+      "plane": 0,
+      "tags": [
+        "burning amulet",
+        "chaos temple",
+        "wilderness",
+        "teleport item"
+      ]
+    },
+    {
+      "id": "burning_amulet_lava_maze",
+      "name": "Burning Amulet → Lava Maze (lvl 41)",
+      "worldX": 3028,
+      "worldY": 3841,
+      "plane": 0,
+      "tags": [
+        "burning amulet",
+        "lava maze",
+        "wilderness",
+        "teleport item"
+      ]
+    },
+    {
+      "id": "burning_amulet_volcano",
+      "name": "Burning Amulet → Wilderness Volcano (lvl 25)",
+      "worldX": 2980,
+      "worldY": 3878,
+      "plane": 0,
+      "tags": [
+        "burning amulet",
+        "wilderness volcano",
+        "teleport item"
+      ]
+    },
+    {
+      "id": "draynor_rooftop",
+      "name": "Draynor Rooftop Course",
+      "worldX": 3103,
+      "worldY": 3279,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "rooftop",
+        "draynor",
+        "marks of grace",
+        "members",
+        "level 10"
+      ]
+    },
+    {
+      "id": "al_kharid_rooftop",
+      "name": "Al Kharid Rooftop Course",
+      "worldX": 3273,
+      "worldY": 3195,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "rooftop",
+        "al kharid",
+        "marks of grace",
+        "members",
+        "level 20"
+      ]
+    },
+    {
+      "id": "varrock_rooftop",
+      "name": "Varrock Rooftop Course",
+      "worldX": 3221,
+      "worldY": 3414,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "rooftop",
+        "varrock",
+        "marks of grace",
+        "members",
+        "level 30"
+      ]
+    },
+    {
+      "id": "canifis_rooftop",
+      "name": "Canifis Rooftop Course",
+      "worldX": 3508,
+      "worldY": 3484,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "rooftop",
+        "canifis",
+        "marks of grace",
+        "members",
+        "level 40"
+      ]
+    },
+    {
+      "id": "seers_rooftop",
+      "name": "Seers' Village Rooftop Course",
+      "worldX": 2729,
+      "worldY": 3489,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "rooftop",
+        "seers village",
+        "marks of grace",
+        "members",
+        "level 60"
+      ]
+    },
+    {
+      "id": "ardougne_rooftop",
+      "name": "Ardougne Rooftop Course",
+      "worldX": 2673,
+      "worldY": 3299,
+      "plane": 0,
+      "tags": [
+        "agility",
+        "rooftop",
+        "ardougne",
+        "marks of grace",
+        "members",
+        "level 90"
+      ]
+    },
+    {
+      "id": "slayer_master_chaeldar",
+      "name": "Chaeldar (Zanaris)",
+      "worldX": 2446,
+      "worldY": 4433,
+      "plane": 0,
+      "tags": [
+        "slayer",
+        "chaeldar",
+        "zanaris",
+        "slayer master",
+        "members"
+      ]
+    },
+    {
+      "id": "slayer_master_duradel",
+      "name": "Duradel (Shilo Village)",
+      "worldX": 2870,
+      "worldY": 2979,
+      "plane": 1,
+      "tags": [
+        "slayer",
+        "duradel",
+        "shilo village",
+        "slayer master",
+        "members"
+      ]
+    },
+    {
+      "id": "godwars_dungeon",
+      "name": "God Wars Dungeon",
+      "worldX": 2922,
+      "worldY": 5300,
+      "plane": 0,
+      "tags": [
+        "gwd",
+        "boss",
+        "members",
+        "bandos",
+        "armadyl",
+        "zamorak",
+        "saradomin"
+      ]
+    },
+    {
+      "id": "warriors_guild",
+      "name": "Warriors' Guild",
+      "worldX": 2882,
+      "worldY": 3549,
+      "plane": 0,
+      "tags": [
+        "warriors guild",
+        "members",
+        "dragon defender",
+        "bank"
+      ]
     }
   ],
   "edges": [
-    { "from": "lumbridge_castle", "to": "lumbridge_castle_bank", "mode": "stairs", "cost": 14, "f2p": true, "risk": "low", "requirements": ["climb two staircases to the top floor"], "action": "use Lumbridge Castle stairs to reach the top-floor bank" },
-    { "from": "lumbridge_castle", "to": "lumbridge_trees", "mode": "walk", "cost": 18, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_trees", "to": "lumbridge_cows", "mode": "walk", "cost": 58, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_cows", "to": "lumbridge_chickens", "mode": "walk", "cost": 39, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_castle", "to": "wizard_tower", "mode": "walk", "cost": 132, "f2p": true, "risk": "low" },
-    { "from": "wizard_tower", "to": "draynor_village", "mode": "walk", "cost": 82, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_castle", "to": "draynor_village", "mode": "walk", "cost": 132, "f2p": true, "risk": "low" },
-    { "from": "draynor_village", "to": "draynor_bank", "mode": "walk", "cost": 3, "f2p": true, "risk": "low" },
-    { "from": "draynor_bank", "to": "draynor_willows", "mode": "walk", "cost": 11, "f2p": true, "risk": "low" },
-    { "from": "draynor_willows", "to": "draynor_fishing", "mode": "walk", "cost": 5, "f2p": true, "risk": "low" },
-    { "from": "draynor_village", "to": "draynor_manor", "mode": "walk", "cost": 107, "f2p": true, "risk": "medium", "action": "avoid aggressive manor-area NPCs if low level" },
-    { "from": "draynor_manor", "to": "barbarian_village", "mode": "walk", "cost": 85, "f2p": true, "risk": "low" },
-    { "from": "barbarian_village", "to": "barbarian_fishing", "mode": "walk", "cost": 23, "f2p": true, "risk": "low" },
-    { "from": "barbarian_village", "to": "edgeville_bank", "mode": "walk", "cost": 73, "f2p": true, "risk": "medium", "action": "avoid entering Wilderness unless explicitly requested" },
-    { "from": "edgeville_bank", "to": "edgeville_yews", "mode": "walk", "cost": 22, "f2p": true, "risk": "medium", "action": "stay south of Wilderness ditch" },
-    { "from": "edgeville_bank", "to": "edgeville_willows", "mode": "walk", "cost": 15, "f2p": true, "risk": "medium", "action": "stay south of Wilderness ditch" },
-    { "from": "grand_exchange", "to": "edgeville_bank", "mode": "walk", "cost": 55, "f2p": true, "risk": "low" },
-    { "from": "barbarian_village", "to": "varrock_west_bank", "mode": "walk", "cost": 103, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_castle", "to": "al_kharid_bank", "mode": "walk", "cost": 96, "f2p": true, "risk": "low", "requirements": ["10 gp gate toll or quest/unlocked access if using gate"], "action": "open/pay toll at Al Kharid gate if route uses gate" },
-    { "from": "al_kharid_bank", "to": "al_kharid_mine", "mode": "walk", "cost": 132, "f2p": true, "risk": "medium", "action": "watch for aggressive scorpions at low combat level" },
-    { "from": "al_kharid_bank", "to": "duel_arena_gate", "mode": "walk", "cost": 72, "f2p": true, "risk": "low" },
-    { "from": "duel_arena_gate", "to": "varrock_south_gate", "mode": "walk", "cost": 145, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_cows", "to": "varrock_center", "mode": "walk", "cost": 170, "f2p": true, "risk": "low" },
-    { "from": "draynor_village", "to": "varrock_west_bank", "mode": "walk", "cost": 185, "f2p": true, "risk": "low" },
-    { "from": "varrock_south_gate", "to": "varrock_center", "mode": "walk", "cost": 45, "f2p": true, "risk": "low" },
-    { "from": "varrock_center", "to": "varrock_west_bank", "mode": "walk", "cost": 29, "f2p": true, "risk": "low" },
-    { "from": "varrock_center", "to": "varrock_east_bank", "mode": "walk", "cost": 44, "f2p": true, "risk": "low" },
-    { "from": "varrock_east_bank", "to": "varrock_east_mine", "mode": "walk", "cost": 62, "f2p": true, "risk": "low" },
-    { "from": "varrock_east_mine", "to": "varrock_southeast_mine", "mode": "walk", "cost": 8, "f2p": true, "risk": "low" },
-    { "from": "varrock_east_bank", "to": "varrock_museum", "mode": "walk", "cost": 45, "f2p": true, "risk": "low" },
-    { "from": "varrock_west_bank", "to": "varrock_west_trees", "mode": "walk", "cost": 24, "f2p": true, "risk": "low" },
-    { "from": "varrock_west_bank", "to": "grand_exchange", "mode": "walk", "cost": 61, "f2p": true, "risk": "low" },
-    { "from": "varrock_center", "to": "grand_exchange", "mode": "walk", "cost": 96, "f2p": true, "risk": "low" },
-    { "from": "draynor_village", "to": "falador_east_bank", "mode": "walk", "cost": 135, "f2p": true, "risk": "low" },
-    { "from": "falador_east_bank", "to": "falador_center", "mode": "walk", "cost": 52, "f2p": true, "risk": "low" },
-    { "from": "falador_center", "to": "falador_west_bank", "mode": "walk", "cost": 22, "f2p": true, "risk": "low" },
-    { "from": "falador_east_bank", "to": "falador_mine", "mode": "walk", "cost": 48, "f2p": true, "risk": "low", "action": "use mine entrance/ladders if routing underground later" },
-    { "from": "falador_east_bank", "to": "falador_yews", "mode": "walk", "cost": 65, "f2p": true, "risk": "low" },
-    { "from": "falador_east_bank", "to": "barbarian_village", "mode": "walk", "cost": 106, "f2p": true, "risk": "low" },
-    { "from": "falador_east_bank", "to": "port_sarim", "mode": "walk", "cost": 141, "f2p": true, "risk": "low" },
-    { "from": "port_sarim", "to": "port_sarim_fishing", "mode": "walk", "cost": 12, "f2p": true, "risk": "low" },
-    { "from": "port_sarim", "to": "rimmington", "mode": "walk", "cost": 71, "f2p": true, "risk": "low" },
-    { "from": "rimmington", "to": "rimmington_mine", "mode": "walk", "cost": 24, "f2p": true, "risk": "low" },
-    { "from": "rimmington", "to": "falador_west_bank", "mode": "walk", "cost": 154, "f2p": true, "risk": "low" },
-    { "from": "port_sarim", "to": "draynor_village", "mode": "walk", "cost": 67, "f2p": true, "risk": "low" },
-    { "from": "port_sarim", "to": "karamja_dock", "mode": "ship", "cost": 55, "f2p": true, "risk": "low", "requirements": ["30 gp ship fare"], "action": "talk-to/pay Seaman at Port Sarim for Karamja ship" },
-    { "from": "karamja_dock", "to": "karamja_fishing", "mode": "walk", "cost": 44, "f2p": true, "risk": "low" },
-    { "from": "lumbridge_castle", "to": "lumbridge_swamp_mine", "mode": "walk", "cost": 70, "f2p": true, "risk": "medium", "action": "avoid swamp monsters if low level" },
-    { "from": "lumbridge_swamp_mine", "to": "al_kharid_bank", "mode": "walk", "cost": 92, "f2p": true, "risk": "medium" }
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_trees",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_trees",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_guide",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_guide",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_cows",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_cows",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_cows",
+      "to": "lumbridge_chickens",
+      "mode": "walk",
+      "cost": 39,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_chickens",
+      "to": "lumbridge_cows",
+      "mode": "walk",
+      "cost": 39,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_swamp",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_swamp",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_swamp_mine",
+      "mode": "walk",
+      "cost": 65,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "lumbridge_swamp_mine",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 65,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "al_kharid_gate",
+      "mode": "walk",
+      "cost": 95,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_gate",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 95,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "draynor_village",
+      "mode": "walk",
+      "cost": 132,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_village",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 132,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "champions_guild",
+      "mode": "walk",
+      "cost": 145,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "champions_guild",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 145,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_gate",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 50,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "al_kharid_gate",
+      "mode": "walk",
+      "cost": 50,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "al_kharid_mine",
+      "mode": "walk",
+      "cost": 130,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "al_kharid_mine",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 130,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "al_kharid_crafting",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_crafting",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "al_kharid_tanner",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_tanner",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "duel_arena_gate",
+      "mode": "walk",
+      "cost": 70,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "duel_arena_gate",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 70,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "shantay_pass",
+      "mode": "walk",
+      "cost": 125,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "shantay_pass",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 125,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "duel_arena_gate",
+      "to": "varrock_east_bank",
+      "mode": "walk",
+      "cost": 145,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "duel_arena_gate",
+      "mode": "walk",
+      "cost": 145,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_village",
+      "to": "draynor_bank",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_bank",
+      "to": "draynor_village",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_bank",
+      "to": "draynor_willows",
+      "mode": "walk",
+      "cost": 11,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_willows",
+      "to": "draynor_bank",
+      "mode": "walk",
+      "cost": 11,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_bank",
+      "to": "draynor_fishing",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_fishing",
+      "to": "draynor_bank",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_bank",
+      "to": "draynor_market",
+      "mode": "walk",
+      "cost": 14,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_market",
+      "to": "draynor_bank",
+      "mode": "walk",
+      "cost": 14,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_village",
+      "to": "wizard_tower",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "wizard_tower",
+      "to": "draynor_village",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "wizard_tower",
+      "to": "fairy_ring_dis",
+      "mode": "walk",
+      "cost": 16,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_dis",
+      "to": "wizard_tower",
+      "mode": "walk",
+      "cost": 16,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_village",
+      "to": "draynor_manor",
+      "mode": "walk",
+      "cost": 108,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "draynor_manor",
+      "to": "draynor_village",
+      "mode": "walk",
+      "cost": 108,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "draynor_village",
+      "to": "port_sarim",
+      "mode": "walk",
+      "cost": 67,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim",
+      "to": "draynor_village",
+      "mode": "walk",
+      "cost": 67,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_village",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 135,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "draynor_village",
+      "mode": "walk",
+      "cost": 135,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_manor",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "draynor_manor",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_center",
+      "to": "varrock_west_bank",
+      "mode": "walk",
+      "cost": 29,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_bank",
+      "to": "varrock_center",
+      "mode": "walk",
+      "cost": 29,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_center",
+      "to": "varrock_east_bank",
+      "mode": "walk",
+      "cost": 44,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "varrock_center",
+      "mode": "walk",
+      "cost": 44,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_center",
+      "to": "varrock_palace",
+      "mode": "walk",
+      "cost": 45,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_palace",
+      "to": "varrock_center",
+      "mode": "walk",
+      "cost": 45,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_center",
+      "to": "varrock_general_store",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_general_store",
+      "to": "varrock_center",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "varrock_east_mine",
+      "mode": "walk",
+      "cost": 62,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_mine",
+      "to": "varrock_east_bank",
+      "mode": "walk",
+      "cost": 62,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "varrock_museum",
+      "mode": "walk",
+      "cost": 45,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_museum",
+      "to": "varrock_east_bank",
+      "mode": "walk",
+      "cost": 45,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "varrock_magic_shop",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_magic_shop",
+      "to": "varrock_east_bank",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_bank",
+      "to": "varrock_west_trees",
+      "mode": "walk",
+      "cost": 24,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_trees",
+      "to": "varrock_west_bank",
+      "mode": "walk",
+      "cost": 24,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_bank",
+      "to": "varrock_anvil",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_anvil",
+      "to": "varrock_west_bank",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_bank",
+      "to": "grand_exchange",
+      "mode": "walk",
+      "cost": 61,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "grand_exchange",
+      "to": "varrock_west_bank",
+      "mode": "walk",
+      "cost": 61,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "grand_exchange",
+      "to": "ge_bank",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "ge_bank",
+      "to": "grand_exchange",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "grand_exchange",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 55,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "grand_exchange",
+      "mode": "walk",
+      "cost": 55,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "grand_exchange",
+      "to": "fairy_ring_dkr",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "grand_exchange",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "grand_exchange",
+      "to": "spirit_tree_ge",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "spirit_tree_ge",
+      "to": "grand_exchange",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "edgeville_yews",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "edgeville_yews",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "edgeville_willows",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_willows",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "edgeville_monastery",
+      "mode": "walk",
+      "cost": 52,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_monastery",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 52,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "edgeville_dungeon",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_dungeon",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "wilderness_level_1",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_level_1",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "fairy_ring_dkr",
+      "mode": "walk",
+      "cost": 42,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 42,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "canoe_edgeville",
+      "mode": "walk",
+      "cost": 20,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "canoe_edgeville",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 20,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "ferox_enclave",
+      "to": "wilderness_level_1",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_level_1",
+      "to": "ferox_enclave",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "barbarian_fishing",
+      "mode": "walk",
+      "cost": 23,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_fishing",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 23,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "stronghold_security",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "stronghold_security",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 73,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 73,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "varrock_west_bank",
+      "mode": "walk",
+      "cost": 103,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_bank",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 103,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 106,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 106,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "canoe_barbarian",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "canoe_barbarian",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "barbarian_village",
+      "to": "varrock_west_mine",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_west_mine",
+      "to": "barbarian_village",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "falador_center",
+      "mode": "walk",
+      "cost": 52,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_center",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 52,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_center",
+      "to": "falador_west_bank",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_west_bank",
+      "to": "falador_center",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "falador_mine_entrance",
+      "mode": "walk",
+      "cost": 48,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_mine_entrance",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 48,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "falador_yews",
+      "mode": "walk",
+      "cost": 65,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_yews",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 65,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "falador_party_room",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_party_room",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_center",
+      "to": "falador_white_knights",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_white_knights",
+      "to": "falador_center",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "port_sarim",
+      "mode": "walk",
+      "cost": 141,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 141,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "crafting_guild",
+      "mode": "walk",
+      "cost": 130,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "crafting_guild",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 130,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "taverly",
+      "mode": "walk",
+      "cost": 55,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "taverly",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 55,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "falador_mine_entrance",
+      "to": "dwarven_mine",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "dwarven_mine",
+      "to": "falador_mine_entrance",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "dwarven_mine",
+      "to": "mining_guild",
+      "mode": "walk",
+      "cost": 30,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "mining_guild",
+      "to": "dwarven_mine",
+      "mode": "walk",
+      "cost": 30,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim",
+      "to": "port_sarim_fishing",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim_fishing",
+      "to": "port_sarim",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim",
+      "to": "port_sarim_docks",
+      "mode": "walk",
+      "cost": 14,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim_docks",
+      "to": "port_sarim",
+      "mode": "walk",
+      "cost": 14,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim",
+      "to": "rimmington",
+      "mode": "walk",
+      "cost": 71,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "rimmington",
+      "to": "port_sarim",
+      "mode": "walk",
+      "cost": 71,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "rimmington",
+      "to": "rimmington_mine",
+      "mode": "walk",
+      "cost": 24,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "rimmington_mine",
+      "to": "rimmington",
+      "mode": "walk",
+      "cost": 24,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "rimmington",
+      "to": "falador_west_bank",
+      "mode": "walk",
+      "cost": 154,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_west_bank",
+      "to": "rimmington",
+      "mode": "walk",
+      "cost": 154,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim",
+      "to": "fairy_ring_aiq",
+      "mode": "walk",
+      "cost": 130,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_aiq",
+      "to": "port_sarim",
+      "mode": "walk",
+      "cost": 130,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "wilderness_level_1",
+      "to": "wilderness_green_dragons",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_green_dragons",
+      "to": "wilderness_level_1",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_green_dragons",
+      "to": "wilderness_rev_caves",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_rev_caves",
+      "to": "wilderness_green_dragons",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_level_1",
+      "to": "wilderness_canoe",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "wilderness_canoe",
+      "to": "wilderness_level_1",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": true,
+      "risk": "medium"
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "wilderness_chaos_altar",
+      "mode": "walk",
+      "cost": 330,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "wilderness_chaos_altar",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 330,
+      "f2p": true,
+      "risk": "high"
+    },
+    {
+      "from": "karamja_dock",
+      "to": "karamja_fishing",
+      "mode": "walk",
+      "cost": 44,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "karamja_fishing",
+      "to": "karamja_dock",
+      "mode": "walk",
+      "cost": 44,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "karamja_dock",
+      "to": "brimhaven",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "brimhaven",
+      "to": "karamja_dock",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "brimhaven",
+      "to": "tai_bwo_wannai",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "tai_bwo_wannai",
+      "to": "brimhaven",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "tai_bwo_wannai",
+      "to": "fairy_ring_ckr",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_ckr",
+      "to": "tai_bwo_wannai",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_dkp",
+      "to": "gnome_glider_gandius",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_glider_gandius",
+      "to": "fairy_ring_dkp",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "camelot_teleport_dest",
+      "to": "seers_village_bank",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "camelot_teleport_dest",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "seers_village_maples",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_maples",
+      "to": "seers_village_bank",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "fishing_guild",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fishing_guild",
+      "to": "seers_village_bank",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "ranging_guild",
+      "mode": "walk",
+      "cost": 50,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ranging_guild",
+      "to": "seers_village_bank",
+      "mode": "walk",
+      "cost": 50,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "seers_rooftop",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_rooftop",
+      "to": "seers_village_bank",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "fairy_ring_als",
+      "mode": "walk",
+      "cost": 180,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_als",
+      "to": "seers_village_bank",
+      "mode": "walk",
+      "cost": 180,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "camelot_castle",
+      "to": "fairy_ring_cjr",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_cjr",
+      "to": "camelot_castle",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_glider_sindarpos",
+      "to": "catherby_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "catherby_bank",
+      "to": "gnome_glider_sindarpos",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_teleport_dest",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "ardougne_teleport_dest",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "ardougne_market",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_market",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 22,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "ardougne_west_bank",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_west_bank",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 85,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "fairy_ring_djp",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_djp",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "fairy_ring_blr",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_blr",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "castle_wars",
+      "mode": "walk",
+      "cost": 160,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "castle_wars",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 160,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "port_khazard",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "port_khazard",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "ardougne_rooftop",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_rooftop",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "yanille_bank",
+      "to": "castle_wars",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "castle_wars",
+      "to": "yanille_bank",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "yanille_bank",
+      "to": "fairy_ring_ciq",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_ciq",
+      "to": "yanille_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_stronghold",
+      "to": "gnome_stronghold_bank",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_stronghold_bank",
+      "to": "gnome_stronghold",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_stronghold",
+      "to": "gnome_agility_course",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_agility_course",
+      "to": "gnome_stronghold",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_stronghold",
+      "to": "spirit_tree_gnome_stronghold",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "spirit_tree_gnome_stronghold",
+      "to": "gnome_stronghold",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_stronghold",
+      "to": "slayer_master_nieve",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "slayer_master_nieve",
+      "to": "gnome_stronghold",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_stronghold",
+      "to": "gnome_glider_ta_quir_priw",
+      "mode": "walk",
+      "cost": 30,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "gnome_glider_ta_quir_priw",
+      "to": "gnome_stronghold",
+      "mode": "walk",
+      "cost": 30,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rellekka",
+      "to": "rellekka_bank",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rellekka_bank",
+      "to": "rellekka",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rellekka",
+      "to": "fairy_ring_ajr",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_ajr",
+      "to": "rellekka",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rellekka",
+      "to": "fairy_ring_dks",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_dks",
+      "to": "rellekka",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rellekka",
+      "to": "keldagrim_bank",
+      "mode": "walk",
+      "cost": 180,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "keldagrim_bank",
+      "to": "rellekka",
+      "mode": "walk",
+      "cost": 180,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis",
+      "to": "canifis_bank",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis_bank",
+      "to": "canifis",
+      "mode": "walk",
+      "cost": 12,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis",
+      "to": "slayer_tower",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "slayer_tower",
+      "to": "canifis",
+      "mode": "walk",
+      "cost": 90,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis",
+      "to": "barrows",
+      "mode": "walk",
+      "cost": 160,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "barrows",
+      "to": "canifis",
+      "mode": "walk",
+      "cost": 160,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis",
+      "to": "fairy_ring_cks",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "canifis",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis",
+      "to": "fairy_ring_bkr",
+      "mode": "walk",
+      "cost": 45,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_bkr",
+      "to": "canifis",
+      "mode": "walk",
+      "cost": 45,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis",
+      "to": "canifis_rooftop",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis_rooftop",
+      "to": "canifis",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "port_phasmatys",
+      "to": "fairy_ring_alq",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_alq",
+      "to": "port_phasmatys",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "keldagrim_bank",
+      "to": "blast_furnace",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "blast_furnace",
+      "to": "keldagrim_bank",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "taverly",
+      "to": "taverly_dungeon",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "taverly_dungeon",
+      "to": "taverly",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "taverly",
+      "to": "burthorpe",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "burthorpe",
+      "to": "taverly",
+      "mode": "walk",
+      "cost": 60,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "burthorpe",
+      "to": "slayer_master_turael",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "slayer_master_turael",
+      "to": "burthorpe",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "burthorpe",
+      "to": "warriors_guild",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "warriors_guild",
+      "to": "burthorpe",
+      "mode": "walk",
+      "cost": 35,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "kourend_castle_teleport_dest",
+      "to": "hosidius_bank",
+      "mode": "walk",
+      "cost": 100,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "hosidius_bank",
+      "to": "kourend_castle_teleport_dest",
+      "mode": "walk",
+      "cost": 100,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "hosidius_bank",
+      "to": "farming_guild",
+      "mode": "walk",
+      "cost": 100,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "farming_guild",
+      "to": "hosidius_bank",
+      "mode": "walk",
+      "cost": 100,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "hosidius_bank",
+      "to": "fairy_ring_akr",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_akr",
+      "to": "hosidius_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "shayzien_bank",
+      "to": "fairy_ring_djr",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_djr",
+      "to": "shayzien_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "arceuus_bank",
+      "to": "fairy_ring_cis",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_cis",
+      "to": "arceuus_bank",
+      "mode": "walk",
+      "cost": 120,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "farming_guild",
+      "to": "fairy_ring_cir",
+      "mode": "walk",
+      "cost": 100,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_cir",
+      "to": "farming_guild",
+      "mode": "walk",
+      "cost": 100,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "farming_guild",
+      "to": "spirit_tree_farming_guild",
+      "mode": "walk",
+      "cost": 10,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "spirit_tree_farming_guild",
+      "to": "farming_guild",
+      "mode": "walk",
+      "cost": 10,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "farming_guild",
+      "to": "slayer_master_konar",
+      "mode": "walk",
+      "cost": 40,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "slayer_master_konar",
+      "to": "farming_guild",
+      "mode": "walk",
+      "cost": 40,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "farming_guild",
+      "to": "fairy_ring_bls",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "fairy_ring_bls",
+      "to": "farming_guild",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_bank",
+      "to": "draynor_rooftop",
+      "mode": "walk",
+      "cost": 30,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "draynor_rooftop",
+      "to": "draynor_bank",
+      "mode": "walk",
+      "cost": 30,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "al_kharid_rooftop",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "al_kharid_rooftop",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 25,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "varrock_rooftop",
+      "mode": "walk",
+      "cost": 40,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_rooftop",
+      "to": "varrock_east_bank",
+      "mode": "walk",
+      "cost": 40,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis_bank",
+      "to": "canifis_rooftop",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "canifis_rooftop",
+      "to": "canifis_bank",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "canoe_lumbridge",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "canoe_lumbridge",
+      "to": "lumbridge_spawn",
+      "mode": "walk",
+      "cost": 18,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "champions_guild",
+      "to": "canoe_champions_guild",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "canoe_champions_guild",
+      "to": "champions_guild",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "glory_edgeville",
+      "to": "edgeville_bank",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "glory_draynor",
+      "to": "draynor_bank",
+      "mode": "walk",
+      "cost": 8,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "glory_al_kharid",
+      "to": "al_kharid_bank",
+      "mode": "walk",
+      "cost": 6,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "glory_karamja",
+      "to": "karamja_fishing",
+      "mode": "walk",
+      "cost": 15,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rod_castle_wars",
+      "to": "castle_wars",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "rod_brimhaven",
+      "to": "brimhaven",
+      "mode": "walk",
+      "cost": 4,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "skills_necklace_fishing_guild",
+      "to": "fishing_guild",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "skills_necklace_crafting_guild",
+      "to": "crafting_guild",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "skills_necklace_farming_guild",
+      "to": "farming_guild",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "combat_bracelet_warriors_guild",
+      "to": "warriors_guild",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "combat_bracelet_champions_guild",
+      "to": "champions_guild",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "combat_bracelet_monastery",
+      "to": "edgeville_monastery",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "combat_bracelet_ranging_guild",
+      "to": "ranging_guild",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "necklace_passage_wizards_tower",
+      "to": "wizard_tower",
+      "mode": "walk",
+      "cost": 3,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "necklace_passage_goblin_village",
+      "to": "falador_east_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "burning_amulet_chaos_temple",
+      "to": "wilderness_chaos_altar",
+      "mode": "walk",
+      "cost": 5,
+      "f2p": false,
+      "risk": "high"
+    },
+    {
+      "from": "burning_amulet_lava_maze",
+      "to": "wilderness_rev_caves",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "high"
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "draynor_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "canifis_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "catherby_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "hosidius_bank",
+      "to": "lumbridge_spawn",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Lumbridge Home Teleport (free, 30min cooldown)",
+      "requirements": [
+        "Magic level 9",
+        "Runes: free (30min cooldown)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "draynor_bank",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "canifis_bank",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "varrock_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Varrock Teleport",
+      "requirements": [
+        "Magic level 25",
+        "Runes: 3 Air 1 Fire 1 Law"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "draynor_bank",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "canifis_bank",
+      "to": "falador_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Falador Teleport",
+      "requirements": [
+        "Magic level 37",
+        "Runes: 3 Air 1 Water 1 Law"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "draynor_bank",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "al_kharid_bank",
+      "to": "camelot_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": true,
+      "members": false,
+      "risk": "none",
+      "action": "Cast Camelot Teleport",
+      "requirements": [
+        "Magic level 45",
+        "Runes: 5 Air 1 Law"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "seers_village_bank",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "canifis_bank",
+      "to": "ardougne_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Ardougne Teleport",
+      "requirements": [
+        "Magic level 51",
+        "Runes: 2 Water 2 Law"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "kourend_castle_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Kourend Castle Teleport",
+      "requirements": [
+        "Magic level 69",
+        "Runes: 2 Soul 2 Law 4 Fire"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "kourend_castle_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Kourend Castle Teleport",
+      "requirements": [
+        "Magic level 69",
+        "Runes: 2 Soul 2 Law 4 Fire"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "kourend_castle_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Kourend Castle Teleport",
+      "requirements": [
+        "Magic level 69",
+        "Runes: 2 Soul 2 Law 4 Fire"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "kourend_castle_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Kourend Castle Teleport",
+      "requirements": [
+        "Magic level 69",
+        "Runes: 2 Soul 2 Law 4 Fire"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "kourend_castle_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Kourend Castle Teleport",
+      "requirements": [
+        "Magic level 69",
+        "Runes: 2 Soul 2 Law 4 Fire"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "catherby_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Catherby Teleport (Lunar Spellbook)",
+      "requirements": [
+        "Magic level 87",
+        "Runes: 10 Water 3 Astral 5 Law"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "catherby_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Catherby Teleport (Lunar Spellbook)",
+      "requirements": [
+        "Magic level 87",
+        "Runes: 10 Water 3 Astral 5 Law"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "catherby_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Catherby Teleport (Lunar Spellbook)",
+      "requirements": [
+        "Magic level 87",
+        "Runes: 10 Water 3 Astral 5 Law"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "catherby_teleport_dest",
+      "mode": "teleport_spell",
+      "cost": 1,
+      "f2p": false,
+      "members": true,
+      "risk": "none",
+      "action": "Cast Catherby Teleport (Lunar Spellbook)",
+      "requirements": [
+        "Magic level 87",
+        "Runes: 10 Water 3 Astral 5 Law"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "glory_edgeville",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "glory_edgeville",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "glory_edgeville",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "draynor_bank",
+      "to": "glory_edgeville",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "canifis_bank",
+      "to": "glory_edgeville",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "glory_draynor",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "glory_draynor",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "glory_al_kharid",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "glory_al_kharid",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "glory_karamja",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Amulet of Glory (charged) teleport",
+      "requirements": [
+        "Amulet of Glory (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "rod_castle_wars",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Ring of Dueling (charged) teleport",
+      "requirements": [
+        "Ring of Dueling (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "rod_castle_wars",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Ring of Dueling (charged) teleport",
+      "requirements": [
+        "Ring of Dueling (charged)"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "rod_castle_wars",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Ring of Dueling (charged) teleport",
+      "requirements": [
+        "Ring of Dueling (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "ferox_enclave",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Ring of Dueling to Ferox Enclave (wilderness bank)",
+      "requirements": [
+        "Ring of Dueling (charged)"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "ferox_enclave",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Ring of Dueling to Ferox Enclave",
+      "requirements": [
+        "Ring of Dueling (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "rod_brimhaven",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Ring of Dueling (charged) teleport",
+      "requirements": [
+        "Ring of Dueling (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "skills_necklace_fishing_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Skills Necklace (charged) teleport",
+      "requirements": [
+        "Skills Necklace (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "skills_necklace_fishing_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Skills Necklace (charged) teleport",
+      "requirements": [
+        "Skills Necklace (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "skills_necklace_crafting_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Skills Necklace (charged) teleport",
+      "requirements": [
+        "Skills Necklace (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "skills_necklace_farming_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Skills Necklace (charged) teleport",
+      "requirements": [
+        "Skills Necklace (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "combat_bracelet_warriors_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Combat Bracelet (charged) teleport",
+      "requirements": [
+        "Combat Bracelet (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "combat_bracelet_warriors_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Combat Bracelet (charged) teleport",
+      "requirements": [
+        "Combat Bracelet (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "combat_bracelet_champions_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Combat Bracelet (charged) teleport",
+      "requirements": [
+        "Combat Bracelet (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "combat_bracelet_monastery",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Combat Bracelet (charged) teleport",
+      "requirements": [
+        "Combat Bracelet (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "combat_bracelet_ranging_guild",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Combat Bracelet (charged) teleport",
+      "requirements": [
+        "Combat Bracelet (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "necklace_passage_wizards_tower",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Necklace of Passage (charged) teleport",
+      "requirements": [
+        "Necklace of Passage (charged)"
+      ]
+    },
+    {
+      "from": "varrock_east_bank",
+      "to": "necklace_passage_wizards_tower",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Necklace of Passage (charged) teleport",
+      "requirements": [
+        "Necklace of Passage (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "necklace_passage_goblin_village",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Necklace of Passage (charged) teleport",
+      "requirements": [
+        "Necklace of Passage (charged)"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "necklace_passage_desert_eagle",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Necklace of Passage (charged) teleport",
+      "requirements": [
+        "Necklace of Passage (charged)"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "burning_amulet_chaos_temple",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Burning Amulet (charged) teleport",
+      "requirements": [
+        "Burning Amulet (charged)"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "burning_amulet_chaos_temple",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Burning Amulet (charged) teleport",
+      "requirements": [
+        "Burning Amulet (charged)"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "burning_amulet_lava_maze",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Burning Amulet (charged) teleport",
+      "requirements": [
+        "Burning Amulet (charged)"
+      ]
+    },
+    {
+      "from": "edgeville_bank",
+      "to": "burning_amulet_volcano",
+      "mode": "teleport_item",
+      "cost": 1,
+      "members": true,
+      "risk": "none",
+      "action": "Use Burning Amulet (charged) teleport",
+      "requirements": [
+        "Burning Amulet (charged)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_dis",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DIS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dis",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_cks",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CKS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_bkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code BKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_bkr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_alq",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code ALQ",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_alq",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_djp",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DJP",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_djp",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_blr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code BLR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_blr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_ajr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code AJR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_ajr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_dks",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dks",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_ciq",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CIQ",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_ciq",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_als",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code ALS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_als",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_cjr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CJR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cjr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_aiq",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code AIQ",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_aiq",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_ckr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_ckr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_dkp",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKP",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkp",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_bls",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code BLS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_bls",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_akr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code AKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_akr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_cis",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CIS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cis",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_djr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DJR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_djr",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "fairy_ring_cir",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CIR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cir",
+      "to": "fairy_ring_dkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_dis",
+      "to": "fairy_ring_cks",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CKS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_dis",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DIS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_bkr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code BKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_alq",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code ALQ",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_djp",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DJP",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_blr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code BLR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_ajr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code AJR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_dks",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_ciq",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CIQ",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_als",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code ALS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_cjr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CJR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_aiq",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code AIQ",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_ckr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_dkp",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DKP",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_bls",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code BLS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_akr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code AKR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_cis",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CIS",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_djr",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code DJR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "fairy_ring_cks",
+      "to": "fairy_ring_cir",
+      "mode": "fairy_ring",
+      "cost": 16,
+      "members": true,
+      "risk": "low",
+      "action": "Enter fairy ring code CIR",
+      "requirements": [
+        "Partial completion of Fairytale II - Cure a Queen",
+        "Dramen staff or lunar staff (or elite Lumbridge & Draynor diary)"
+      ]
+    },
+    {
+      "from": "spirit_tree_gnome_stronghold",
+      "to": "spirit_tree_ge",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Ge",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_gnome_stronghold",
+      "to": "spirit_tree_feldip",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Feldip",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_gnome_stronghold",
+      "to": "spirit_tree_farming_guild",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Farming Guild",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_ge",
+      "to": "spirit_tree_gnome_stronghold",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Gnome Stronghold",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_ge",
+      "to": "spirit_tree_feldip",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Feldip",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_ge",
+      "to": "spirit_tree_farming_guild",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Farming Guild",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_feldip",
+      "to": "spirit_tree_gnome_stronghold",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Gnome Stronghold",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_feldip",
+      "to": "spirit_tree_ge",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Ge",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_feldip",
+      "to": "spirit_tree_farming_guild",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Farming Guild",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_farming_guild",
+      "to": "spirit_tree_gnome_stronghold",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Gnome Stronghold",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_farming_guild",
+      "to": "spirit_tree_ge",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Ge",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "spirit_tree_farming_guild",
+      "to": "spirit_tree_feldip",
+      "mode": "spirit_tree",
+      "cost": 6,
+      "members": true,
+      "risk": "low",
+      "action": "Use Spirit Tree to Feldip",
+      "requirements": [
+        "Completion of Tree Gnome Village quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_ta_quir_priw",
+      "to": "gnome_glider_sindarpos",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to White Wolf Mountain",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_ta_quir_priw",
+      "to": "gnome_glider_kar_hewo",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Feldip Hills",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_ta_quir_priw",
+      "to": "gnome_glider_lemantolly",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Lemantolly Undri (Ardougne)",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_ta_quir_priw",
+      "to": "gnome_glider_gandius",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Karamja",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_sindarpos",
+      "to": "gnome_glider_ta_quir_priw",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Tree Gnome Stronghold",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_sindarpos",
+      "to": "gnome_glider_kar_hewo",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Feldip Hills",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_sindarpos",
+      "to": "gnome_glider_lemantolly",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Lemantolly Undri (Ardougne)",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_sindarpos",
+      "to": "gnome_glider_gandius",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Karamja",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_kar_hewo",
+      "to": "gnome_glider_ta_quir_priw",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Tree Gnome Stronghold",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_kar_hewo",
+      "to": "gnome_glider_sindarpos",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to White Wolf Mountain",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_kar_hewo",
+      "to": "gnome_glider_lemantolly",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Lemantolly Undri (Ardougne)",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_kar_hewo",
+      "to": "gnome_glider_gandius",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Karamja",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_lemantolly",
+      "to": "gnome_glider_ta_quir_priw",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Tree Gnome Stronghold",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_lemantolly",
+      "to": "gnome_glider_sindarpos",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to White Wolf Mountain",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_lemantolly",
+      "to": "gnome_glider_kar_hewo",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Feldip Hills",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_lemantolly",
+      "to": "gnome_glider_gandius",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Karamja",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_gandius",
+      "to": "gnome_glider_ta_quir_priw",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Tree Gnome Stronghold",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_gandius",
+      "to": "gnome_glider_sindarpos",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to White Wolf Mountain",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_gandius",
+      "to": "gnome_glider_kar_hewo",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Feldip Hills",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_gandius",
+      "to": "gnome_glider_lemantolly",
+      "mode": "gnome_glider",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Board gnome glider to Lemantolly Undri (Ardougne)",
+      "requirements": [
+        "Completion of The Grand Tree quest"
+      ]
+    },
+    {
+      "from": "gnome_glider_lemantolly",
+      "to": "ardougne_east_bank",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "gnome_glider_lemantolly",
+      "mode": "walk",
+      "cost": 80,
+      "f2p": false,
+      "risk": "low"
+    },
+    {
+      "from": "port_sarim_docks",
+      "to": "karamja_dock",
+      "mode": "boat",
+      "cost": 8,
+      "risk": "low",
+      "action": "Talk to Seaman Lorris (30 gp) to sail to Karamja",
+      "requirements": [
+        "30 gp boat fare"
+      ]
+    },
+    {
+      "from": "karamja_dock",
+      "to": "port_sarim_docks",
+      "mode": "boat",
+      "cost": 8,
+      "risk": "low",
+      "action": "Talk to Seaman to return to Port Sarim (30 gp)",
+      "requirements": [
+        "30 gp boat fare"
+      ]
+    },
+    {
+      "from": "port_sarim_docks",
+      "to": "brimhaven",
+      "mode": "boat",
+      "cost": 10,
+      "risk": "low",
+      "action": "Take charter ship to Brimhaven",
+      "requirements": [
+        "30 gp boat fare"
+      ]
+    },
+    {
+      "from": "brimhaven",
+      "to": "ardougne_east_bank",
+      "mode": "boat",
+      "cost": 10,
+      "risk": "low",
+      "action": "Take ferry from Brimhaven to East Ardougne (30 gp)",
+      "requirements": [
+        "30 gp boat fare"
+      ]
+    },
+    {
+      "from": "ardougne_east_bank",
+      "to": "brimhaven",
+      "mode": "boat",
+      "cost": 10,
+      "risk": "low",
+      "action": "Take ferry from Ardougne to Brimhaven (30 gp)",
+      "requirements": [
+        "30 gp boat fare"
+      ]
+    },
+    {
+      "from": "rellekka",
+      "to": "waterbirth_island",
+      "mode": "boat",
+      "cost": 5,
+      "risk": "low",
+      "action": "Ask Jarvald to sail to Waterbirth Island (free)",
+      "requirements": [
+        "0 gp boat fare"
+      ]
+    },
+    {
+      "from": "waterbirth_island",
+      "to": "rellekka",
+      "mode": "boat",
+      "cost": 5,
+      "risk": "low",
+      "action": "Ask Jarvald to return to Rellekka (free)",
+      "requirements": [
+        "0 gp boat fare"
+      ]
+    },
+    {
+      "from": "port_sarim_docks",
+      "to": "rellekka",
+      "mode": "boat",
+      "cost": 80,
+      "risk": "low",
+      "action": "Charter ship from Port Sarim to Rellekka",
+      "requirements": [
+        "10000 gp boat fare"
+      ]
+    },
+    {
+      "from": "canoe_lumbridge",
+      "to": "canoe_champions_guild",
+      "mode": "canoe",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_lumbridge",
+      "to": "canoe_barbarian",
+      "mode": "canoe",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_lumbridge",
+      "to": "canoe_edgeville",
+      "mode": "canoe",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_champions_guild",
+      "to": "canoe_lumbridge",
+      "mode": "canoe",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_champions_guild",
+      "to": "canoe_barbarian",
+      "mode": "canoe",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_champions_guild",
+      "to": "canoe_edgeville",
+      "mode": "canoe",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_barbarian",
+      "to": "canoe_lumbridge",
+      "mode": "canoe",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_barbarian",
+      "to": "canoe_champions_guild",
+      "mode": "canoe",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_barbarian",
+      "to": "canoe_edgeville",
+      "mode": "canoe",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_edgeville",
+      "to": "canoe_lumbridge",
+      "mode": "canoe",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_edgeville",
+      "to": "canoe_champions_guild",
+      "mode": "canoe",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_edgeville",
+      "to": "canoe_barbarian",
+      "mode": "canoe",
+      "cost": 4,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle canoe (Woodcutting 12)",
+      "requirements": [
+        "Woodcutting level 12",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_edgeville",
+      "to": "wilderness_canoe",
+      "mode": "canoe",
+      "cost": 8,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle waka canoe into Wilderness (Woodcutting 57)",
+      "requirements": [
+        "Woodcutting level 57",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "canoe_lumbridge",
+      "to": "wilderness_canoe",
+      "mode": "canoe",
+      "cost": 12,
+      "f2p": true,
+      "risk": "low",
+      "action": "Paddle waka canoe into Wilderness from Lumbridge (Woodcutting 57)",
+      "requirements": [
+        "Woodcutting level 57",
+        "Hatchet equipped or in inventory"
+      ]
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_castle_bank",
+      "mode": "stairs",
+      "cost": 22,
+      "risk": "low",
+      "action": "Climb Lumbridge Castle stairs to top floor bank"
+    },
+    {
+      "from": "lumbridge_castle_bank",
+      "to": "lumbridge_spawn",
+      "mode": "stairs",
+      "cost": 22,
+      "risk": "low",
+      "action": "Descend Lumbridge Castle stairs"
+    },
+    {
+      "from": "falador_mine_entrance",
+      "to": "dwarven_mine",
+      "mode": "stairs",
+      "cost": 5,
+      "risk": "low",
+      "action": "Climb ladder down to Dwarven Mine"
+    },
+    {
+      "from": "dwarven_mine",
+      "to": "falador_mine_entrance",
+      "mode": "stairs",
+      "cost": 5,
+      "risk": "low",
+      "action": "Climb ladder up from Dwarven Mine"
+    },
+    {
+      "from": "dwarven_mine",
+      "to": "mining_guild",
+      "mode": "stairs",
+      "cost": 20,
+      "risk": "low",
+      "action": "Enter Mining Guild through the door (Mining 60 required)",
+      "requirements": [
+        "Mining level 60"
+      ]
+    },
+    {
+      "from": "gnome_glider_ta_quir_priw",
+      "to": "gnome_stronghold",
+      "mode": "stairs",
+      "cost": 30,
+      "risk": "low",
+      "action": "Descend from Grand Tree top floor"
+    },
+    {
+      "from": "gnome_stronghold",
+      "to": "gnome_glider_ta_quir_priw",
+      "mode": "stairs",
+      "cost": 30,
+      "risk": "low",
+      "action": "Climb Grand Tree to access glider"
+    },
+    {
+      "from": "grand_exchange",
+      "to": "fairy_ring_dkr",
+      "mode": "agility_shortcut",
+      "cost": 12,
+      "members": true,
+      "risk": "low",
+      "action": "Use 21 Agility shortcut wall near Grand Exchange → DKR fairy ring",
+      "requirements": [
+        "Agility level 21"
+      ]
+    },
+    {
+      "from": "fairy_ring_dkr",
+      "to": "grand_exchange",
+      "mode": "agility_shortcut",
+      "cost": 12,
+      "members": true,
+      "risk": "low",
+      "action": "Return through agility shortcut to Grand Exchange",
+      "requirements": [
+        "Agility level 21"
+      ]
+    },
+    {
+      "from": "falador_east_bank",
+      "to": "dwarven_mine",
+      "mode": "agility_shortcut",
+      "cost": 8,
+      "members": true,
+      "risk": "low",
+      "action": "Squeeze through rocks into Dwarven Mine (Agility 15)",
+      "requirements": [
+        "Agility level 15"
+      ]
+    },
+    {
+      "from": "keldagrim_bank",
+      "to": "grand_exchange",
+      "mode": "minecart",
+      "cost": 10,
+      "members": true,
+      "risk": "low",
+      "action": "Take mine cart from Keldagrim to Grand Exchange",
+      "requirements": [
+        "Partial completion of The Giant Dwarf",
+        "200 gp or free with Keldagrim diary reward"
+      ]
+    },
+    {
+      "from": "grand_exchange",
+      "to": "keldagrim_bank",
+      "mode": "minecart",
+      "cost": 10,
+      "members": true,
+      "risk": "low",
+      "action": "Take mine cart from Grand Exchange to Keldagrim",
+      "requirements": [
+        "Partial completion of The Giant Dwarf"
+      ]
+    },
+    {
+      "from": "lumbridge_ge_teleport_dest",
+      "to": "lumbridge_spawn",
+      "cost": 2,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "lumbridge_spawn",
+      "to": "lumbridge_ge_teleport_dest",
+      "cost": 2,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_teleport_dest",
+      "to": "varrock_center",
+      "cost": 5,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_teleport_dest",
+      "to": "varrock_west_bank",
+      "cost": 35,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_teleport_dest",
+      "to": "varrock_east_bank",
+      "cost": 50,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "varrock_center",
+      "to": "varrock_teleport_dest",
+      "cost": 5,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_teleport_dest",
+      "to": "falador_center",
+      "cost": 5,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_teleport_dest",
+      "to": "falador_east_bank",
+      "cost": 55,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_teleport_dest",
+      "to": "falador_west_bank",
+      "cost": 28,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "falador_center",
+      "to": "falador_teleport_dest",
+      "cost": 5,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "catherby_teleport_dest",
+      "to": "catherby_bank",
+      "cost": 20,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    },
+    {
+      "from": "catherby_bank",
+      "to": "catherby_teleport_dest",
+      "cost": 20,
+      "mode": "walk",
+      "f2p": true,
+      "risk": "low"
+    }
   ]
 }

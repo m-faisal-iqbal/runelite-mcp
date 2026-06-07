@@ -1,3 +1,4 @@
+import { loadMonsters, loadQuests, findItemByName, getCachedPrice, findMonsterByName, findQuestByName, loadSkillIndex, } from "./knowledge-loader.js";
 export const knowledgeBase = {
     version: 1,
     scope: "curated_local_f2p_foundation",
@@ -419,13 +420,22 @@ function compactRecord(record) {
     };
 }
 export function allKnowledgeRecords() {
-    return [
+    const curated = [
         ...knowledgeBase.methods.map((record) => ({ ...record, kind: "method" })),
         ...knowledgeBase.locations.map((record) => ({ ...record, kind: "location" })),
         ...knowledgeBase.quests.map((record) => ({ ...record, kind: "quest" })),
         ...knowledgeBase.monsters.map((record) => ({ ...record, kind: "monster" })),
         ...knowledgeBase.gear.map((record) => ({ ...record, kind: "gear" })),
     ];
+    // Merge wiki monsters/quests that aren't already in curated data
+    const curatedIds = new Set(curated.map((r) => r.id));
+    const wikiMonsters = loadMonsters()
+        .filter((m) => !curatedIds.has(m.id))
+        .map((record) => ({ ...record, kind: "monster" }));
+    const wikiQuests = loadQuests()
+        .filter((q) => !curatedIds.has(q.id))
+        .map((record) => ({ ...record, kind: "quest" }));
+    return [...curated, ...wikiMonsters, ...wikiQuests];
 }
 function searchableText(record) {
     return JSON.stringify(record).toLowerCase();
@@ -584,5 +594,60 @@ export function knowledgeSummary() {
             "Cook's Assistant",
             "starter magic gear",
         ],
+    };
+}
+// ---------------------------------------------------------------------------
+// Live-data helpers – use wiki-scraped JSON alongside curated knowledge
+// ---------------------------------------------------------------------------
+export function getItemPrice(itemName) {
+    const item = findItemByName(itemName);
+    if (!item)
+        return undefined;
+    const price = getCachedPrice(item.id);
+    if (!price) {
+        return {
+            name: item.name,
+            id: item.id,
+            high: undefined,
+            low: undefined,
+            margin: undefined,
+            geLimit: item.geLimit,
+        };
+    }
+    return {
+        name: item.name,
+        id: item.id,
+        high: price.high,
+        low: price.low,
+        margin: price.high - price.low,
+        geLimit: item.geLimit,
+    };
+}
+export function getMonsterInfo(name) {
+    // Check curated monsters first
+    const curated = knowledgeBase.monsters.find((m) => m.name.toLowerCase() === name.toLowerCase() || m.id === name.toLowerCase().replace(/\s+/g, "_"));
+    if (curated)
+        return curated;
+    // Fall back to wiki data
+    return findMonsterByName(name);
+}
+export function getQuestInfo(name) {
+    // Check curated quests first
+    const curated = knowledgeBase.quests.find((q) => q.name.toLowerCase() === name.toLowerCase() || q.id === name.toLowerCase().replace(/\s+/g, "_"));
+    if (curated)
+        return curated;
+    // Fall back to wiki data
+    return findQuestByName(name);
+}
+export function getSkillMethods(skill) {
+    const index = loadSkillIndex();
+    // Case-insensitive lookup
+    const key = Object.keys(index).find((k) => k.toLowerCase() === skill.toLowerCase());
+    if (!key)
+        return { f2pPages: [], p2pPages: [] };
+    const entry = index[key];
+    return {
+        f2pPages: entry.f2p_training ?? [],
+        p2pPages: entry.p2p_training ?? [],
     };
 }
